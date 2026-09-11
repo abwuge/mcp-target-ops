@@ -5,7 +5,7 @@ use crate::{
         oauth::OAuthState,
         target::{ResolvedTarget, TargetId, TargetSource},
     },
-    tooling::terminal::TerminalRegistry,
+    tooling::{job::JobRegistry, terminal::TerminalRegistry},
     transport::ssh::SshSessionRegistry,
 };
 use serde::Serialize;
@@ -16,6 +16,7 @@ pub struct AppState {
     active_target: Mutex<Option<TargetId>>,
     pub ssh_sessions: SshSessionRegistry,
     pub terminals: TerminalRegistry,
+    pub jobs: JobRegistry,
     pub oauth: Mutex<OAuthState>,
     started_at: SystemTime,
 }
@@ -52,6 +53,7 @@ impl AppState {
         Ok(Self {
             ssh_sessions: SshSessionRegistry::new(),
             terminals: TerminalRegistry::new(config.server.terminal_ring_buffer_bytes),
+            jobs: JobRegistry::new(),
             oauth: Mutex::new(OAuthState::new()),
             config,
             active_target: Mutex::new(active),

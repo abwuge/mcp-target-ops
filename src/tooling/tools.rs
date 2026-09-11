@@ -8,7 +8,11 @@ use crate::{
     },
     tooling::{
         exec::{self, ExecRequest},
-        fs::{self, FileEditRequest, FileListRequest, FileReadRequest},
+        fs::{
+            self, DirectoryCreateRequest, FileChmodRequest, FileEditRequest, FileFindRequest,
+            FileListRequest, FileMoveRequest, FilePatchRequest, FileReadRequest, FileWriteRequest,
+        },
+        job::{ExecStartRequest, JobCancelRequest, JobOutputRequest, JobPollRequest},
         terminal::{
             TerminalCloseRequest, TerminalOpenRequest, TerminalReadRequest, TerminalResizeRequest,
             TerminalSendRequest,
@@ -50,11 +54,34 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
             optional_string("cwd", "Working directory."),
             optional_integer("timeout_ms", "Timeout in milliseconds."),
             optional_integer("max_output_bytes", "Maximum bytes to return for stdout and stderr."),
+            optional_value("secret_env", "Map environment variable names to secret references. Secret values are resolved inside Target Ops and are not included in the tool request or tool metadata; commands can still expose them if they print their environment.", secret_env_schema()),
+        ])),
+        tool("exec_start", "Start a non-interactive command as a background job. Jobs use dedicated processes, support incremental output and cancellation, and do not block later tool calls.", object_schema(vec![
+            optional_string("target", "Target id: local or ssh:<profile>. Omit to use active target."),
+            required_string("command", "Shell command to execute."),
+            optional_string("cwd", "Working directory."),
+            optional_integer("timeout_ms", "Optional job timeout in milliseconds. Omit for no runtime timeout."),
+            optional_integer("max_output_bytes", "Maximum retained bytes for each stdout and stderr buffer."),
+            optional_value("secret_env", "Map environment variable names to secret references. Secret values are resolved inside Target Ops and are not included in the tool request or tool metadata; commands can still expose them if they print their environment.", secret_env_schema()),
+        ])),
+        tool("job_poll", "Return the current state and exit information for a background job.", object_schema(vec![
+            required_string("job_id", "Job id returned by exec_start."),
+        ])),
+        tool("job_output", "Read incremental stdout and stderr from a background job using independent sequence cursors.", object_schema(vec![
+            required_string("job_id", "Job id returned by exec_start."),
+            optional_integer("stdout_since_seq", "Last stdout sequence already consumed. Omit or use 0 for buffered output."),
+            optional_integer("stderr_since_seq", "Last stderr sequence already consumed. Omit or use 0 for buffered output."),
+            optional_integer("max_bytes", "Maximum bytes to return from each stream."),
+        ])),
+        tool("job_cancel", "Request cancellation of a running background job.", object_schema(vec![
+            required_string("job_id", "Job id returned by exec_start."),
         ])),
         tool("file_read", "Read a UTF-8 or binary file from the explicit target or active target.", object_schema(vec![
             optional_string("target", "Target id. Omit to use active target."),
             required_string("path", "File path."),
             optional_integer("max_bytes", "Maximum bytes to return."),
+            optional_integer("start_line", "Optional 1-based first line to return for UTF-8 files."),
+            optional_integer("end_line", "Optional 1-based inclusive last line to return for UTF-8 files."),
             optional_integer("timeout_ms", "Timeout in milliseconds for remote file access."),
         ])),
         tool("file_list", "List one directory on the explicit target or active target.", object_schema(vec![
@@ -62,7 +89,13 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
             required_string("path", "Directory path."),
             optional_integer("timeout_ms", "Timeout in milliseconds for remote directory access."),
         ])),
-        tool("file_edit", "Apply exact text replacements with sha256 compare-and-swap support. Writes require explicit target by default.", file_edit_schema()),
+        tool("file_edit", "Apply exact text replacements with sha256 compare-and-swap support. Existing file permissions are preserved. Writes require explicit target by default.", file_edit_schema()),
+        tool("file_write", "Create or replace a UTF-8 or base64 file atomically. Existing files require overwrite=true or an expected sha256. Writes require explicit target by default.", file_write_schema()),
+        tool("file_patch", "Apply a unified diff to one UTF-8 file with optional sha256 compare-and-swap protection. Existing file permissions are preserved.", file_patch_schema()),
+        tool("file_find", "Find literal text in one UTF-8 file and return matching lines with bounded context.", file_find_schema()),
+        tool("file_move", "Move or rename a file or directory within one target. Existing destinations are not replaced unless overwrite=true.", file_move_schema()),
+        tool("file_chmod", "Change the Unix mode of a file or directory using an octal mode string.", file_chmod_schema()),
+        tool("directory_create", "Create a directory on the selected target, recursively by default.", directory_create_schema()),
         tool("terminal_open", "Open a persistent PTY terminal on the explicit target or active target.", object_schema(vec![
             optional_string("target", "Target id. Omit to use active target."),
             optional_string("cwd", "Initial working directory."),
@@ -102,6 +135,30 @@ pub fn call_tool(state: Arc<AppState>, name: &str, args: Value) -> Result<Value>
             &state,
             parse::<ExecRequest>(args)?,
         )?)?),
+        "exec_start" => Ok(serde_json::to_value(
+            state.jobs.start(&state, parse::<ExecStartRequest>(args)?)?,
+        )?),
+        "job_poll" => {
+            Ok(serde_json::to_value(state.jobs.poll(parse::<
+                JobPollRequest,
+            >(
+                args
+            )?)?)?)
+        }
+        "job_output" => {
+            Ok(serde_json::to_value(state.jobs.output(parse::<
+                JobOutputRequest,
+            >(
+                args
+            )?)?)?)
+        }
+        "job_cancel" => {
+            Ok(serde_json::to_value(state.jobs.cancel(parse::<
+                JobCancelRequest,
+            >(
+                args
+            )?)?)?)
+        }
         "file_read" => Ok(serde_json::to_value(fs::read(
             &state,
             parse::<FileReadRequest>(args)?,
@@ -113,6 +170,30 @@ pub fn call_tool(state: Arc<AppState>, name: &str, args: Value) -> Result<Value>
         "file_edit" => Ok(serde_json::to_value(fs::edit(
             &state,
             parse::<FileEditRequest>(args)?,
+        )?)?),
+        "file_write" => Ok(serde_json::to_value(fs::write(
+            &state,
+            parse::<FileWriteRequest>(args)?,
+        )?)?),
+        "file_patch" => Ok(serde_json::to_value(fs::patch(
+            &state,
+            parse::<FilePatchRequest>(args)?,
+        )?)?),
+        "file_find" => Ok(serde_json::to_value(fs::find(
+            &state,
+            parse::<FileFindRequest>(args)?,
+        )?)?),
+        "file_move" => Ok(serde_json::to_value(fs::move_path(
+            &state,
+            parse::<FileMoveRequest>(args)?,
+        )?)?),
+        "file_chmod" => Ok(serde_json::to_value(fs::chmod(
+            &state,
+            parse::<FileChmodRequest>(args)?,
+        )?)?),
+        "directory_create" => Ok(serde_json::to_value(fs::create_directory(
+            &state,
+            parse::<DirectoryCreateRequest>(args)?,
         )?)?),
         "terminal_open" => Ok(serde_json::to_value(
             state
@@ -160,12 +241,14 @@ fn server_info(state: &AppState) -> Value {
         "active_target": active_target,
         "ssh_session_ids": state.ssh_sessions.ids(),
         "terminal_ids": state.terminals.ids(),
+        "job_ids": state.jobs.ids(),
         "runtime_dir": state.config.server.runtime_dir.display().to_string(),
         "started_at_debug": format!("{:?}", state.started_at()),
         "notes": [
             "MVP stdio MCP implementation with tools/list and tools/call.",
             "The SSH backend uses persistent per-target OpenSSH worker processes for exec and file operations.",
-            "target is sticky only inside this MCP server process/session."
+            "target is sticky only inside this MCP server process/session.",
+            "background jobs use dedicated processes so they do not monopolize persistent SSH workers."
         ]
     })
 }
@@ -284,11 +367,12 @@ fn output_schema(name: &str) -> Value {
                 "active_target": nullable_string_schema(),
                 "ssh_session_ids": string_array_schema(),
                 "terminal_ids": string_array_schema(),
+                "job_ids": string_array_schema(),
                 "runtime_dir": { "type": "string" },
                 "started_at_debug": { "type": "string" },
                 "notes": string_array_schema()
             },
-            "required": ["name", "version", "active_target", "ssh_session_ids", "terminal_ids", "runtime_dir", "started_at_debug", "notes"],
+            "required": ["name", "version", "active_target", "ssh_session_ids", "terminal_ids", "job_ids", "runtime_dir", "started_at_debug", "notes"],
             "additionalProperties": false
         }),
         "target_list" => json!({
@@ -333,6 +417,58 @@ fn output_schema(name: &str) -> Value {
             "required": ["resolved_target"],
             "additionalProperties": false
         }),
+        "exec_start" => json!({
+            "type": "object",
+            "properties": {
+                "resolved_target": resolved_target_schema(),
+                "job_id": { "type": "string" },
+                "status": { "type": "string", "enum": ["running"] }
+            },
+            "required": ["resolved_target", "job_id", "status"],
+            "additionalProperties": false
+        }),
+        "job_poll" => json!({
+            "type": "object",
+            "properties": {
+                "job_id": { "type": "string" },
+                "target": { "type": "string" },
+                "status": { "type": "string", "enum": ["running", "completed", "failed", "cancelled", "timed_out"] },
+                "exit_code": nullable_integer_schema(),
+                "elapsed_ms": { "type": "integer", "minimum": 0 },
+                "timed_out": { "type": "boolean" },
+                "cancel_requested": { "type": "boolean" }
+            },
+            "required": ["job_id", "target", "status", "elapsed_ms", "timed_out", "cancel_requested"],
+            "additionalProperties": false
+        }),
+        "job_output" => json!({
+            "type": "object",
+            "properties": {
+                "job_id": { "type": "string" },
+                "target": { "type": "string" },
+                "stdout_from_seq": { "type": "integer", "minimum": 0 },
+                "stdout_next_seq": { "type": "integer", "minimum": 0 },
+                "stdout": { "type": "string" },
+                "stdout_truncated": { "type": "boolean" },
+                "stderr_from_seq": { "type": "integer", "minimum": 0 },
+                "stderr_next_seq": { "type": "integer", "minimum": 0 },
+                "stderr": { "type": "string" },
+                "stderr_truncated": { "type": "boolean" },
+                "eof": { "type": "boolean" }
+            },
+            "required": ["job_id", "target", "stdout_from_seq", "stdout_next_seq", "stdout", "stdout_truncated", "stderr_from_seq", "stderr_next_seq", "stderr", "stderr_truncated", "eof"],
+            "additionalProperties": false
+        }),
+        "job_cancel" => json!({
+            "type": "object",
+            "properties": {
+                "job_id": { "type": "string" },
+                "cancel_requested": { "type": "boolean" },
+                "status": { "type": "string", "enum": ["running", "completed", "failed", "cancelled", "timed_out"] }
+            },
+            "required": ["job_id", "cancel_requested", "status"],
+            "additionalProperties": false
+        }),
         "file_read" => json!({
             "type": "object",
             "properties": {
@@ -342,7 +478,9 @@ fn output_schema(name: &str) -> Value {
                 "content": { "type": "string" },
                 "sha256": { "type": "string" },
                 "bytes": { "type": "integer", "minimum": 0 },
-                "truncated": { "type": "boolean" }
+                "truncated": { "type": "boolean" },
+                "start_line": { "type": "integer", "minimum": 1 },
+                "end_line": { "type": "integer", "minimum": 0 }
             },
             "required": ["resolved_target", "path", "encoding", "content", "sha256", "bytes", "truncated"],
             "additionalProperties": false
@@ -372,6 +510,90 @@ fn output_schema(name: &str) -> Value {
                 "diff": { "type": "string" }
             },
             "required": ["resolved_target", "path", "changed", "written", "old_sha256", "new_sha256", "diff"],
+            "additionalProperties": false
+        }),
+        "file_write" => json!({
+            "type": "object",
+            "properties": {
+                "resolved_target": resolved_target_schema(),
+                "path": { "type": "string" },
+                "created": { "type": "boolean" },
+                "written": { "type": "boolean" },
+                "old_sha256": nullable_string_schema(),
+                "new_sha256": { "type": "string" },
+                "bytes": { "type": "integer", "minimum": 0 }
+            },
+            "required": ["resolved_target", "path", "created", "written", "new_sha256", "bytes"],
+            "additionalProperties": false
+        }),
+        "file_patch" => json!({
+            "type": "object",
+            "properties": {
+                "resolved_target": resolved_target_schema(),
+                "path": { "type": "string" },
+                "changed": { "type": "boolean" },
+                "written": { "type": "boolean" },
+                "old_sha256": { "type": "string" },
+                "new_sha256": { "type": "string" },
+                "diff": { "type": "string" }
+            },
+            "required": ["resolved_target", "path", "changed", "written", "old_sha256", "new_sha256", "diff"],
+            "additionalProperties": false
+        }),
+        "file_find" => json!({
+            "type": "object",
+            "properties": {
+                "resolved_target": resolved_target_schema(),
+                "path": { "type": "string" },
+                "sha256": { "type": "string" },
+                "matches": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "line": { "type": "integer", "minimum": 1 },
+                            "text": { "type": "string" },
+                            "before": string_array_schema(),
+                            "after": string_array_schema()
+                        },
+                        "required": ["line", "text", "before", "after"],
+                        "additionalProperties": false
+                    }
+                },
+                "truncated": { "type": "boolean" }
+            },
+            "required": ["resolved_target", "path", "sha256", "matches", "truncated"],
+            "additionalProperties": false
+        }),
+        "file_move" => json!({
+            "type": "object",
+            "properties": {
+                "resolved_target": resolved_target_schema(),
+                "source": { "type": "string" },
+                "destination": { "type": "string" },
+                "moved": { "type": "boolean" }
+            },
+            "required": ["resolved_target", "source", "destination", "moved"],
+            "additionalProperties": false
+        }),
+        "file_chmod" => json!({
+            "type": "object",
+            "properties": {
+                "resolved_target": resolved_target_schema(),
+                "path": { "type": "string" },
+                "mode": { "type": "string" }
+            },
+            "required": ["resolved_target", "path", "mode"],
+            "additionalProperties": false
+        }),
+        "directory_create" => json!({
+            "type": "object",
+            "properties": {
+                "resolved_target": resolved_target_schema(),
+                "path": { "type": "string" },
+                "created": { "type": "boolean" }
+            },
+            "required": ["resolved_target", "path", "created"],
             "additionalProperties": false
         }),
         "terminal_open" => json!({
@@ -560,6 +782,21 @@ fn optional_string(name: &'static str, description: &'static str) -> Prop {
     }
 }
 
+fn optional_value(name: &'static str, description: &'static str, schema: Value) -> Prop {
+    let mut value = schema;
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "description".to_string(),
+            Value::String(description.to_string()),
+        );
+    }
+    Prop {
+        name,
+        required: false,
+        value,
+    }
+}
+
 fn required_integer(name: &'static str, description: &'static str) -> Prop {
     Prop {
         name,
@@ -604,6 +841,122 @@ fn file_edit_schema() -> Value {
     })
 }
 
+fn secret_env_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": secret_ref_schema()
+    })
+}
+
+fn secret_ref_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "path": { "type": "string", "description": "Secret source file on the selected target. The path must pass the target file-read policy." },
+            "format": { "type": "string", "enum": ["text", "toml", "json"], "description": "Source format. Defaults to text." },
+            "key": { "type": "string", "description": "Dot-separated scalar key for TOML or JSON sources." },
+            "trim": { "type": "boolean", "description": "Trim surrounding whitespace from the resolved value. Defaults to true." }
+        },
+        "required": ["path"],
+        "additionalProperties": false
+    })
+}
+
+fn file_write_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "target": { "type": "string", "description": "Target id. For writes this is required by default policy." },
+            "path": { "type": "string", "description": "Destination file path." },
+            "content": { "type": "string", "description": "File content encoded according to encoding." },
+            "encoding": { "type": "string", "enum": ["utf8", "base64"], "description": "Content encoding. Defaults to utf8." },
+            "expected_sha256": { "type": "string", "description": "Optional CAS guard for an existing file." },
+            "overwrite": { "type": "boolean", "description": "Allow replacement without a CAS hash. Defaults to false." },
+            "mode": { "type": "string", "description": "Optional octal mode such as 0644 or 0755. Existing mode is preserved when omitted." },
+            "timeout_ms": { "type": "integer", "description": "Timeout for remote file access." }
+        },
+        "required": ["path", "content"],
+        "additionalProperties": false
+    })
+}
+
+fn file_patch_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "target": { "type": "string", "description": "Target id. For writes this is required by default policy." },
+            "path": { "type": "string", "description": "UTF-8 text file path." },
+            "patch": { "type": "string", "description": "Unified diff that applies to this file." },
+            "expected_sha256": { "type": "string", "description": "Optional CAS guard from file_read." },
+            "dry_run": { "type": "boolean", "description": "Validate and return the patch result without writing." },
+            "timeout_ms": { "type": "integer", "description": "Timeout for remote read/write." }
+        },
+        "required": ["path", "patch"],
+        "additionalProperties": false
+    })
+}
+
+fn file_find_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "target": { "type": "string", "description": "Target id. Omit to use active target." },
+            "path": { "type": "string", "description": "UTF-8 text file path." },
+            "pattern": { "type": "string", "description": "Literal text to find." },
+            "case_sensitive": { "type": "boolean", "description": "Use case-sensitive matching. Defaults to true." },
+            "context_lines": { "type": "integer", "minimum": 0, "maximum": 20, "description": "Lines of context before and after each match. Defaults to 2." },
+            "max_matches": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Maximum matches to return. Defaults to 20." },
+            "timeout_ms": { "type": "integer", "description": "Timeout for remote file access." }
+        },
+        "required": ["path", "pattern"],
+        "additionalProperties": false
+    })
+}
+
+fn file_move_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "target": { "type": "string", "description": "Target id. Writes require an explicit target by default." },
+            "source": { "type": "string", "description": "Existing source path." },
+            "destination": { "type": "string", "description": "Destination path on the same target." },
+            "overwrite": { "type": "boolean", "description": "Replace an existing destination. Defaults to false." },
+            "timeout_ms": { "type": "integer", "description": "Timeout for remote file access." }
+        },
+        "required": ["source", "destination"],
+        "additionalProperties": false
+    })
+}
+
+fn file_chmod_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "target": { "type": "string", "description": "Target id. Writes require an explicit target by default." },
+            "path": { "type": "string", "description": "File or directory path." },
+            "mode": { "type": "string", "description": "Octal mode such as 0644 or 0755." },
+            "timeout_ms": { "type": "integer", "description": "Timeout for remote file access." }
+        },
+        "required": ["path", "mode"],
+        "additionalProperties": false
+    })
+}
+
+fn directory_create_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "target": { "type": "string", "description": "Target id. Writes require an explicit target by default." },
+            "path": { "type": "string", "description": "Directory path." },
+            "recursive": { "type": "boolean", "description": "Create missing parents. Defaults to true." },
+            "mode": { "type": "string", "description": "Optional octal mode such as 0755." },
+            "timeout_ms": { "type": "integer", "description": "Timeout for remote file access." }
+        },
+        "required": ["path"],
+        "additionalProperties": false
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -613,7 +966,7 @@ mod tests {
         let tools = list_tools(None);
         let tools = tools.as_array().expect("tool list is an array");
 
-        assert_eq!(tools.len(), 15);
+        assert_eq!(tools.len(), 25);
         for tool in tools {
             let name = tool["name"].as_str().expect("tool has a name");
             assert_eq!(

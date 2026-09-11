@@ -424,16 +424,30 @@ pub fn disconnect(
     sessions.disconnect(target_name, timeout)
 }
 
-pub fn exec(
+pub fn exec_with_env(
     sessions: &SshSessionRegistry,
     target_name: &str,
     ssh: &SshTargetConfig,
     command: &str,
     cwd: Option<&str>,
+    env: &std::collections::BTreeMap<String, String>,
     timeout: Duration,
 ) -> Result<RawExecOutput> {
-    let remote_command = with_cwd(command, cwd);
+    let remote_command = with_cwd_and_env(command, cwd, env);
     sessions.run_script(target_name, ssh, &remote_command, &[], timeout)
+}
+
+pub fn exec_program_and_args(
+    ssh: &SshTargetConfig,
+    command: &str,
+    cwd: Option<&str>,
+    env: &std::collections::BTreeMap<String, String>,
+) -> (String, Vec<String>) {
+    let mut args = base_args(ssh);
+    args.push(destination(ssh));
+    let remote_command = with_cwd_and_env(command, cwd, env);
+    args.push(format!("sh -lc {}", shell_quote(&remote_command)));
+    ("ssh".to_string(), args)
 }
 
 pub fn read_file(
@@ -467,10 +481,13 @@ pub fn write_file(
     ssh: &SshTargetConfig,
     path: &str,
     bytes: &[u8],
+    mode: Option<u32>,
     timeout: Duration,
 ) -> Result<()> {
+    let mode_arg = mode.map(|value| format!("{value:o}")).unwrap_or_default();
     let mut script = r#"
 p=$1
+requested_mode=$2
 parent=${p%/*}
 if [ "$parent" = "$p" ]; then
     parent=.
@@ -482,6 +499,13 @@ base=${p##*/}
 if [ -z "$base" ]; then
     printf "%s\n" "refusing to write directory path: $p" >&2
     exit 1
+fi
+if [ -n "$requested_mode" ]; then
+    final_mode=$requested_mode
+elif [ -e "$p" ] || [ -L "$p" ]; then
+    final_mode=$(stat -c "%a" "$p" 2>/dev/null || stat -f "%Lp" "$p" 2>/dev/null || printf "")
+else
+    final_mode=644
 fi
 mkdir -p "$parent" || exit 1
 tmp=$(mktemp "$parent/.$base.XXXXXX") || exit 1
@@ -495,16 +519,165 @@ trap cleanup EXIT HUP INT TERM
     append_printf_chunks(&mut script, bytes);
     script.push_str(
         r#"
+if [ -n "$final_mode" ]; then
+    chmod "$final_mode" "$tmp" || exit 1
+fi
 mv -f "$tmp" "$p" || exit 1
 trap - EXIT HUP INT TERM
 "#,
     );
-    let output = remote_sh(sessions, target_name, ssh, &script, &[path], timeout)?;
+    let output = remote_sh(
+        sessions,
+        target_name,
+        ssh,
+        &script,
+        &[path, mode_arg.as_str()],
+        timeout,
+    )?;
     if output.exit_code == Some(0) {
         Ok(())
     } else {
         Err(Error::Tool(format!(
             "remote write failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )))
+    }
+}
+
+pub fn file_exists(
+    sessions: &SshSessionRegistry,
+    target_name: &str,
+    ssh: &SshTargetConfig,
+    path: &str,
+    timeout: Duration,
+) -> Result<bool> {
+    let output = remote_sh(
+        sessions,
+        target_name,
+        ssh,
+        r#"if [ -e "$1" ] || [ -L "$1" ]; then exit 0; else exit 1; fi"#,
+        &[path],
+        timeout,
+    )?;
+    match output.exit_code {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => Err(Error::Tool(format!(
+            "remote existence check failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ))),
+    }
+}
+
+pub fn move_path(
+    sessions: &SshSessionRegistry,
+    target_name: &str,
+    ssh: &SshTargetConfig,
+    source: &str,
+    destination: &str,
+    overwrite: bool,
+    timeout: Duration,
+) -> Result<()> {
+    let overwrite_arg = if overwrite { "1" } else { "0" };
+    let script = r#"
+src=$1
+dst=$2
+overwrite=$3
+if [ "$overwrite" != 1 ] && { [ -e "$dst" ] || [ -L "$dst" ]; }; then
+    printf "%s\n" "destination already exists: $dst" >&2
+    exit 2
+fi
+if [ "$overwrite" = 1 ]; then
+    if [ -d "$dst" ] && [ ! -L "$dst" ]; then
+        printf "%s\n" "refusing to overwrite an existing directory: $dst" >&2
+        exit 2
+    fi
+    rm -f "$dst" || exit 1
+fi
+mv "$src" "$dst" || exit 1
+"#;
+    let output = remote_sh(
+        sessions,
+        target_name,
+        ssh,
+        script,
+        &[source, destination, overwrite_arg],
+        timeout,
+    )?;
+    if output.exit_code == Some(0) {
+        Ok(())
+    } else {
+        Err(Error::Tool(format!(
+            "remote move failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )))
+    }
+}
+
+pub fn chmod_path(
+    sessions: &SshSessionRegistry,
+    target_name: &str,
+    ssh: &SshTargetConfig,
+    path: &str,
+    mode: u32,
+    timeout: Duration,
+) -> Result<()> {
+    let mode = format!("{mode:o}");
+    let output = remote_sh(
+        sessions,
+        target_name,
+        ssh,
+        r#"chmod "$2" "$1""#,
+        &[path, mode.as_str()],
+        timeout,
+    )?;
+    if output.exit_code == Some(0) {
+        Ok(())
+    } else {
+        Err(Error::Tool(format!(
+            "remote chmod failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )))
+    }
+}
+
+pub fn create_directory(
+    sessions: &SshSessionRegistry,
+    target_name: &str,
+    ssh: &SshTargetConfig,
+    path: &str,
+    recursive: bool,
+    mode: Option<u32>,
+    timeout: Duration,
+) -> Result<()> {
+    let recursive_arg = if recursive { "1" } else { "0" };
+    let mode_arg = mode.map(|value| format!("{value:o}")).unwrap_or_default();
+    let script = r#"
+p=$1
+recursive=$2
+mode=$3
+if [ "$recursive" = 1 ]; then
+    mkdir -p "$p" || exit 1
+else
+    mkdir "$p" || exit 1
+fi
+if [ -n "$mode" ]; then
+    chmod "$mode" "$p" || exit 1
+fi
+"#;
+    let output = remote_sh(
+        sessions,
+        target_name,
+        ssh,
+        script,
+        &[path, recursive_arg, mode_arg.as_str()],
+        timeout,
+    )?;
+    if output.exit_code == Some(0) {
+        Ok(())
+    } else {
+        Err(Error::Tool(format!(
+            "remote directory creation failed: {}",
             String::from_utf8_lossy(&output.stderr)
         )))
     }
@@ -676,11 +849,27 @@ fn decode_field(field: &[u8]) -> String {
     String::from_utf8_lossy(field).to_string()
 }
 
-fn with_cwd(command: &str, cwd: Option<&str>) -> String {
-    match cwd {
-        Some(cwd) => format!("cd {} && {}", shell_quote(cwd), command),
-        None => command.to_string(),
+fn with_cwd_and_env(
+    command: &str,
+    cwd: Option<&str>,
+    env: &std::collections::BTreeMap<String, String>,
+) -> String {
+    let mut remote = String::new();
+    for (name, value) in env {
+        remote.push_str(name);
+        remote.push('=');
+        remote.push_str(&shell_quote(value));
+        remote.push_str("; export ");
+        remote.push_str(name);
+        remote.push_str("; ");
     }
+    if let Some(cwd) = cwd {
+        remote.push_str("cd ");
+        remote.push_str(&shell_quote(cwd));
+        remote.push_str(" && ");
+    }
+    remote.push_str(command);
+    remote
 }
 
 fn destination(ssh: &SshTargetConfig) -> String {

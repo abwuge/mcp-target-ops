@@ -7,10 +7,12 @@ use crate::{
         target::{ResolvedTarget, TargetId},
         util::truncate_bytes,
     },
+    tooling::secret::{self, SecretRef},
     transport::ssh,
 };
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::BTreeMap,
     io::Read,
     process::{Command, Stdio},
     thread,
@@ -28,6 +30,8 @@ pub struct ExecRequest {
     pub timeout_ms: Option<u64>,
     #[serde(default)]
     pub max_output_bytes: Option<usize>,
+    #[serde(default)]
+    pub secret_env: BTreeMap<String, SecretRef>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -62,25 +66,26 @@ pub fn run(state: &AppState, req: ExecRequest) -> Result<ExecResponse> {
 
     let policy = policy::target_policy(config);
     let timeout_ms = req.timeout_ms.unwrap_or(policy.default_timeout_ms);
+    let timeout = Duration::from_millis(timeout_ms);
     let max_output = Some(
         req.max_output_bytes
             .unwrap_or(policy.max_output_bytes)
             .min(policy.max_output_bytes),
     );
+    let secret_env = secret::resolve_env(state, &target, config, source, &req.secret_env, timeout)?;
 
     let raw = match (target.clone(), config) {
-        (TargetId::Local, TargetConfig::Local(_)) => run_local_shell(
-            &req.command,
-            req.cwd.as_deref(),
-            Duration::from_millis(timeout_ms),
-        )?,
-        (TargetId::Ssh(name), TargetConfig::Ssh(ssh_config)) => ssh::exec(
+        (TargetId::Local, TargetConfig::Local(_)) => {
+            run_local_shell_with_env(&req.command, req.cwd.as_deref(), &secret_env, timeout)?
+        }
+        (TargetId::Ssh(name), TargetConfig::Ssh(ssh_config)) => ssh::exec_with_env(
             &state.ssh_sessions,
             &name,
             ssh_config,
             &req.command,
             req.cwd.as_deref(),
-            Duration::from_millis(timeout_ms),
+            &secret_env,
+            timeout,
         )?,
         _ => {
             return Err(Error::Target(format!(
@@ -107,11 +112,20 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-pub fn run_local_shell(
+pub fn run_local_shell_with_env(
     command: &str,
     cwd: Option<&str>,
+    env: &BTreeMap<String, String>,
     timeout: Duration,
 ) -> Result<RawExecOutput> {
+    run_command_collect(local_shell_command(command, cwd, env), timeout)
+}
+
+pub(crate) fn local_shell_command(
+    command: &str,
+    cwd: Option<&str>,
+    env: &BTreeMap<String, String>,
+) -> Command {
     #[cfg(windows)]
     let mut cmd = {
         let mut cmd = Command::new("cmd.exe");
@@ -130,12 +144,16 @@ pub fn run_local_shell(
     if let Some(cwd) = cwd {
         cmd.current_dir(cwd);
     }
-
-    run_command_collect(cmd, timeout)
+    cmd.envs(env);
+    cmd
 }
 
 pub fn run_command_collect(mut cmd: Command, timeout: Duration) -> Result<RawExecOutput> {
-    let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
 
     let mut stdout = child
         .stdout
@@ -214,5 +232,19 @@ mod tests {
                 "exit_code": 0
             })
         );
+    }
+
+    #[test]
+    fn injects_secret_environment_without_echoing_it() {
+        let mut env = BTreeMap::new();
+        env.insert("MCP_TEST_SECRET".to_string(), "hidden-value".to_string());
+        let output = run_local_shell_with_env(
+            "printf '%s' \"$MCP_TEST_SECRET\"",
+            None,
+            &env,
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(output.stdout, b"hidden-value");
     }
 }

@@ -6,12 +6,13 @@ use crate::{
         state::AppState,
         target::{ResolvedTarget, TargetId},
     },
+    tooling::stream::RingBuffer,
     transport::ssh,
 };
-use portable_pty::{native_pty_system, Child, CommandBuilder, PtySize};
+use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     io::{Read, Write},
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -109,25 +110,10 @@ pub struct TerminalRegistry {
 pub struct TerminalSession {
     target: TargetId,
     writer: Mutex<Box<dyn Write + Send>>,
+    master: Mutex<Box<dyn MasterPty + Send>>,
     child: Mutex<Box<dyn Child + Send>>,
     buffer: Arc<RingBuffer>,
     eof: Arc<Mutex<bool>>,
-}
-
-pub struct RingBuffer {
-    inner: Mutex<RingBufferInner>,
-    max_bytes: usize,
-}
-
-struct RingBufferInner {
-    chunks: VecDeque<OutputChunk>,
-    next_seq: u64,
-    current_bytes: usize,
-}
-
-struct OutputChunk {
-    seq: u64,
-    bytes: Vec<u8>,
 }
 
 impl TerminalRegistry {
@@ -227,6 +213,7 @@ impl TerminalRegistry {
         let session = Arc::new(TerminalSession {
             target: target.clone(),
             writer: Mutex::new(writer),
+            master: Mutex::new(pair.master),
             child: Mutex::new(child),
             buffer,
             eof,
@@ -273,13 +260,17 @@ impl TerminalRegistry {
 
     pub fn resize(&self, req: TerminalResizeRequest) -> Result<TerminalResizeResponse> {
         let session = self.get(&req.terminal_id)?;
-        session.buffer.push(
-            format!(
-                "\r\n[mcp-target-ops: resize requested to {}x{}; PTY resize is not yet wired]\r\n",
-                req.rows, req.cols
-            )
-            .as_bytes(),
-        );
+        session
+            .master
+            .lock()
+            .unwrap()
+            .resize(PtySize {
+                rows: req.rows,
+                cols: req.cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|err| Error::Terminal(err.to_string()))?;
         Ok(TerminalResizeResponse {
             terminal_id: req.terminal_id,
             rows: req.rows,
@@ -317,63 +308,64 @@ impl TerminalRegistry {
     }
 }
 
-impl RingBuffer {
-    pub fn new(max_bytes: usize) -> Self {
-        Self {
-            inner: Mutex::new(RingBufferInner {
-                chunks: VecDeque::new(),
-                next_seq: 1,
-                current_bytes: 0,
-            }),
-            max_bytes,
-        }
-    }
-
-    pub fn push(&self, bytes: &[u8]) {
-        if bytes.is_empty() {
-            return;
-        }
-        let mut inner = self.inner.lock().unwrap();
-        let seq = inner.next_seq;
-        inner.next_seq += 1;
-        inner.current_bytes += bytes.len();
-        inner.chunks.push_back(OutputChunk {
-            seq,
-            bytes: bytes.to_vec(),
-        });
-
-        while inner.current_bytes > self.max_bytes {
-            if let Some(old) = inner.chunks.pop_front() {
-                inner.current_bytes = inner.current_bytes.saturating_sub(old.bytes.len());
-            } else {
-                break;
-            }
-        }
-    }
-
-    pub fn read_since(&self, since_seq: u64, max_bytes: usize) -> (Vec<u8>, u64, bool) {
-        let inner = self.inner.lock().unwrap();
-        let mut out = Vec::new();
-        let mut truncated = false;
-
-        for chunk in inner.chunks.iter().filter(|chunk| chunk.seq > since_seq) {
-            if out.len() + chunk.bytes.len() > max_bytes {
-                let remaining = max_bytes.saturating_sub(out.len());
-                out.extend_from_slice(&chunk.bytes[..remaining.min(chunk.bytes.len())]);
-                truncated = true;
-                break;
-            }
-            out.extend_from_slice(&chunk.bytes);
-        }
-
-        (out, inner.next_seq.saturating_sub(1), truncated)
-    }
-}
-
 fn default_rows() -> u16 {
     30
 }
 
 fn default_cols() -> u16 {
     120
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::config::{Config, LocalTargetConfig, PolicyConfig, TargetConfig};
+
+    #[cfg(unix)]
+    #[test]
+    fn resizes_live_local_pty() {
+        let mut config = Config::default();
+        config.targets.insert(
+            "local".to_string(),
+            TargetConfig::Local(LocalTargetConfig {
+                enabled: true,
+                shell: Some("sh".to_string()),
+                policy: PolicyConfig {
+                    allow_terminal: true,
+                    allowed_roots: vec!["/tmp".to_string()],
+                    ..PolicyConfig::default()
+                },
+            }),
+        );
+        let state = AppState::new(config).unwrap();
+        let opened = state
+            .terminals
+            .open(
+                &state,
+                TerminalOpenRequest {
+                    target: Some("local".to_string()),
+                    cwd: Some("/tmp".to_string()),
+                    shell: Some("sh".to_string()),
+                    rows: 20,
+                    cols: 80,
+                },
+            )
+            .unwrap();
+        let resized = state
+            .terminals
+            .resize(TerminalResizeRequest {
+                terminal_id: opened.terminal_id.clone(),
+                rows: 40,
+                cols: 120,
+            })
+            .unwrap();
+        assert_eq!(resized.rows, 40);
+        assert_eq!(resized.cols, 120);
+        state
+            .terminals
+            .close(TerminalCloseRequest {
+                terminal_id: opened.terminal_id,
+            })
+            .unwrap();
+    }
 }
