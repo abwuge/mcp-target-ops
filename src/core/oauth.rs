@@ -1,20 +1,34 @@
+use crate::core::error::{Error, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use rand::{rngs::OsRng, RngCore};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-#[derive(Debug, Default)]
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct OAuthState {
+    #[serde(default)]
     clients: BTreeMap<String, OAuthClient>,
+    #[serde(default, skip)]
     codes: BTreeMap<String, AuthorizationCode>,
+    #[serde(default)]
     tokens: BTreeMap<String, AccessToken>,
+    #[serde(default)]
     refresh_tokens: BTreeMap<String, RefreshToken>,
+    #[serde(default, skip)]
+    state_file: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuthClient {
     pub client_id: String,
     pub client_name: Option<String>,
@@ -63,7 +77,7 @@ struct AuthorizationCode {
     expires_at: SystemTime,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct AccessToken {
     expires_at: SystemTime,
     #[allow(dead_code)]
@@ -74,7 +88,7 @@ struct AccessToken {
     resource: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct RefreshToken {
     expires_at: SystemTime,
     client_id: String,
@@ -83,15 +97,38 @@ struct RefreshToken {
 }
 
 impl OAuthState {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn load(state_file: Option<PathBuf>) -> Result<Self> {
+        let Some(path) = state_file else {
+            return Ok(Self::default());
+        };
+
+        let mut state = if path.exists() {
+            check_private_permissions(&path)?;
+            let bytes = fs::read(&path).map_err(|err| {
+                Error::Config(format!(
+                    "failed to read OAuth state {}: {err}",
+                    path.display()
+                ))
+            })?;
+            serde_json::from_slice::<Self>(&bytes).map_err(|err| {
+                Error::Config(format!(
+                    "failed to parse OAuth state {}: {err}",
+                    path.display()
+                ))
+            })?
+        } else {
+            Self::default()
+        };
+        state.state_file = Some(path);
+        state.prune_expired(SystemTime::now());
+        Ok(state)
     }
 
     pub fn register_client(
         &mut self,
         client_name: Option<String>,
         redirect_uris: Vec<String>,
-    ) -> OAuthClient {
+    ) -> std::result::Result<OAuthClient, OAuthError> {
         self.prune_expired(SystemTime::now());
 
         let client = OAuthClient {
@@ -102,7 +139,8 @@ impl OAuthState {
         };
         self.clients
             .insert(client.client_id.clone(), client.clone());
-        client
+        self.persist_oauth()?;
+        Ok(client)
     }
 
     pub fn client_allows_redirect(&self, client_id: &str, redirect_uri: &str) -> bool {
@@ -205,13 +243,15 @@ impl OAuthState {
             ));
         }
 
-        Ok(self.issue_token_pair(
+        let response = self.issue_token_pair(
             client_id.to_string(),
             code_record.scopes,
             code_record.resource,
             lifetimes,
             now,
-        ))
+        );
+        self.persist_oauth()?;
+        Ok(response)
     }
 
     pub fn exchange_refresh_token(
@@ -269,7 +309,10 @@ impl OAuthState {
         };
 
         self.refresh_tokens.remove(refresh_token);
-        Ok(self.issue_token_pair(record.client_id, scopes, record.resource, lifetimes, now))
+        let response =
+            self.issue_token_pair(record.client_id, scopes, record.resource, lifetimes, now);
+        self.persist_oauth()?;
+        Ok(response)
     }
 
     pub fn access_token_valid(&mut self, token: &str) -> bool {
@@ -286,6 +329,42 @@ impl OAuthState {
         self.tokens.retain(|_, token| token.expires_at > now);
         self.refresh_tokens
             .retain(|_, token| token.expires_at > now);
+    }
+
+    fn persist_oauth(&self) -> std::result::Result<(), OAuthError> {
+        self.persist()
+            .map_err(|err| OAuthError::new("server_error", err.to_string()))
+    }
+
+    fn persist(&self) -> Result<()> {
+        let Some(path) = &self.state_file else {
+            return Ok(());
+        };
+        let parent = path.parent().ok_or_else(|| {
+            Error::Config(format!("OAuth state path {} has no parent", path.display()))
+        })?;
+        fs::create_dir_all(parent).map_err(|err| {
+            Error::Config(format!(
+                "failed to create OAuth state directory {}: {err}",
+                parent.display()
+            ))
+        })?;
+
+        let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
+        #[cfg(unix)]
+        tmp.as_file()
+            .set_permissions(fs::Permissions::from_mode(0o600))?;
+        serde_json::to_writer(tmp.as_file_mut(), self)?;
+        tmp.as_file_mut().write_all(b"\n")?;
+        tmp.as_file_mut().sync_all()?;
+        tmp.persist(path).map_err(|err| {
+            Error::Config(format!(
+                "failed to persist OAuth state {}: {}",
+                path.display(),
+                err.error
+            ))
+        })?;
+        Ok(())
     }
 
     fn issue_token_pair(
@@ -358,17 +437,32 @@ fn unix_now() -> u64 {
         .as_secs()
 }
 
+fn check_private_permissions(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        let mode = fs::metadata(path)?.permissions().mode();
+        if mode & 0o077 != 0 {
+            return Err(Error::Config(format!(
+                "OAuth state file {} must not be accessible by group or others; expected mode 0600",
+                path.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{AuthorizationCodeRequest, OAuthState, TokenLifetimes};
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     use sha2::{Digest, Sha256};
+    use tempfile::tempdir;
 
     #[test]
     fn exchanges_authorization_code_with_pkce() {
         let verifier = "correct horse battery staple";
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
-        let mut state = OAuthState::new();
+        let mut state = OAuthState::load(None).unwrap();
 
         let code = state.issue_authorization_code(
             AuthorizationCodeRequest {
@@ -430,10 +524,68 @@ mod tests {
     }
 
     #[test]
+    fn persists_clients_and_refresh_tokens_across_restart() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("oauth-state.json");
+        let mut state = OAuthState::load(Some(path.clone())).unwrap();
+        let client = state
+            .register_client(
+                Some("ChatGPT".to_string()),
+                vec!["https://chatgpt.com/connector/oauth/callback".to_string()],
+            )
+            .unwrap();
+
+        let verifier = "persistent verifier";
+        let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+        let code = state.issue_authorization_code(
+            AuthorizationCodeRequest {
+                client_id: client.client_id.clone(),
+                redirect_uri: client.redirect_uris[0].clone(),
+                code_challenge: challenge,
+                code_challenge_method: "S256".to_string(),
+                scopes: vec!["mcp:tools".to_string()],
+                resource: "https://mcp.example.com".to_string(),
+            },
+            600,
+        );
+        let token = state
+            .exchange_authorization_code(
+                &code,
+                &client.client_id,
+                &client.redirect_uris[0],
+                verifier,
+                Some("https://mcp.example.com"),
+                TokenLifetimes {
+                    access_token_secs: 3600,
+                    refresh_token_secs: 2_592_000,
+                },
+            )
+            .unwrap();
+        drop(state);
+
+        let mut restored = OAuthState::load(Some(path)).unwrap();
+        assert!(restored.has_client(&client.client_id));
+        assert!(restored.access_token_valid(&token.access_token));
+        let refreshed = restored
+            .exchange_refresh_token(
+                &token.refresh_token,
+                &client.client_id,
+                Some("https://mcp.example.com"),
+                None,
+                TokenLifetimes {
+                    access_token_secs: 3600,
+                    refresh_token_secs: 2_592_000,
+                },
+            )
+            .expect("refresh token survives restart");
+        assert_ne!(refreshed.refresh_token, token.refresh_token);
+    }
+
+    #[test]
     fn rejects_reused_authorization_code() {
         let verifier = "verifier";
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
-        let mut state = OAuthState::new();
+        let mut state = OAuthState::load(None).unwrap();
         let code = state.issue_authorization_code(
             AuthorizationCodeRequest {
                 client_id: "client-1".to_string(),

@@ -54,7 +54,7 @@ impl AppState {
             ssh_sessions: SshSessionRegistry::new(),
             terminals: TerminalRegistry::new(config.server.terminal_ring_buffer_bytes),
             jobs: JobRegistry::new(),
-            oauth: Mutex::new(OAuthState::new()),
+            oauth: Mutex::new(OAuthState::load(config.server.oauth_state_file.clone())?),
             config,
             active_target: Mutex::new(active),
             started_at: SystemTime::now(),

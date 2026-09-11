@@ -21,6 +21,8 @@ runtime_dir = "/tmp/mcp-target-ops"
 # oauth_authorization_code_ttl_secs = 600
 # oauth_access_token_ttl_secs = 3600
 # oauth_refresh_token_ttl_secs = 2592000
+# OAuth clients and tokens persist across restarts. Defaults to:
+# oauth_state_file = "/home/me/.config/mcp-target-ops/oauth-state.json"
 
 # Optional downstream Streamable HTTP MCP server. Prefer a dedicated mode-0600
 # config file owned by Target Ops. Its format is:

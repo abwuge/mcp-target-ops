@@ -56,6 +56,9 @@ pub struct ServerConfig {
     #[serde(default = "default_oauth_refresh_token_ttl_secs")]
     pub oauth_refresh_token_ttl_secs: u64,
 
+    #[serde(default = "default_oauth_state_file")]
+    pub oauth_state_file: Option<PathBuf>,
+
     #[serde(default)]
     pub default_target: Option<String>,
 
@@ -206,6 +209,7 @@ impl Default for ServerConfig {
             oauth_authorization_code_ttl_secs: default_oauth_authorization_code_ttl_secs(),
             oauth_access_token_ttl_secs: default_oauth_access_token_ttl_secs(),
             oauth_refresh_token_ttl_secs: default_oauth_refresh_token_ttl_secs(),
+            oauth_state_file: default_oauth_state_file(),
             default_target: None,
             terminal_ring_buffer_bytes: default_ring_buffer_bytes(),
             runtime_dir: default_runtime_dir(),
@@ -458,6 +462,21 @@ fn default_oauth_access_token_ttl_secs() -> u64 {
 
 fn default_oauth_refresh_token_ttl_secs() -> u64 {
     30 * 24 * 60 * 60
+}
+
+fn default_oauth_state_file() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("MCP_TARGET_OPS_OAUTH_STATE_FILE") {
+        return Some(PathBuf::from(path));
+    }
+
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    Some(
+        home.join(".config")
+            .join("mcp-target-ops")
+            .join("oauth-state.json"),
+    )
 }
 
 fn default_ring_buffer_bytes() -> usize {

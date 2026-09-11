@@ -278,6 +278,8 @@ oauth_allow_dynamic_client_registration = true
 oauth_authorization_code_ttl_secs = 600
 oauth_access_token_ttl_secs = 3600
 oauth_refresh_token_ttl_secs = 2592000
+# Optional; defaults to ~/.config/mcp-target-ops/oauth-state.json
+oauth_state_file = "/home/me/.config/mcp-target-ops/oauth-state.json"
 ```
 
 Secrets and deployment-specific values can be supplied with environment
@@ -303,10 +305,19 @@ registration, and refresh-token rotation. Access tokens last one hour and
 refresh tokens last 30 days by default. A refresh returns a replacement refresh
 token; the previous one cannot be reused.
 
-OAuth clients and tokens are held in memory. Restarting the service invalidates
-all active access and refresh tokens, so clients must authorize again after a
-restart. Use an external identity provider when token persistence, revocation,
-or per-user policy is required.
+OAuth clients, access tokens, and rotating refresh tokens are persisted by
+default in `~/.config/mcp-target-ops/oauth-state.json`. The state file is written
+atomically with mode `0600`; on Unix, startup rejects a state file readable by
+group or others. Authorization codes remain memory-only and short-lived.
+Therefore an already-authorized ChatGPT client can refresh normally after a
+service restart without asking for the authorization password again. Set
+`server.oauth_state_file` (or `MCP_TARGET_OPS_OAUTH_STATE_FILE`) to choose a
+different path; set it to an explicit deployment-controlled path when the
+service account has a nonstandard home directory.
+
+Deleting the state file intentionally revokes persisted clients and tokens and
+will require authorization again. Use an external identity provider when more
+advanced revocation, multi-user identity, or policy is required.
 
 ## GPT Actions
 

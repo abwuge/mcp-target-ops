@@ -342,11 +342,15 @@ fn handle_register(state: Arc<AppState>, mut request: Request) -> Result<()> {
         );
     }
 
-    let client = state
+    let client = match state
         .oauth
         .lock()
         .unwrap()
-        .register_client(registration.client_name, registration.redirect_uris);
+        .register_client(registration.client_name, registration.redirect_uris)
+    {
+        Ok(client) => client,
+        Err(err) => return respond_oauth_error(request, 500, err),
+    };
 
     respond_json_with_cache_headers(
         request,
