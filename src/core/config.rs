@@ -1,4 +1,7 @@
-use crate::core::error::{Error, Result};
+use crate::core::{
+    error::{Error, Result},
+    secret::SecretRef,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -13,6 +16,9 @@ pub struct Config {
 
     #[serde(default)]
     pub targets: BTreeMap<String, TargetConfig>,
+
+    #[serde(default)]
+    pub mcp_servers: BTreeMap<String, McpServerConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -106,6 +112,36 @@ pub struct SshTargetConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    #[serde(default)]
+    pub config_file: Option<PathBuf>,
+
+    #[serde(default)]
+    pub url: Option<String>,
+
+    #[serde(default)]
+    pub url_secret: Option<SecretRef>,
+
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
+
+    #[serde(default)]
+    pub secret_headers: BTreeMap<String, SecretRef>,
+
+    #[serde(default)]
+    pub secret_target: Option<String>,
+
+    #[serde(default = "default_mcp_timeout_ms")]
+    pub timeout_ms: u64,
+
+    #[serde(default = "default_mcp_max_response_bytes")]
+    pub max_response_bytes: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicyConfig {
     #[serde(default)]
     pub allow_exec: bool,
@@ -150,6 +186,7 @@ impl Default for Config {
         Self {
             server: ServerConfig::default(),
             targets,
+            mcp_servers: BTreeMap::new(),
         }
     }
 }
@@ -308,6 +345,53 @@ impl Config {
             ));
         }
 
+        for (name, mcp) in &self.mcp_servers {
+            if name.trim().is_empty() || name.trim() != name {
+                return Err(Error::Config(
+                    "mcp server names must not be empty or padded with whitespace".to_string(),
+                ));
+            }
+            let source_count = usize::from(mcp.config_file.is_some())
+                + usize::from(mcp.url.is_some())
+                + usize::from(mcp.url_secret.is_some());
+            if source_count != 1 {
+                return Err(Error::Config(format!(
+                    "mcp_servers.{name} must configure exactly one of config_file, url, or url_secret"
+                )));
+            }
+            if let Some(path) = &mcp.config_file {
+                if path.as_os_str().is_empty() {
+                    return Err(Error::Config(format!(
+                        "mcp_servers.{name}.config_file must not be empty"
+                    )));
+                }
+            }
+            if let Some(url) = &mcp.url {
+                if url.trim().is_empty() || url.trim() != url {
+                    return Err(Error::Config(format!(
+                        "mcp_servers.{name}.url must not be empty or padded with whitespace"
+                    )));
+                }
+            }
+            if let Some(target) = &mcp.secret_target {
+                if target.trim().is_empty() || target.trim() != target {
+                    return Err(Error::Config(format!(
+                        "mcp_servers.{name}.secret_target must not be empty or padded with whitespace"
+                    )));
+                }
+            }
+            if mcp.timeout_ms == 0 {
+                return Err(Error::Config(format!(
+                    "mcp_servers.{name}.timeout_ms must be greater than 0"
+                )));
+            }
+            if mcp.max_response_bytes == 0 {
+                return Err(Error::Config(format!(
+                    "mcp_servers.{name}.max_response_bytes must be greater than 0"
+                )));
+            }
+        }
+
         Ok(())
     }
 }
@@ -394,6 +478,14 @@ fn default_true() -> bool {
 
 fn default_exec_timeout_ms() -> u64 {
     30_000
+}
+
+fn default_mcp_timeout_ms() -> u64 {
+    20_000
+}
+
+fn default_mcp_max_response_bytes() -> usize {
+    1024 * 1024
 }
 
 fn default_max_output_bytes() -> usize {

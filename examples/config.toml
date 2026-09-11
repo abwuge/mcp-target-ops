@@ -22,6 +22,27 @@ runtime_dir = "/tmp/mcp-target-ops"
 # oauth_access_token_ttl_secs = 3600
 # oauth_refresh_token_ttl_secs = 2592000
 
+# Optional downstream Streamable HTTP MCP server. Prefer a dedicated mode-0600
+# config file owned by Target Ops. Its format is:
+#   url = "https://memory.example.com/mcp"
+#   [headers]
+#   Authorization = "Bearer replace-me"
+#
+# [mcp_servers.memory]
+# enabled = true
+# config_file = "/home/me/.config/mcp-target-ops/mcp/memory.toml"
+# timeout_ms = 20000
+# max_response_bytes = 1048576
+#
+# Advanced alternative: keep an endpoint or headers in another file-backed
+# secret source. Exactly one of config_file, url, or url_secret is required.
+# [mcp_servers.other]
+# enabled = true
+# secret_target = "local"
+# url_secret = { path = "/home/me/secrets.toml", format = "toml", key = "mcp.url" }
+# [mcp_servers.other.secret_headers]
+# Authorization = { path = "/home/me/secrets.toml", format = "toml", key = "mcp.Authorization" }
+
 # Local host is intentionally disabled by default. Enable only for trusted setups.
 [targets.local]
 kind = "local"

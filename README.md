@@ -13,8 +13,9 @@ HTTP server also provides OAuth and a limited REST API for GPT Actions.
 - Persistent OpenSSH workers and PTY terminal sessions
 - Command execution with time and output limits
 - Background command jobs with polling, incremental output, cancellation, and optional timeouts
-- File range reads, literal search, atomic writes, exact edits, unified patches, moves, chmod, and directory creation
-- Optional SHA-256 compare-and-swap checks for file edits, patches, and replacements
+- File range reads, literal search, atomic writes, exact edits, single- and multi-file unified patches, moves, chmod, and directory creation
+- Optional SHA-256 compare-and-swap checks for file edits, single-file patches, and replacements
+- Downstream Streamable HTTP MCP gateway with configured-server allowlisting and file-owned credentials
 - Secret references that resolve file-backed values directly into command environments without placing the value in MCP arguments
 - Per-target permissions and allowed filesystem roots
 - HTTP bearer authentication
@@ -73,6 +74,38 @@ The full set of options is documented in
 server checks `MCP_TARGET_OPS_CONFIG` and then
 `~/.config/mcp-target-ops/config.toml`.
 
+### Downstream MCP servers
+
+Target Ops can act as a small gateway to explicitly configured Streamable HTTP
+MCP servers. Prefer a dedicated mode-`0600` file owned by Target Ops for each
+server so endpoint credentials do not need to appear in the main config or in
+MCP tool arguments:
+
+```toml
+# ~/.config/mcp-target-ops/config.toml
+[mcp_servers.memory]
+enabled = true
+config_file = "/home/me/.config/mcp-target-ops/mcp/memory.toml"
+timeout_ms = 20000
+max_response_bytes = 1048576
+```
+
+```toml
+# ~/.config/mcp-target-ops/mcp/memory.toml (chmod 0600)
+url = "https://memory.example.com/mcp"
+
+[headers]
+Authorization = "Bearer replace-me"
+```
+
+The gateway disables HTTP redirects so credentials are never forwarded to a
+redirect target. `mcp_server_list` exposes only safe metadata, while
+`mcp_tools_list` and `mcp_tool_call` initialize and use the configured server.
+The gateway does not provide an arbitrary URL/HTTP request tool.
+
+For advanced setups, inline URLs and file-backed secret references are also
+supported in `[mcp_servers.<name>]`; see `examples/config.toml`.
+
 ### Policy
 
 Targets and operations are denied unless enabled. File access must stay within
@@ -115,6 +148,7 @@ use the returned `terminal_id`.
 | --- | --- |
 | Server | `server_info` |
 | Targets | `target_list`, `target_current`, `target_select`, `target_connect`, `target_disconnect` |
+| MCP gateway | `mcp_server_list`, `mcp_tools_list`, `mcp_tool_call` |
 | Commands | `exec`, `exec_start`, `job_poll`, `job_output`, `job_cancel` |
 | Files | `file_read`, `file_list`, `file_find`, `file_edit`, `file_write`, `file_patch`, `file_move`, `file_chmod`, `directory_create` |
 | Terminals | `terminal_open`, `terminal_send`, `terminal_read`, `terminal_resize`, `terminal_close` |
@@ -135,7 +169,11 @@ Example command call:
 caller supplies the expected SHA-256. Atomic edits preserve the existing Unix
 mode, so editing an executable script does not silently remove its executable
 bit. `file_read` can return a 1-based line range, and `file_find` returns bounded
-literal matches with line context.
+literal matches with line context. `file_patch` keeps its existing single-file
+mode; when the patch contains multiple `---`/`+++` sections, `path` is treated
+as a base directory. All affected files are validated before writing, and if a
+later write fails, earlier writes are rolled back. Multi-file create/delete
+patches are intentionally not supported yet.
 
 `exec_start` is intended for builds and other long-running non-interactive
 commands. It returns immediately with a job id. Use `job_poll` for status,

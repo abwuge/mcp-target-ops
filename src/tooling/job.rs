@@ -3,14 +3,11 @@ use crate::{
         config::TargetConfig,
         error::{Error, Result},
         policy,
+        secret::SecretRef,
         state::AppState,
         target::{ResolvedTarget, TargetId},
     },
-    tooling::{
-        exec::local_shell_command,
-        secret::{self, SecretRef},
-        stream::RingBuffer,
-    },
+    tooling::{exec::local_shell_command, secret, stream::RingBuffer},
     transport::ssh,
 };
 use serde::{Deserialize, Serialize};

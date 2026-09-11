@@ -3,34 +3,14 @@ use crate::{
         config::TargetConfig,
         error::{Error, Result},
         policy::{self, FileAccess},
+        secret::{SecretFormat, SecretRef},
         state::AppState,
         target::{TargetId, TargetSource},
     },
     transport::ssh,
 };
-use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use std::{collections::BTreeMap, fs, time::Duration};
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct SecretRef {
-    pub path: String,
-    #[serde(default)]
-    pub format: SecretFormat,
-    #[serde(default)]
-    pub key: Option<String>,
-    #[serde(default = "default_trim")]
-    pub trim: bool,
-}
-
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SecretFormat {
-    #[default]
-    Text,
-    Toml,
-    Json,
-}
 
 pub fn resolve_env(
     state: &AppState,
@@ -52,6 +32,23 @@ pub fn resolve_env(
         resolved.insert(name.clone(), value);
     }
     Ok(resolved)
+}
+
+pub fn resolve_ref(
+    state: &AppState,
+    target: &TargetId,
+    config: &TargetConfig,
+    source: TargetSource,
+    secret_ref: &SecretRef,
+    timeout: Duration,
+) -> Result<String> {
+    policy::check_file(target, config, &secret_ref.path, FileAccess::Read, source)?;
+    let bytes = read_bytes(state, target, config, &secret_ref.path, timeout)?;
+    let mut value = resolve_value(secret_ref, &bytes)?;
+    if secret_ref.trim {
+        value = value.trim().to_string();
+    }
+    Ok(value)
 }
 
 fn read_bytes(
@@ -168,10 +165,6 @@ fn validate_env_name(name: &str) -> Result<()> {
         )));
     }
     Ok(())
-}
-
-fn default_trim() -> bool {
-    true
 }
 
 #[cfg(test)]

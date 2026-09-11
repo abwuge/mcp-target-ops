@@ -13,6 +13,7 @@ use crate::{
             FileListRequest, FileMoveRequest, FilePatchRequest, FileReadRequest, FileWriteRequest,
         },
         job::{ExecStartRequest, JobCancelRequest, JobOutputRequest, JobPollRequest},
+        mcp_client,
         terminal::{
             TerminalCloseRequest, TerminalOpenRequest, TerminalReadRequest, TerminalResizeRequest,
             TerminalSendRequest,
@@ -48,6 +49,15 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
         tool("target_select", "Select a session-scoped active target. Later calls may omit target and use this sticky target.", object_schema(vec![required_string("target", "Target id: local or ssh:<profile>")])),
         tool("target_connect", "Connect or warm an SSH target persistent worker.", object_schema(vec![required_string("target", "Target id: local or ssh:<profile>")])),
         tool("target_disconnect", "Disconnect an SSH target persistent worker, or no-op for local targets.", object_schema(vec![required_string("target", "Target id: local or ssh:<profile>")])),
+        tool("mcp_server_list", "List configured downstream MCP servers. Secret values and endpoint URLs are not exposed.", object_schema(vec![])),
+        tool("mcp_tools_list", "Initialize one configured downstream MCP server and return its tools/list result.", object_schema(vec![
+            required_string("server", "Configured downstream MCP server name."),
+        ])),
+        tool("mcp_tool_call", "Initialize one configured downstream MCP server and call one of its tools. Only configured servers are reachable; credentials stay in server-owned configuration or server-side secret references.", object_schema(vec![
+            required_string("server", "Configured downstream MCP server name."),
+            required_string("tool", "Downstream MCP tool name."),
+            optional_value("arguments", "JSON object passed as downstream tool arguments. Defaults to an empty object.", json!({"type":"object","additionalProperties":true})),
+        ])),
         tool("exec", "Run a non-interactive command on the explicit target or current active target.", object_schema(vec![
             optional_string("target", "Target id: local or ssh:<profile>. Omit to use active target."),
             required_string("command", "Shell command to execute."),
@@ -91,7 +101,7 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
         ])),
         tool("file_edit", "Apply exact text replacements with sha256 compare-and-swap support. Existing file permissions are preserved. Writes require explicit target by default.", file_edit_schema()),
         tool("file_write", "Create or replace a UTF-8 or base64 file atomically. Existing files require overwrite=true or an expected sha256. Writes require explicit target by default.", file_write_schema()),
-        tool("file_patch", "Apply a unified diff to one UTF-8 file with optional sha256 compare-and-swap protection. Existing file permissions are preserved.", file_patch_schema()),
+        tool("file_patch", "Apply a unified diff to one UTF-8 file, or a standard multi-file unified diff rooted at path. Single-file mode supports sha256 compare-and-swap; multi-file mode validates all files before writing and rolls back earlier writes if a later write fails.", file_patch_schema()),
         tool("file_find", "Find literal text in one UTF-8 file and return matching lines with bounded context.", file_find_schema()),
         tool("file_move", "Move or rename a file or directory within one target. Existing destinations are not replaced unless overwrite=true.", file_move_schema()),
         tool("file_chmod", "Change the Unix mode of a file or directory using an octal mode string.", file_chmod_schema()),
@@ -131,6 +141,22 @@ pub fn call_tool(state: Arc<AppState>, name: &str, args: Value) -> Result<Value>
         "target_select" => target_select(&state, parse(args)?),
         "target_connect" => target_connect(&state, parse(args)?),
         "target_disconnect" => target_disconnect(&state, parse(args)?),
+        "mcp_server_list" => Ok(json!({ "servers": mcp_client::list_servers(&state) })),
+        "mcp_tools_list" => {
+            let req = parse::<McpServerRequest>(args)?;
+            let result = mcp_client::tools_list(&state, &req.server)?;
+            Ok(json!({ "server": req.server, "result": result }))
+        }
+        "mcp_tool_call" => {
+            let req = parse::<McpToolCallRequest>(args)?;
+            let result = mcp_client::tool_call(
+                &state,
+                &req.server,
+                &req.tool,
+                req.arguments.unwrap_or_else(|| json!({})),
+            )?;
+            Ok(json!({ "server": req.server, "tool": req.tool, "result": result }))
+        }
         "exec" => Ok(serde_json::to_value(exec::run(
             &state,
             parse::<ExecRequest>(args)?,
@@ -227,6 +253,19 @@ pub fn call_tool(state: Arc<AppState>, name: &str, args: Value) -> Result<Value>
 #[derive(Debug, Deserialize)]
 struct TargetRequest {
     target: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct McpServerRequest {
+    server: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct McpToolCallRequest {
+    server: String,
+    tool: String,
+    #[serde(default)]
+    arguments: Option<Value>,
 }
 
 fn parse<T: for<'de> Deserialize<'de>>(value: Value) -> Result<T> {
@@ -403,6 +442,36 @@ fn output_schema(name: &str) -> Value {
         }),
         "target_connect" => connection_schema("connected"),
         "target_disconnect" => connection_schema("disconnected"),
+        "mcp_server_list" => json!({
+            "type": "object",
+            "properties": {
+                "servers": {
+                    "type": "array",
+                    "items": mcp_server_summary_schema()
+                }
+            },
+            "required": ["servers"],
+            "additionalProperties": false
+        }),
+        "mcp_tools_list" => json!({
+            "type": "object",
+            "properties": {
+                "server": { "type": "string" },
+                "result": {}
+            },
+            "required": ["server", "result"],
+            "additionalProperties": false
+        }),
+        "mcp_tool_call" => json!({
+            "type": "object",
+            "properties": {
+                "server": { "type": "string" },
+                "tool": { "type": "string" },
+                "result": {}
+            },
+            "required": ["server", "tool", "result"],
+            "additionalProperties": false
+        }),
         "exec" => json!({
             "type": "object",
             "properties": {
@@ -533,11 +602,26 @@ fn output_schema(name: &str) -> Value {
                 "path": { "type": "string" },
                 "changed": { "type": "boolean" },
                 "written": { "type": "boolean" },
-                "old_sha256": { "type": "string" },
-                "new_sha256": { "type": "string" },
-                "diff": { "type": "string" }
+                "old_sha256": nullable_string_schema(),
+                "new_sha256": nullable_string_schema(),
+                "diff": { "type": "string" },
+                "files": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": { "type": "string" },
+                            "changed": { "type": "boolean" },
+                            "written": { "type": "boolean" },
+                            "old_sha256": { "type": "string" },
+                            "new_sha256": { "type": "string" }
+                        },
+                        "required": ["path", "changed", "written", "old_sha256", "new_sha256"],
+                        "additionalProperties": false
+                    }
+                }
             },
-            "required": ["resolved_target", "path", "changed", "written", "old_sha256", "new_sha256", "diff"],
+            "required": ["resolved_target", "path", "changed", "written", "old_sha256", "new_sha256", "diff", "files"],
             "additionalProperties": false
         }),
         "file_find" => json!({
@@ -681,6 +765,24 @@ fn target_summary_schema() -> Value {
             }
         },
         "required": ["id", "kind", "config_key", "enabled", "active", "policy"],
+        "additionalProperties": false
+    })
+}
+
+fn mcp_server_summary_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "name": { "type": "string" },
+            "enabled": { "type": "boolean" },
+            "config_source": { "type": "string", "enum": ["file", "secret_ref", "inline"] },
+            "secret_target": nullable_string_schema(),
+            "static_header_names": string_array_schema(),
+            "secret_header_names": string_array_schema(),
+            "timeout_ms": { "type": "integer", "minimum": 1 },
+            "max_response_bytes": { "type": "integer", "minimum": 1 }
+        },
+        "required": ["name", "enabled", "config_source", "secret_target", "static_header_names", "secret_header_names", "timeout_ms", "max_response_bytes"],
         "additionalProperties": false
     })
 }
@@ -885,9 +987,9 @@ fn file_patch_schema() -> Value {
         "type": "object",
         "properties": {
             "target": { "type": "string", "description": "Target id. For writes this is required by default policy." },
-            "path": { "type": "string", "description": "UTF-8 text file path." },
-            "patch": { "type": "string", "description": "Unified diff that applies to this file." },
-            "expected_sha256": { "type": "string", "description": "Optional CAS guard from file_read." },
+            "path": { "type": "string", "description": "UTF-8 text file path in single-file mode, or base directory for a multi-file unified diff." },
+            "patch": { "type": "string", "description": "Unified diff. If it contains multiple ---/+++ file sections, each relative path is resolved under path; git a/ and b/ prefixes are stripped." },
+            "expected_sha256": { "type": "string", "description": "Optional CAS guard from file_read. Valid only for single-file patches." },
             "dry_run": { "type": "boolean", "description": "Validate and return the patch result without writing." },
             "timeout_ms": { "type": "integer", "description": "Timeout for remote read/write." }
         },
@@ -966,7 +1068,7 @@ mod tests {
         let tools = list_tools(None);
         let tools = tools.as_array().expect("tool list is an array");
 
-        assert_eq!(tools.len(), 25);
+        assert_eq!(tools.len(), 28);
         for tool in tools {
             let name = tool["name"].as_str().expect("tool has a name");
             assert_eq!(

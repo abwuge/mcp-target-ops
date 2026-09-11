@@ -3,11 +3,12 @@ use crate::{
         config::TargetConfig,
         error::{Error, Result},
         policy,
+        secret::SecretRef,
         state::AppState,
         target::{ResolvedTarget, TargetId},
         util::truncate_bytes,
     },
-    tooling::secret::{self, SecretRef},
+    tooling::secret,
     transport::ssh,
 };
 use serde::{Deserialize, Serialize};

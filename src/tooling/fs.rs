@@ -14,6 +14,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
+    collections::HashSet,
     fs,
     io::Write,
     path::Path,
@@ -153,6 +154,44 @@ pub struct FilePatchRequest {
     pub dry_run: bool,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FilePatchResponse {
+    pub resolved_target: ResolvedTarget,
+    pub path: String,
+    pub changed: bool,
+    pub written: bool,
+    pub old_sha256: Option<String>,
+    pub new_sha256: Option<String>,
+    pub diff: String,
+    pub files: Vec<FilePatchFileResponse>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FilePatchFileResponse {
+    pub path: String,
+    pub changed: bool,
+    pub written: bool,
+    pub old_sha256: String,
+    pub new_sha256: String,
+}
+
+#[derive(Debug, Clone)]
+struct UnifiedFilePatch {
+    old_path: String,
+    new_path: String,
+    patch: String,
+}
+
+#[derive(Debug)]
+struct PreparedFilePatch {
+    path: String,
+    original: String,
+    text: String,
+    old_sha256: String,
+    new_sha256: String,
+    changed: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -418,20 +457,162 @@ pub fn write(state: &AppState, req: FileWriteRequest) -> Result<FileWriteRespons
     })
 }
 
-pub fn patch(state: &AppState, req: FilePatchRequest) -> Result<FileEditResponse> {
+pub fn patch(state: &AppState, req: FilePatchRequest) -> Result<FilePatchResponse> {
     let (target, source) = state.resolve_target(req.target.as_deref())?;
     let config = state.get_target_config(&target)?;
-    policy::check_file(&target, config, &req.path, FileAccess::Write, source)?;
     let timeout = Duration::from_millis(
         req.timeout_ms
             .unwrap_or_else(|| policy::target_policy(config).default_timeout_ms),
     );
-    let original_bytes = read_bytes(state, &target, config, &req.path, timeout)?;
+
+    let sections = split_unified_file_patches(&req.patch)?;
+    if sections.len() <= 1 {
+        policy::check_file(&target, config, &req.path, FileAccess::Write, source)?;
+        let patch_text = sections
+            .first()
+            .map(|section| section.patch.as_str())
+            .unwrap_or(req.patch.as_str());
+        let prepared = prepare_file_patch(
+            state,
+            &target,
+            config,
+            &req.path,
+            patch_text,
+            req.expected_sha256.as_deref(),
+            timeout,
+        )?;
+        if prepared.changed && !req.dry_run {
+            write_bytes(
+                state,
+                &target,
+                config,
+                &prepared.path,
+                prepared.text.as_bytes(),
+                None,
+                timeout,
+            )?;
+        }
+        let changed = prepared.changed;
+        let old_sha256 = prepared.old_sha256.clone();
+        let new_sha256 = prepared.new_sha256.clone();
+        let files = vec![patch_file_response(&prepared, !req.dry_run)];
+        return Ok(FilePatchResponse {
+            resolved_target: state.resolved_target_value(target, source),
+            path: req.path,
+            changed,
+            written: changed && !req.dry_run,
+            old_sha256: Some(old_sha256),
+            new_sha256: Some(new_sha256),
+            diff: if changed { req.patch } else { String::new() },
+            files,
+        });
+    }
+
+    if req.expected_sha256.is_some() {
+        return Err(Error::Tool(
+            "expected_sha256 is only valid for single-file patches".to_string(),
+        ));
+    }
+
+    let mut prepared_files = Vec::with_capacity(sections.len());
+    let mut seen = HashSet::new();
+    for section in &sections {
+        let patch_path = resolve_multi_patch_path(&req.path, section)?;
+        if !seen.insert(patch_path.clone()) {
+            return Err(Error::Tool(format!(
+                "multi-file patch contains duplicate target path {patch_path:?}"
+            )));
+        }
+        policy::check_file(&target, config, &patch_path, FileAccess::Write, source)?;
+        prepared_files.push(prepare_file_patch(
+            state,
+            &target,
+            config,
+            &patch_path,
+            &section.patch,
+            None,
+            timeout,
+        )?);
+    }
+
+    let changed = prepared_files.iter().any(|file| file.changed);
+    if !req.dry_run {
+        let mut written = Vec::new();
+        for (index, prepared) in prepared_files.iter().enumerate() {
+            if !prepared.changed {
+                continue;
+            }
+            if let Err(write_err) = write_bytes(
+                state,
+                &target,
+                config,
+                &prepared.path,
+                prepared.text.as_bytes(),
+                None,
+                timeout,
+            ) {
+                let mut rollback_errors = Vec::new();
+                for previous_index in written.into_iter().rev() {
+                    let previous: &PreparedFilePatch = &prepared_files[previous_index];
+                    if let Err(rollback_err) = write_bytes(
+                        state,
+                        &target,
+                        config,
+                        &previous.path,
+                        previous.original.as_bytes(),
+                        None,
+                        timeout,
+                    ) {
+                        rollback_errors.push(format!("{}: {rollback_err}", previous.path));
+                    }
+                }
+                let rollback_note = if rollback_errors.is_empty() {
+                    "previous writes were rolled back".to_string()
+                } else {
+                    format!("rollback also failed for {}", rollback_errors.join(", "))
+                };
+                return Err(Error::Tool(format!(
+                    "multi-file patch write failed for {}: {write_err}; {rollback_note}",
+                    prepared.path
+                )));
+            }
+            written.push(index);
+        }
+    }
+    let files = prepared_files
+        .iter()
+        .map(|prepared| patch_file_response(prepared, !req.dry_run))
+        .collect();
+
+    Ok(FilePatchResponse {
+        resolved_target: state.resolved_target_value(target, source),
+        path: req.path,
+        changed,
+        written: changed && !req.dry_run,
+        old_sha256: None,
+        new_sha256: None,
+        diff: if changed { req.patch } else { String::new() },
+        files,
+    })
+}
+
+fn prepare_file_patch(
+    state: &AppState,
+    target: &TargetId,
+    config: &TargetConfig,
+    path: &str,
+    patch_text: &str,
+    expected_sha256: Option<&str>,
+    timeout: Duration,
+) -> Result<PreparedFilePatch> {
+    let original_bytes = read_bytes(state, target, config, path, timeout)?;
     let original = String::from_utf8(original_bytes).map_err(|_| {
-        Error::Tool("file_patch currently supports UTF-8 text files only".to_string())
+        Error::Tool(format!(
+            "file_patch currently supports UTF-8 text files only: {path}"
+        ))
     })?;
     let old_sha256 = sha256_hex(original.as_bytes());
-    if let Some(expected) = req.expected_sha256.as_deref() {
+    if let Some(expected) = expected_sha256 {
         if expected != old_sha256 {
             return Err(Error::Tool(format!(
                 "file changed before patch: expected sha256 {expected}, got {old_sha256}"
@@ -439,34 +620,129 @@ pub fn patch(state: &AppState, req: FilePatchRequest) -> Result<FileEditResponse
         }
     }
 
-    let patch = diffy::Patch::from_str(&req.patch)
-        .map_err(|err| Error::Tool(format!("invalid unified patch: {err}")))?;
+    let patch = diffy::Patch::from_str(patch_text)
+        .map_err(|err| Error::Tool(format!("invalid unified patch for {path}: {err}")))?;
     let text = diffy::apply(&original, &patch)
-        .map_err(|err| Error::Tool(format!("patch does not apply: {err}")))?;
+        .map_err(|err| Error::Tool(format!("patch does not apply to {path}: {err}")))?;
     let changed = text != original;
     let new_sha256 = sha256_hex(text.as_bytes());
-    let diff = if changed { req.patch } else { String::new() };
-    if changed && !req.dry_run {
-        write_bytes(
-            state,
-            &target,
-            config,
-            &req.path,
-            text.as_bytes(),
-            None,
-            timeout,
-        )?;
-    }
 
-    Ok(FileEditResponse {
-        resolved_target: state.resolved_target_value(target, source),
-        path: req.path,
-        changed,
-        written: changed && !req.dry_run,
+    Ok(PreparedFilePatch {
+        path: path.to_string(),
+        original,
+        text,
         old_sha256,
         new_sha256,
-        diff,
+        changed,
     })
+}
+
+fn patch_file_response(
+    prepared: &PreparedFilePatch,
+    writes_enabled: bool,
+) -> FilePatchFileResponse {
+    FilePatchFileResponse {
+        path: prepared.path.clone(),
+        changed: prepared.changed,
+        written: prepared.changed && writes_enabled,
+        old_sha256: prepared.old_sha256.clone(),
+        new_sha256: prepared.new_sha256.clone(),
+    }
+}
+
+fn split_unified_file_patches(patch: &str) -> Result<Vec<UnifiedFilePatch>> {
+    let lines: Vec<&str> = patch.split_inclusive('\n').collect();
+    let mut sections = Vec::new();
+    let mut index = 0;
+
+    while index < lines.len() {
+        let is_header = lines[index].starts_with("--- ")
+            && index + 1 < lines.len()
+            && lines[index + 1].starts_with("+++ ");
+        if !is_header {
+            index += 1;
+            continue;
+        }
+
+        let old_path = parse_patch_header_path(lines[index], "--- ")?;
+        let new_path = parse_patch_header_path(lines[index + 1], "+++ ")?;
+        let start = index;
+        index += 2;
+        while index < lines.len() {
+            if lines[index].starts_with("diff --git ")
+                || (lines[index].starts_with("--- ")
+                    && index + 1 < lines.len()
+                    && lines[index + 1].starts_with("+++ "))
+            {
+                break;
+            }
+            index += 1;
+        }
+        sections.push(UnifiedFilePatch {
+            old_path,
+            new_path,
+            patch: lines[start..index].concat(),
+        });
+    }
+
+    Ok(sections)
+}
+
+fn parse_patch_header_path(line: &str, prefix: &str) -> Result<String> {
+    let value = line
+        .strip_prefix(prefix)
+        .ok_or_else(|| Error::Tool(format!("invalid unified patch header: {line:?}")))?
+        .trim_end_matches(['\r', '\n'])
+        .split('\t')
+        .next()
+        .unwrap_or("")
+        .trim();
+    if value.is_empty() {
+        return Err(Error::Tool(
+            "unified patch header has an empty path".to_string(),
+        ));
+    }
+    Ok(value.to_string())
+}
+
+fn resolve_multi_patch_path(base_dir: &str, section: &UnifiedFilePatch) -> Result<String> {
+    if section.old_path == "/dev/null" || section.new_path == "/dev/null" {
+        return Err(Error::Tool(
+            "multi-file file_patch does not yet support creating or deleting files".to_string(),
+        ));
+    }
+    let old_path = strip_git_patch_prefix(&section.old_path);
+    let candidate = strip_git_patch_prefix(&section.new_path);
+    if old_path != candidate {
+        return Err(Error::Tool(
+            "multi-file file_patch does not yet support file renames".to_string(),
+        ));
+    }
+    if candidate.is_empty() {
+        return Err(Error::Tool(
+            "multi-file patch contains an empty target path".to_string(),
+        ));
+    }
+    if candidate.starts_with('/')
+        || candidate
+            .split('/')
+            .any(|segment| segment == ".." || segment.is_empty())
+    {
+        return Err(Error::Tool(format!(
+            "multi-file patch path {candidate:?} must be a relative path contained under the base directory"
+        )));
+    }
+    Ok(format!(
+        "{}/{}",
+        base_dir.trim_end_matches('/'),
+        candidate.trim_start_matches("./")
+    ))
+}
+
+fn strip_git_patch_prefix(path: &str) -> &str {
+    path.strip_prefix("a/")
+        .or_else(|| path.strip_prefix("b/"))
+        .unwrap_or(path)
 }
 
 pub fn find(state: &AppState, req: FileFindRequest) -> Result<FileFindResponse> {
@@ -902,6 +1178,46 @@ mod tests {
         assert_eq!(parse_mode("0755").unwrap(), 0o755);
         assert_eq!(parse_mode("644").unwrap(), 0o644);
         assert!(parse_mode("0899").is_err());
+    }
+
+    #[test]
+    fn splits_multi_file_unified_diff_and_strips_git_metadata() {
+        let patch = "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1 +1 @@\n-old a\n+new a\ndiff --git a/src/b.rs b/src/b.rs\n--- a/src/b.rs\n+++ b/src/b.rs\n@@ -1 +1 @@\n-old b\n+new b\n";
+        let sections = split_unified_file_patches(patch).unwrap();
+        assert_eq!(sections.len(), 2);
+        assert_eq!(sections[0].new_path, "b/src/a.rs");
+        assert!(!sections[0].patch.contains("diff --git"));
+        assert_eq!(
+            resolve_multi_patch_path("/repo", &sections[1]).unwrap(),
+            "/repo/src/b.rs"
+        );
+    }
+
+    #[test]
+    fn multi_file_patch_rejects_create_delete_sections() {
+        let section = UnifiedFilePatch {
+            old_path: "/dev/null".to_string(),
+            new_path: "b/new.txt".to_string(),
+            patch: String::new(),
+        };
+        assert!(resolve_multi_patch_path("/repo", &section).is_err());
+    }
+
+    #[test]
+    fn multi_file_patch_rejects_escape_and_rename_paths() {
+        let escape = UnifiedFilePatch {
+            old_path: "a/../outside.txt".to_string(),
+            new_path: "b/../outside.txt".to_string(),
+            patch: String::new(),
+        };
+        assert!(resolve_multi_patch_path("/repo", &escape).is_err());
+
+        let rename = UnifiedFilePatch {
+            old_path: "a/old.txt".to_string(),
+            new_path: "b/new.txt".to_string(),
+            patch: String::new(),
+        };
+        assert!(resolve_multi_patch_path("/repo", &rename).is_err());
     }
 
     #[cfg(unix)]
