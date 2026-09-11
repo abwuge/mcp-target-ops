@@ -793,8 +793,8 @@ fn parse_list_dir_output(stdout: &[u8]) -> Result<Value> {
     if fields.last().is_some_and(|field| field.is_empty()) {
         fields.pop();
     }
-    let chunks = fields.chunks_exact(5);
-    if !chunks.remainder().is_empty() {
+    let (chunks, remainder) = fields.as_chunks::<5>();
+    if !remainder.is_empty() {
         return Err(Error::Tool(format!(
             "remote list returned malformed metadata: expected groups of 5 fields, got {}",
             fields.len()
