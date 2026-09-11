@@ -25,6 +25,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{str::FromStr, sync::Arc, time::Duration};
 
+pub(crate) const FILE_CHANGE_UI_URI: &str = "ui://target-ops/file-change/v1.html";
+
 pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
     let security_schemes = oauth_scopes.map(|scopes| {
         json!([{
@@ -378,22 +380,86 @@ fn tool(
         "description": description,
         "inputSchema": input_schema,
         "outputSchema": output_schema,
+        "annotations": tool_annotations(name),
     });
 
+    let object = descriptor
+        .as_object_mut()
+        .expect("tool descriptor is an object");
+    let mut meta = serde_json::Map::new();
+
     if let Some(schemes) = security_schemes {
-        let object = descriptor
-            .as_object_mut()
-            .expect("tool descriptor is an object");
         object.insert("securitySchemes".to_string(), schemes.clone());
-        object.insert(
-            "_meta".to_string(),
-            json!({
-                "securitySchemes": schemes,
-            }),
+        meta.insert("securitySchemes".to_string(), schemes.clone());
+    }
+
+    if matches!(
+        name,
+        "file_edit" | "file_write" | "file_patch" | "file_move"
+    ) {
+        meta.insert(
+            "ui".to_string(),
+            json!({ "resourceUri": FILE_CHANGE_UI_URI }),
+        );
+        meta.insert(
+            "openai/outputTemplate".to_string(),
+            Value::String(FILE_CHANGE_UI_URI.to_string()),
+        );
+        meta.insert(
+            "openai/toolInvocation/invoking".to_string(),
+            Value::String("Applying file change…".to_string()),
+        );
+        meta.insert(
+            "openai/toolInvocation/invoked".to_string(),
+            Value::String("File change applied".to_string()),
         );
     }
 
+    if !meta.is_empty() {
+        object.insert("_meta".to_string(), Value::Object(meta));
+    }
+
     descriptor
+}
+
+fn tool_annotations(name: &str) -> Value {
+    let read_only = matches!(
+        name,
+        "server_info"
+            | "target_list"
+            | "target_current"
+            | "mcp_server_list"
+            | "mcp_tools_list"
+            | "job_poll"
+            | "job_output"
+            | "file_read"
+            | "file_list"
+            | "file_find"
+            | "terminal_read"
+    );
+    let destructive = matches!(
+        name,
+        "exec"
+            | "exec_start"
+            | "job_cancel"
+            | "mcp_tool_call"
+            | "file_edit"
+            | "file_write"
+            | "file_patch"
+            | "file_move"
+            | "file_chmod"
+    );
+    let open_world = matches!(
+        name,
+        "exec" | "exec_start" | "mcp_tools_list" | "mcp_tool_call"
+    );
+
+    json!({
+        "readOnlyHint": read_only,
+        "destructiveHint": destructive,
+        "idempotentHint": read_only,
+        "openWorldHint": open_world,
+    })
 }
 
 fn output_schema(name: &str) -> Value {
