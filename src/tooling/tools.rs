@@ -26,7 +26,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{str::FromStr, sync::Arc, time::Duration};
 
-pub(crate) const FILE_CHANGE_UI_URI: &str = "ui://target-ops/file-change/v1.html";
+pub(crate) const FILE_CHANGE_UI_URI: &str = "ui://target-ops/file-change/v2.html";
 
 pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
     let security_schemes = oauth_scopes.map(|scopes| {

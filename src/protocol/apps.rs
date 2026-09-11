@@ -98,12 +98,55 @@ pre { margin: 0; padding: 10px 12px 12px; max-height: 360px; overflow: auto; whi
     diffBox.hidden = !d;
     diff.textContent = d;
   }
-  window.addEventListener('message', event => {
-    const msg = event.data;
-    if (msg?.method === 'ui/notifications/tool-result') render(msg.params?.structuredContent || msg.params?.content || msg.params);
+  let rpcId = 0;
+  const pendingRequests = new Map();
+  const rpcNotify = (method, params) => {
+    window.parent.postMessage({ jsonrpc: '2.0', method, params }, '*');
+  };
+  const rpcRequest = (method, params) => new Promise((resolve, reject) => {
+    const id = ++rpcId;
+    pendingRequests.set(id, { resolve, reject });
+    window.parent.postMessage({ jsonrpc: '2.0', id, method, params }, '*');
   });
-  if (window.openai?.toolOutput) render(window.openai.toolOutput);
-  else if (window.openai?.toolResponseMetadata?.structuredContent) render(window.openai.toolResponseMetadata.structuredContent);
+  const renderCompatResult = () => {
+    const openai = window.openai;
+    const metadata = openai?.toolResponseMetadata;
+    const result = openai?.toolOutput
+      || metadata?.mcp_tool_result?.structuredContent
+      || metadata?.call_tool_result?.structuredContent
+      || metadata?.structuredContent;
+    if (result) render(result);
+  };
+  window.addEventListener('message', event => {
+    if (event.source !== window.parent) return;
+    const msg = event.data;
+    if (!msg || msg.jsonrpc !== '2.0') return;
+    if (msg.id !== undefined && pendingRequests.has(msg.id)) {
+      const pending = pendingRequests.get(msg.id);
+      pendingRequests.delete(msg.id);
+      if (msg.error) pending.reject(msg.error);
+      else pending.resolve(msg.result);
+      return;
+    }
+    if (msg.method === 'ui/notifications/tool-result') {
+      render(msg.params?.structuredContent || msg.params?.content || msg.params);
+    }
+  }, { passive: true });
+  const initializeBridge = async () => {
+    await rpcRequest('ui/initialize', {
+      appInfo: { name: 'target-ops-file-change', version: '1.0.0' },
+      appCapabilities: {},
+      protocolVersion: '2026-01-26',
+    });
+    rpcNotify('ui/notifications/initialized', {});
+  };
+  renderCompatResult();
+  initializeBridge()
+    .then(renderCompatResult)
+    .catch(error => {
+      console.error('Failed to initialize the MCP Apps bridge:', error);
+      if (!window.openai?.toolOutput) badge.textContent = 'bridge error';
+    });
 })();
 </script>
 </body>
@@ -121,9 +164,10 @@ mod tests {
 
         let read = read_resource(FILE_CHANGE_UI_URI).expect("resource exists");
         assert_eq!(read["contents"][0]["mimeType"], MCP_APP_MIME_TYPE);
-        assert!(read["contents"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("ui/notifications/tool-result"));
+        let html = read["contents"][0]["text"].as_str().unwrap();
+        assert!(html.contains("ui/notifications/tool-result"));
+        assert!(html.contains("rpcRequest('ui/initialize'"));
+        assert!(html.contains("ui/notifications/initialized"));
+        assert!(html.contains("appInfo: { name: 'target-ops-file-change'"));
     }
 }

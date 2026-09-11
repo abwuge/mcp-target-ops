@@ -216,7 +216,7 @@ last read position. `terminal_resize` changes the live PTY size.
 
 The MCP tool descriptors include standard tool annotations and ChatGPT Apps
 metadata. File-changing tools bind to the MCP App resource
-`ui://target-ops/file-change/v1.html`, served as
+`ui://target-ops/file-change/v2.html`, served as
 `text/html;profile=mcp-app`. The widget renders the affected target and paths,
 write status, hashes, and a unified diff when one is available. It has no
 external network or asset dependencies.
