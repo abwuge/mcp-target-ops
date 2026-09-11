@@ -13,7 +13,8 @@ HTTP server also provides OAuth and a limited REST API for GPT Actions.
 - Persistent OpenSSH workers and PTY terminal sessions
 - Command execution with time and output limits
 - Background command jobs with polling, incremental output, cancellation, and optional timeouts
-- File range reads, literal search, atomic writes, exact edits, single- and multi-file unified patches, moves, chmod, and directory creation
+- File range reads, literal search, atomic writes, exact edits, single- and multi-file unified patches, moves, chmod, directory creation, and ChatGPT file import/export
+- ChatGPT Apps-compatible tool annotations plus an MCP App diff/summary UI for file mutations
 - Optional SHA-256 compare-and-swap checks for file edits, single-file patches, and replacements
 - Downstream Streamable HTTP MCP gateway with configured-server allowlisting and file-owned credentials
 - Secret references that resolve file-backed values directly into command environments without placing the value in MCP arguments
@@ -150,7 +151,7 @@ use the returned `terminal_id`.
 | Targets | `target_list`, `target_current`, `target_select`, `target_connect`, `target_disconnect` |
 | MCP gateway | `mcp_server_list`, `mcp_tools_list`, `mcp_tool_call` |
 | Commands | `exec`, `exec_start`, `job_poll`, `job_output`, `job_cancel` |
-| Files | `file_read`, `file_list`, `file_find`, `file_edit`, `file_write`, `file_patch`, `file_move`, `file_chmod`, `directory_create` |
+| Files | `file_read`, `file_list`, `file_find`, `file_edit`, `file_write`, `file_import`, `file_export`, `file_patch`, `file_move`, `file_chmod`, `directory_create` |
 | Terminals | `terminal_open`, `terminal_send`, `terminal_read`, `terminal_resize`, `terminal_close` |
 
 Example command call:
@@ -210,6 +211,36 @@ Example using a TOML value without copying it into the MCP request:
 
 `terminal_read` is incremental and uses sequence numbers to resume from the
 last read position. `terminal_resize` changes the live PTY size.
+
+### ChatGPT Apps file integration
+
+The MCP tool descriptors include standard tool annotations and ChatGPT Apps
+metadata. File-changing tools bind to the MCP App resource
+`ui://target-ops/file-change/v1.html`, served as
+`text/html;profile=mcp-app`. The widget renders the affected target and paths,
+write status, hashes, and a unified diff when one is available. It has no
+external network or asset dependencies.
+
+`file_import` is the attachment-to-target path. Its `file` argument is exposed
+as a binary file parameter and is tagged with `_meta["openai/fileParams"]`.
+Connector runtimes may rewrite that argument to a mounted local path or a file
+reference containing an HTTPS download URL; both forms are accepted. Imported
+bytes are then written through the normal atomic `file_write` path, so target
+policy, allowed roots, overwrite rules, modes, and optional SHA-256 CAS guards
+still apply. HTTPS downloads do not follow redirects. Transfers default to a
+25 MiB limit and may be raised per call up to 100 MiB.
+
+`file_export` is the target-to-chat path. It reads under the normal target read
+policy and returns the bytes as a standard MCP embedded resource while keeping
+file name, MIME type, size, and SHA-256 in `structuredContent`. Its descriptor
+also advertises `openai/fileResultPaths` and `openai/fileOutputs` compatibility
+metadata. MIME type is inferred from common filename extensions unless the
+caller supplies an override. Export uses the same 25 MiB default and 100 MiB
+hard limit.
+
+After changing tool descriptors or App resource metadata, refresh or reconnect
+the ChatGPT app so the web client reloads `tools/list` and the resource
+capabilities.
 
 ## HTTP authentication
 
