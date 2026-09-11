@@ -8,6 +8,7 @@ use crate::{
     },
     tooling::{
         exec::{self, ExecRequest},
+        file_bridge::{self, FileExportRequest, FileImportRequest},
         fs::{
             self, DirectoryCreateRequest, FileChmodRequest, FileEditRequest, FileFindRequest,
             FileListRequest, FileMoveRequest, FilePatchRequest, FileReadRequest, FileWriteRequest,
@@ -103,6 +104,8 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
         ])),
         tool("file_edit", "Apply exact text replacements with sha256 compare-and-swap support. Existing file permissions are preserved. Writes require explicit target by default.", file_edit_schema()),
         tool("file_write", "Create or replace a UTF-8 or base64 file atomically. Existing files require overwrite=true or an expected sha256. Writes require explicit target by default.", file_write_schema()),
+        tool("file_import", "Import a ChatGPT or connector file reference into a target path. Accepts platform-rewritten local paths or HTTPS download URLs and preserves the normal target write policy.", file_import_schema()),
+        tool("file_export", "Export one target file as an MCP embedded resource and ChatGPT-compatible file output.", file_export_schema()),
         tool("file_patch", "Apply a unified diff to one UTF-8 file, or a standard multi-file unified diff rooted at path. Single-file mode supports sha256 compare-and-swap; multi-file mode validates all files before writing and rolls back earlier writes if a later write fails.", file_patch_schema()),
         tool("file_find", "Find literal text in one UTF-8 file and return matching lines with bounded context.", file_find_schema()),
         tool("file_move", "Move or rename a file or directory within one target. Existing destinations are not replaced unless overwrite=true.", file_move_schema()),
@@ -202,6 +205,14 @@ pub fn call_tool(state: Arc<AppState>, name: &str, args: Value) -> Result<Value>
         "file_write" => Ok(serde_json::to_value(fs::write(
             &state,
             parse::<FileWriteRequest>(args)?,
+        )?)?),
+        "file_import" => Ok(serde_json::to_value(file_bridge::import(
+            &state,
+            parse::<FileImportRequest>(args)?,
+        )?)?),
+        "file_export" => Ok(serde_json::to_value(file_bridge::export(
+            &state,
+            parse::<FileExportRequest>(args)?,
         )?)?),
         "file_patch" => Ok(serde_json::to_value(fs::patch(
             &state,
@@ -395,7 +406,7 @@ fn tool(
 
     if matches!(
         name,
-        "file_edit" | "file_write" | "file_patch" | "file_move"
+        "file_edit" | "file_write" | "file_import" | "file_patch" | "file_move"
     ) {
         meta.insert(
             "ui".to_string(),
@@ -412,6 +423,27 @@ fn tool(
         meta.insert(
             "openai/toolInvocation/invoked".to_string(),
             Value::String("File change applied".to_string()),
+        );
+    }
+
+    if name == "file_import" {
+        let paths = json!(["file"]);
+        meta.insert("file_arg_rewrite_paths".to_string(), paths.clone());
+        meta.insert("openai/fileParams".to_string(), paths);
+    }
+
+    if name == "file_export" {
+        let paths = json!(["file"]);
+        meta.insert("file_result_rewrite_paths".to_string(), paths.clone());
+        meta.insert("openai/fileResultPaths".to_string(), paths.clone());
+        meta.insert("openai/fileOutputs".to_string(), paths);
+        meta.insert(
+            "openai/toolInvocation/invoking".to_string(),
+            Value::String("Exporting file…".to_string()),
+        );
+        meta.insert(
+            "openai/toolInvocation/invoked".to_string(),
+            Value::String("File exported".to_string()),
         );
     }
 
@@ -434,6 +466,7 @@ fn tool_annotations(name: &str) -> Value {
             | "job_output"
             | "file_read"
             | "file_list"
+            | "file_export"
             | "file_find"
             | "terminal_read"
     );
@@ -445,13 +478,14 @@ fn tool_annotations(name: &str) -> Value {
             | "mcp_tool_call"
             | "file_edit"
             | "file_write"
+            | "file_import"
             | "file_patch"
             | "file_move"
             | "file_chmod"
     );
     let open_world = matches!(
         name,
-        "exec" | "exec_start" | "mcp_tools_list" | "mcp_tool_call"
+        "exec" | "exec_start" | "mcp_tools_list" | "mcp_tool_call" | "file_import"
     );
 
     json!({
@@ -659,6 +693,52 @@ fn output_schema(name: &str) -> Value {
                 "bytes": { "type": "integer", "minimum": 0 }
             },
             "required": ["resolved_target", "path", "created", "written", "new_sha256", "bytes"],
+            "additionalProperties": false
+        }),
+        "file_import" => json!({
+            "type": "object",
+            "properties": {
+                "source": {
+                    "type": "object",
+                    "properties": {
+                        "kind": { "type": "string", "enum": ["download_url", "local_path"] },
+                        "file_name": { "type": "string" },
+                        "mime_type": { "type": "string" },
+                        "bytes": { "type": "integer", "minimum": 0 },
+                        "sha256": { "type": "string" }
+                    },
+                    "required": ["kind", "bytes", "sha256"],
+                    "additionalProperties": false
+                },
+                "resolved_target": resolved_target_schema(),
+                "path": { "type": "string" },
+                "created": { "type": "boolean" },
+                "written": { "type": "boolean" },
+                "old_sha256": nullable_string_schema(),
+                "new_sha256": { "type": "string" },
+                "bytes": { "type": "integer", "minimum": 0 }
+            },
+            "required": ["source", "resolved_target", "path", "created", "written", "new_sha256", "bytes"],
+            "additionalProperties": false
+        }),
+        "file_export" => json!({
+            "type": "object",
+            "properties": {
+                "resolved_target": resolved_target_schema(),
+                "path": { "type": "string" },
+                "file": {
+                    "type": "object",
+                    "properties": {
+                        "file_name": { "type": "string" },
+                        "mime_type": { "type": "string" },
+                        "bytes": { "type": "integer", "minimum": 0 },
+                        "sha256": { "type": "string" }
+                    },
+                    "required": ["file_name", "mime_type", "bytes", "sha256"],
+                    "additionalProperties": false
+                }
+            },
+            "required": ["resolved_target", "path", "file"],
             "additionalProperties": false
         }),
         "file_patch" => json!({
@@ -1048,6 +1128,43 @@ fn file_write_schema() -> Value {
     })
 }
 
+fn file_import_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "target": { "type": "string", "description": "Target id. For writes this is required by default policy." },
+            "path": { "type": "string", "description": "Destination file path on the selected target." },
+            "file": {
+                "type": "string",
+                "format": "binary",
+                "description": "ChatGPT or connector file parameter. The runtime may rewrite this argument before tool delivery; Target Ops also accepts compatible file-reference objects at runtime."
+            },
+            "expected_sha256": { "type": "string", "description": "Optional CAS guard for an existing destination file." },
+            "overwrite": { "type": "boolean", "description": "Allow replacement without a CAS hash. Defaults to false." },
+            "mode": { "type": "string", "description": "Optional octal mode such as 0644 or 0755." },
+            "timeout_ms": { "type": "integer", "minimum": 1, "description": "Transfer and target write timeout in milliseconds." },
+            "max_bytes": { "type": "integer", "minimum": 1, "maximum": 104857600, "description": "Maximum accepted source file size. Defaults to 26214400 bytes." }
+        },
+        "required": ["path", "file"],
+        "additionalProperties": false
+    })
+}
+
+fn file_export_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "target": { "type": "string", "description": "Target id. Omit to use active target." },
+            "path": { "type": "string", "description": "Existing file path to export." },
+            "mime_type": { "type": "string", "description": "Optional media type override. Otherwise inferred from the filename." },
+            "max_bytes": { "type": "integer", "minimum": 1, "maximum": 104857600, "description": "Maximum exported file size. Defaults to 26214400 bytes." },
+            "timeout_ms": { "type": "integer", "minimum": 1, "description": "Timeout for remote file access." }
+        },
+        "required": ["path"],
+        "additionalProperties": false
+    })
+}
+
 fn file_patch_schema() -> Value {
     json!({
         "type": "object",
@@ -1134,7 +1251,7 @@ mod tests {
         let tools = list_tools(None);
         let tools = tools.as_array().expect("tool list is an array");
 
-        assert_eq!(tools.len(), 28);
+        assert_eq!(tools.len(), 30);
         for tool in tools {
             let name = tool["name"].as_str().expect("tool has a name");
             assert_eq!(

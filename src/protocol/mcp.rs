@@ -209,11 +209,50 @@ fn tools_call(state: Arc<AppState>, params: Value) -> Result<Value> {
         &params.name,
         params.arguments.unwrap_or_else(|| json!({})),
     ) {
-        Ok(value) => Ok(json!({
-            "content": [],
-            "structuredContent": value,
-            "isError": false,
-        })),
+        Ok(mut value) => {
+            let content = if params.name == "file_export" {
+                let file = value
+                    .get_mut("file")
+                    .and_then(Value::as_object_mut)
+                    .ok_or_else(|| {
+                        Error::Tool("file_export result is missing file metadata".to_string())
+                    })?;
+                let blob = file
+                    .remove("data_base64")
+                    .and_then(|value| value.as_str().map(str::to_string))
+                    .ok_or_else(|| {
+                        Error::Tool("file_export result is missing encoded file data".to_string())
+                    })?;
+                let mime_type = file
+                    .get("mime_type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("application/octet-stream");
+                let file_name = file
+                    .get("file_name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("export.bin");
+                let sha256 = file
+                    .get("sha256")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                vec![json!({
+                    "type": "resource",
+                    "resource": {
+                        "uri": format!("target-ops://export/{sha256}/{file_name}"),
+                        "mimeType": mime_type,
+                        "blob": blob,
+                    }
+                })]
+            } else {
+                Vec::new()
+            };
+
+            Ok(json!({
+                "content": content,
+                "structuredContent": value,
+                "isError": false,
+            }))
+        }
         Err(err) => Ok(json!({
             "content": [{
                 "type": "text",
