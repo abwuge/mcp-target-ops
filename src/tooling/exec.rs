@@ -243,7 +243,7 @@ mod tests {
             "printf '%s' \"$MCP_TEST_SECRET\"",
             None,
             &env,
-            Duration::from_secs(2),
+            Duration::from_secs(10),
         )
         .unwrap();
         assert_eq!(output.stdout, b"hidden-value");

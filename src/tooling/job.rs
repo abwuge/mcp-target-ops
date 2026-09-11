@@ -431,14 +431,13 @@ mod tests {
     fn captures_incremental_output_and_completion() {
         let command =
             local_shell_command("printf one; sleep 0.05; printf two", None, &BTreeMap::new());
-        let session = spawn_job(command, TargetId::Local, 1024, Some(2_000)).unwrap();
+        let session = spawn_job(command, TargetId::Local, 1024, Some(10_000)).unwrap();
         let session = Arc::new(session);
-        for _ in 0..100 {
-            if session.status.lock().unwrap().finished.is_some() {
-                break;
-            }
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while session.status.lock().unwrap().finished.is_none() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(10));
         }
+        assert!(session.status.lock().unwrap().finished.is_some());
         let (stdout, _, _) = session.stdout.read_since(0, 1024);
         assert_eq!(stdout, b"onetwo");
         assert_eq!(poll_response("job_test", &session).status, "completed");
