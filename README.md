@@ -12,8 +12,10 @@ HTTP server also provides OAuth and a limited REST API for GPT Actions.
 - Local and SSH targets with IDs such as `local` and `ssh:dev`
 - Persistent OpenSSH workers and PTY terminal sessions
 - Command execution with time and output limits
-- File read, directory listing, and exact text replacement
-- Optional SHA-256 compare-and-swap checks for file edits
+- Background command jobs with polling, incremental output, cancellation, and optional timeouts
+- File range reads, literal search, atomic writes, exact edits, unified patches, moves, chmod, and directory creation
+- Optional SHA-256 compare-and-swap checks for file edits, patches, and replacements
+- Secret references that resolve file-backed values directly into command environments without placing the value in MCP arguments
 - Per-target permissions and allowed filesystem roots
 - HTTP bearer authentication
 - OAuth authorization code with PKCE, dynamic client registration, and
@@ -113,8 +115,8 @@ use the returned `terminal_id`.
 | --- | --- |
 | Server | `server_info` |
 | Targets | `target_list`, `target_current`, `target_select`, `target_connect`, `target_disconnect` |
-| Commands | `exec` |
-| Files | `file_read`, `file_list`, `file_edit` |
+| Commands | `exec`, `exec_start`, `job_poll`, `job_output`, `job_cancel` |
+| Files | `file_read`, `file_list`, `file_find`, `file_edit`, `file_write`, `file_patch`, `file_move`, `file_chmod`, `directory_create` |
 | Terminals | `terminal_open`, `terminal_send`, `terminal_read`, `terminal_resize`, `terminal_close` |
 
 Example command call:
@@ -130,8 +132,46 @@ Example command call:
 ```
 
 `file_edit` applies exact replacements and can reject a stale write when the
-caller supplies the expected SHA-256. `terminal_read` is incremental and uses
-sequence numbers to resume from the last read position.
+caller supplies the expected SHA-256. Atomic edits preserve the existing Unix
+mode, so editing an executable script does not silently remove its executable
+bit. `file_read` can return a 1-based line range, and `file_find` returns bounded
+literal matches with line context.
+
+`exec_start` is intended for builds and other long-running non-interactive
+commands. It returns immediately with a job id. Use `job_poll` for status,
+`job_output` with stdout/stderr sequence cursors for incremental output, and
+`job_cancel` to stop a running job. SSH jobs use dedicated OpenSSH processes so
+they do not monopolize a target's persistent worker.
+
+Both `exec` and `exec_start` accept `secret_env`. Each environment variable maps
+to a file-backed reference on the selected target. Text files can be injected
+directly; TOML and JSON references can select a dot-separated scalar key. The
+source path must pass the same file-read policy and `allowed_roots` checks as
+`file_read`. The secret value is resolved inside Target Ops and is not present
+in the MCP request. A command can still expose it if the command itself prints
+its environment or sends the value elsewhere.
+
+Example using a TOML value without copying it into the MCP request:
+
+```json
+{
+  "name": "exec",
+  "arguments": {
+    "target": "local",
+    "command": "./local-client",
+    "secret_env": {
+      "SERVICE_AUTH": {
+        "path": "/home/me/service.toml",
+        "format": "toml",
+        "key": "client.headers.Authorization"
+      }
+    }
+  }
+}
+```
+
+`terminal_read` is incremental and uses sequence numbers to resume from the
+last read position. `terminal_resize` changes the live PTY size.
 
 ## HTTP authentication
 
@@ -250,7 +290,6 @@ curl -fsS http://127.0.0.1:8765/health
 ## Current limitations
 
 - Active-target selection and OAuth state are process-wide and in memory.
-- `terminal_resize` records the requested size but does not resize the PTY yet.
 - SSH operations depend on the local OpenSSH client.
 
 ## Development
