@@ -3,8 +3,8 @@ use super::{
     form::{parse_query, parse_urlencoded, required_param},
     public_base_url,
     response::{
-        redirect_with_params, respond_html, respond_json, respond_json_with_cache_headers,
-        respond_oauth_error,
+        redirect_with_params, respond_authorization_html, respond_html, respond_json,
+        respond_json_with_cache_headers, respond_oauth_error,
     },
     Params, AUTHORIZATION_SERVER_METADATA_PATH, AUTHORIZE_PATH, FAVICON_PATH,
     PROTECTED_RESOURCE_METADATA_PATH, REGISTER_PATH, TOKEN_PATH,
@@ -290,16 +290,17 @@ fn handle_authorize(state: Arc<AppState>, mut request: Request, method: Method) 
     if state.config.server.oauth_authorization_password.is_some()
         && !params.contains_key("password")
     {
-        return respond_html(
+        return respond_authorization_html(
             request,
             200,
             oauth_page::render(&state, &params, None, FAVICON_PATH, AUTHORIZE_PATH),
+            redirect_uri,
         );
     }
 
     if let Some(expected_password) = state.config.server.oauth_authorization_password.as_deref() {
         if params.get("password").map(String::as_str) != Some(expected_password) {
-            return respond_html(
+            return respond_authorization_html(
                 request,
                 401,
                 oauth_page::render(
@@ -309,6 +310,7 @@ fn handle_authorize(state: Arc<AppState>, mut request: Request, method: Method) 
                     FAVICON_PATH,
                     AUTHORIZE_PATH,
                 ),
+                redirect_uri,
             );
         }
     }

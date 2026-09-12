@@ -89,6 +89,36 @@ fn respond_bytes_with_headers(
 }
 
 pub(super) fn respond_html(request: Request, status: u16, body: String) -> Result<()> {
+    respond_html_with_redirect(request, status, body, None)
+}
+
+// The caller must validate the client's redirect before rendering its consent page.
+pub(super) fn respond_authorization_html(
+    request: Request,
+    status: u16,
+    body: String,
+    redirect_uri: &str,
+) -> Result<()> {
+    respond_html_with_redirect(request, status, body, Some(redirect_uri))
+}
+
+fn html_csp(redirect_uri: Option<&str>) -> String {
+    // Chromium also checks form-action on the POST's cross-origin redirect.
+    // Serialize only the parsed origin: never interpolate untrusted URL text into CSP.
+    let origin = redirect_uri
+        .and_then(|uri| reqwest::Url::parse(uri).ok())
+        .filter(|url| matches!(url.scheme(), "https" | "http"))
+        .map(|url| format!(" {}", url.origin().ascii_serialization()))
+        .unwrap_or_default();
+    format!("default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'{origin}; base-uri 'none'; frame-ancestors 'none'")
+}
+
+fn respond_html_with_redirect(
+    request: Request,
+    status: u16,
+    body: String,
+    redirect_uri: Option<&str>,
+) -> Result<()> {
     let mut response = Response::from_string(body).with_status_code(StatusCode(status));
     response.add_header(header("Content-Type", "text/html; charset=utf-8"));
     response.add_header(header("Cache-Control", "no-store"));
@@ -96,10 +126,7 @@ pub(super) fn respond_html(request: Request, status: u16, body: String) -> Resul
     response.add_header(header("Referrer-Policy", "no-referrer"));
     response.add_header(header("X-Content-Type-Options", "nosniff"));
     response.add_header(header("X-Frame-Options", "DENY"));
-    response.add_header(header(
-        "Content-Security-Policy",
-        "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
-    ));
+    response.add_header(header("Content-Security-Policy", &html_csp(redirect_uri)));
     add_common_headers(&mut response);
     request.respond(response).map_err(Error::Io)
 }
@@ -154,6 +181,9 @@ pub(super) fn redirect_with_params(
 
     let mut response = Response::empty(StatusCode(302));
     response.add_header(header("Location", &location));
+    response.add_header(header("Cache-Control", "no-store"));
+    response.add_header(header("Pragma", "no-cache"));
+    response.add_header(header("Referrer-Policy", "no-referrer"));
     add_common_headers(&mut response);
     request.respond(response).map_err(Error::Io)
 }
@@ -168,4 +198,26 @@ fn add_common_headers<R: Read>(response: &mut Response<R>) {
 
 fn header(name: &str, value: &str) -> Header {
     Header::from_bytes(name.as_bytes(), value.as_bytes()).expect("static header is valid")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::html_csp;
+
+    #[test]
+    fn consent_policy_allows_only_callback_origin() {
+        let policy = html_csp(Some(
+            "https://chatgpt.com/connector/oauth/test?state=private",
+        ));
+        assert!(policy.contains("form-action 'self' https://chatgpt.com;"));
+        assert!(!policy.contains("private"));
+        assert!(!policy.contains("connector"));
+        assert!(html_csp(Some("http://127.0.0.1:43123/callback"))
+            .contains("form-action 'self' http://127.0.0.1:43123;"));
+        assert!(html_csp(None).contains("form-action 'self';"));
+        assert!(html_csp(Some("javascript:alert(1)")).contains("form-action 'self';"));
+        let policy = html_csp(Some("https://example.com/path; form-action *"));
+        assert!(policy.contains("form-action 'self' https://example.com;"));
+        assert!(!policy.contains("form-action *"));
+    }
 }
