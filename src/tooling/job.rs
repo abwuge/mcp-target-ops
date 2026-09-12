@@ -28,6 +28,13 @@ const MAX_RETAINED_JOBS: usize = 128;
 const MAX_RETAINED_FOREGROUND: usize = 64;
 const AUTO_BACKGROUND_AFTER: Duration = Duration::from_secs(5);
 
+#[derive(Debug, Clone, Copy)]
+enum SessionTimeoutPolicy {
+    ForegroundDefault,
+    ExplicitOnly,
+    DefaultBefore(Duration),
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ExecStartRequest {
     #[serde(default)]
@@ -254,7 +261,8 @@ impl JobRegistry {
         req: ExecStartRequest,
         request_id: Option<&Value>,
     ) -> Result<ForegroundOutput> {
-        let (resolved_target, session) = self.create_session(state, &req, true)?;
+        let (resolved_target, session) =
+            self.create_session(state, &req, SessionTimeoutPolicy::ForegroundDefault)?;
         let order = EXEC_COUNTER.fetch_add(1, Ordering::Relaxed);
         let id = format!("exec_{order}");
         self.insert_foreground(
@@ -299,7 +307,8 @@ impl JobRegistry {
         caller_key: &str,
         threshold: Duration,
     ) -> Result<AdaptiveExecOutput> {
-        let (resolved_target, session) = self.create_session(state, &req, true)?;
+        let (resolved_target, session) =
+            self.create_session(state, &req, SessionTimeoutPolicy::DefaultBefore(threshold))?;
         let order = EXEC_COUNTER.fetch_add(1, Ordering::Relaxed);
         let foreground_id = format!("exec_{order}");
         self.insert_foreground(
@@ -360,7 +369,8 @@ impl JobRegistry {
         req: ExecStartRequest,
         caller_key: &str,
     ) -> Result<ExecStartResponse> {
-        let (resolved_target, session) = self.create_session(state, &req, false)?;
+        let (resolved_target, session) =
+            self.create_session(state, &req, SessionTimeoutPolicy::ExplicitOnly)?;
         let order = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
         let id = format!("job_{order}");
         self.insert(
@@ -385,7 +395,7 @@ impl JobRegistry {
         &self,
         state: &AppState,
         req: &ExecStartRequest,
-        use_default_timeout: bool,
+        timeout_policy: SessionTimeoutPolicy,
     ) -> Result<(ResolvedTarget, Arc<CommandSession>)> {
         let (target, source) = state.resolve_target(req.target.as_deref())?;
         let config = state.get_target_config(&target)?;
@@ -405,10 +415,17 @@ impl JobRegistry {
             .unwrap_or(target_policy.max_output_bytes)
             .min(target_policy.max_output_bytes)
             .max(1);
+        let default_timeout = Duration::from_millis(target_policy.default_timeout_ms);
         let timeout = req
             .timeout_ms
-            .or(use_default_timeout.then_some(target_policy.default_timeout_ms))
-            .map(Duration::from_millis);
+            .map(Duration::from_millis)
+            .or_else(|| match timeout_policy {
+                SessionTimeoutPolicy::ForegroundDefault => Some(default_timeout),
+                SessionTimeoutPolicy::ExplicitOnly => None,
+                SessionTimeoutPolicy::DefaultBefore(limit) => {
+                    (default_timeout <= limit).then_some(default_timeout)
+                }
+            });
         let command = command_for_target(
             &target,
             config,
@@ -1068,6 +1085,60 @@ mod tests {
             .unwrap();
         assert_eq!(waited.output.stdout, "beforeafter");
         assert!(waited.output.eof);
+    }
+
+    #[test]
+    fn adaptive_exec_drops_long_foreground_default_timeout_after_promotion() {
+        let temp = tempdir().unwrap();
+        let path = temp.keep();
+        let mut config = Config::default();
+        if let Some(TargetConfig::Local(local)) = config.targets.get_mut("local") {
+            local.enabled = true;
+            local.policy.allow_exec = true;
+            local.policy.default_timeout_ms = 30;
+        }
+        config.server.default_target = Some("local".to_string());
+        config.server.oauth_state_file = None;
+        config.server.runtime_dir = path.join("runtime");
+        let state = AppState::new(config).unwrap();
+
+        let outcome = state
+            .jobs
+            .run_adaptive_with_threshold(
+                &state,
+                ExecStartRequest {
+                    target: Some("local".into()),
+                    command: "sleep 0.06; printf survived".into(),
+                    cwd: None,
+                    timeout_ms: None,
+                    max_output_bytes: None,
+                    secret_env: BTreeMap::new(),
+                },
+                None,
+                "caller-a",
+                Duration::from_millis(10),
+            )
+            .unwrap();
+        let job_id = match outcome {
+            AdaptiveExecOutput::Backgrounded { job_id, .. } => job_id,
+            AdaptiveExecOutput::Completed(_) => panic!("command should have been backgrounded"),
+        };
+        let waited = state
+            .jobs
+            .wait_for_caller(
+                JobWaitRequest {
+                    job_id,
+                    wait_timeout_ms: Some(1000),
+                    stdout_since_seq: None,
+                    stderr_since_seq: None,
+                    max_bytes: None,
+                },
+                "caller-a",
+            )
+            .unwrap();
+        assert_eq!(waited.output.status, "completed");
+        assert!(!waited.output.timed_out);
+        assert_eq!(waited.output.stdout, "survived");
     }
 
     #[test]
