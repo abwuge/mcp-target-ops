@@ -73,7 +73,7 @@ pub(super) fn respond_bytes(request: Request, status: u16, body: Vec<u8>) -> Res
     respond_bytes_with_headers(request, status, body, Vec::new())
 }
 
-fn respond_bytes_with_headers(
+pub(super) fn respond_bytes_with_headers(
     request: Request,
     status: u16,
     body: Vec<u8>,

@@ -26,6 +26,7 @@ static JOB_COUNTER: AtomicU64 = AtomicU64::new(1);
 static EXEC_COUNTER: AtomicU64 = AtomicU64::new(1);
 const MAX_RETAINED_JOBS: usize = 128;
 const MAX_RETAINED_FOREGROUND: usize = 64;
+const AUTO_BACKGROUND_AFTER: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ExecStartRequest {
@@ -186,6 +187,44 @@ pub struct ForegroundOutput {
     pub timed_out: bool,
 }
 
+#[derive(Debug)]
+pub enum AdaptiveExecOutput {
+    Completed(ForegroundOutput),
+    Backgrounded {
+        resolved_target: ResolvedTarget,
+        job_id: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CompletedJobResult {
+    pub job_id: String,
+    pub target: String,
+    pub command: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    pub elapsed_ms: u64,
+    pub timed_out: bool,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub stdout: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub stderr: String,
+    pub stdout_truncated: bool,
+    pub stderr_truncated: bool,
+}
+
+struct JobEntry {
+    session: Arc<CommandSession>,
+    caller_key: String,
+    command: String,
+    cwd: Option<String>,
+    order: u64,
+    delivered: bool,
+}
+
 struct ForegroundSession {
     session: Arc<CommandSession>,
     request_key: Option<String>,
@@ -197,7 +236,7 @@ struct ForegroundSession {
 }
 
 pub struct JobRegistry {
-    sessions: Mutex<HashMap<String, Arc<CommandSession>>>,
+    sessions: Mutex<HashMap<String, JobEntry>>,
     foreground: Mutex<HashMap<String, ForegroundSession>>,
 }
 
@@ -242,10 +281,99 @@ impl JobRegistry {
         })
     }
 
+    pub fn run_adaptive(
+        &self,
+        state: &AppState,
+        req: ExecStartRequest,
+        request_id: Option<&Value>,
+        caller_key: &str,
+    ) -> Result<AdaptiveExecOutput> {
+        self.run_adaptive_with_threshold(state, req, request_id, caller_key, AUTO_BACKGROUND_AFTER)
+    }
+
+    fn run_adaptive_with_threshold(
+        &self,
+        state: &AppState,
+        req: ExecStartRequest,
+        request_id: Option<&Value>,
+        caller_key: &str,
+        threshold: Duration,
+    ) -> Result<AdaptiveExecOutput> {
+        let (resolved_target, session) = self.create_session(state, &req, true)?;
+        let order = EXEC_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let foreground_id = format!("exec_{order}");
+        self.insert_foreground(
+            foreground_id.clone(),
+            ForegroundSession {
+                session: Arc::clone(&session),
+                request_key: request_id.map(request_key).transpose()?,
+                requested_target: req.target.clone(),
+                command: req.command.clone(),
+                cwd: req.cwd.clone(),
+                order,
+                claimed: false,
+            },
+        );
+
+        if session.wait_for_eof(Some(threshold)) {
+            let snapshot = session.snapshot();
+            self.foreground.lock().unwrap().remove(&foreground_id);
+            return Ok(AdaptiveExecOutput::Completed(ForegroundOutput {
+                resolved_target,
+                exit_code: snapshot.exit_code,
+                stdout: snapshot.stdout,
+                stderr: snapshot.stderr,
+                stdout_truncated: snapshot.stdout_truncated,
+                stderr_truncated: snapshot.stderr_truncated,
+                timed_out: snapshot.timed_out,
+            }));
+        }
+
+        self.foreground.lock().unwrap().remove(&foreground_id);
+        let order = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let job_id = format!("job_{order}");
+        self.insert(
+            job_id.clone(),
+            JobEntry {
+                session,
+                caller_key: caller_key.to_string(),
+                command: req.command,
+                cwd: req.cwd,
+                order,
+                delivered: false,
+            },
+        );
+        Ok(AdaptiveExecOutput::Backgrounded {
+            resolved_target,
+            job_id,
+        })
+    }
+
+    #[cfg(test)]
     pub fn start(&self, state: &AppState, req: ExecStartRequest) -> Result<ExecStartResponse> {
+        self.start_for_caller(state, req, "direct")
+    }
+
+    pub fn start_for_caller(
+        &self,
+        state: &AppState,
+        req: ExecStartRequest,
+        caller_key: &str,
+    ) -> Result<ExecStartResponse> {
         let (resolved_target, session) = self.create_session(state, &req, false)?;
-        let id = format!("job_{}", JOB_COUNTER.fetch_add(1, Ordering::Relaxed));
-        self.insert(id.clone(), session);
+        let order = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let id = format!("job_{order}");
+        self.insert(
+            id.clone(),
+            JobEntry {
+                session,
+                caller_key: caller_key.to_string(),
+                command: req.command,
+                cwd: req.cwd,
+                order,
+                delivered: false,
+            },
+        );
         Ok(ExecStartResponse {
             resolved_target,
             job_id: id,
@@ -292,8 +420,17 @@ impl JobRegistry {
         Ok((state.resolved_target_value(target, source), session))
     }
 
+    #[cfg(test)]
     pub fn poll(&self, req: JobPollRequest) -> Result<JobPollResponse> {
-        let session = self.get(&req.job_id)?;
+        self.poll_for_caller(req, "direct")
+    }
+
+    pub fn poll_for_caller(
+        &self,
+        req: JobPollRequest,
+        caller_key: &str,
+    ) -> Result<JobPollResponse> {
+        let session = self.get_for_caller(&req.job_id, caller_key)?;
         let status = session.status_snapshot();
         Ok(JobPollResponse {
             job_id: req.job_id,
@@ -306,8 +443,17 @@ impl JobRegistry {
         })
     }
 
+    #[cfg(test)]
     pub fn output(&self, req: JobOutputRequest) -> Result<JobOutputResponse> {
-        let session = self.get(&req.job_id)?;
+        self.output_for_caller(req, "direct")
+    }
+
+    pub fn output_for_caller(
+        &self,
+        req: JobOutputRequest,
+        caller_key: &str,
+    ) -> Result<JobOutputResponse> {
+        let session = self.get_for_caller(&req.job_id, caller_key)?;
         let stdout_from_seq = req.stdout_since_seq.unwrap_or(0);
         let stderr_from_seq = req.stderr_since_seq.unwrap_or(0);
         let delta = session.output_since(
@@ -316,7 +462,7 @@ impl JobRegistry {
             req.max_bytes.unwrap_or(64 * 1024).clamp(1, 512 * 1024),
         );
         let status = session.status_snapshot();
-        Ok(JobOutputResponse {
+        let response = JobOutputResponse {
             job_id: req.job_id,
             target: session.target.to_string(),
             status: session.state().to_string(),
@@ -332,28 +478,48 @@ impl JobRegistry {
             stderr: String::from_utf8_lossy(&delta.stderr).to_string(),
             stderr_truncated: delta.stderr_truncated,
             eof: delta.eof,
-        })
+        };
+        if response.eof {
+            self.mark_delivered(&response.job_id, caller_key)?;
+        }
+        Ok(response)
     }
 
+    #[cfg(test)]
     pub fn wait(&self, req: JobWaitRequest) -> Result<JobWaitResponse> {
-        let session = self.get(&req.job_id)?;
+        self.wait_for_caller(req, "direct")
+    }
+
+    pub fn wait_for_caller(
+        &self,
+        req: JobWaitRequest,
+        caller_key: &str,
+    ) -> Result<JobWaitResponse> {
+        let session = self.get_for_caller(&req.job_id, caller_key)?;
         let wait_timeout =
             Duration::from_millis(req.wait_timeout_ms.unwrap_or(60_000).min(120_000));
         let completed = session.wait_for_eof(Some(wait_timeout));
-        let output = self.output(JobOutputRequest {
-            job_id: req.job_id,
-            stdout_since_seq: req.stdout_since_seq,
-            stderr_since_seq: req.stderr_since_seq,
-            max_bytes: req.max_bytes,
-        })?;
+        let output = self.output_for_caller(
+            JobOutputRequest {
+                job_id: req.job_id,
+                stdout_since_seq: req.stdout_since_seq,
+                stderr_since_seq: req.stderr_since_seq,
+                max_bytes: req.max_bytes,
+            },
+            caller_key,
+        )?;
         Ok(JobWaitResponse {
             wait_timed_out: !completed && !output.eof,
             output,
         })
     }
 
-    pub fn cancel(&self, req: JobCancelRequest) -> Result<JobCancelResponse> {
-        let session = self.get(&req.job_id)?;
+    pub fn cancel_for_caller(
+        &self,
+        req: JobCancelRequest,
+        caller_key: &str,
+    ) -> Result<JobCancelResponse> {
+        let session = self.get_for_caller(&req.job_id, caller_key)?;
         let requested = session.cancel();
         Ok(JobCancelResponse {
             job_id: req.job_id,
@@ -450,29 +616,84 @@ impl JobRegistry {
         self.sessions.lock().unwrap().keys().cloned().collect()
     }
 
-    fn get(&self, id: &str) -> Result<Arc<CommandSession>> {
-        self.sessions
-            .lock()
-            .unwrap()
-            .get(id)
-            .cloned()
-            .ok_or_else(|| Error::Tool(format!("job {id} not found")))
+    pub fn take_completed_for_caller(&self, caller_key: &str) -> Vec<CompletedJobResult> {
+        let mut sessions = self.sessions.lock().unwrap();
+        let mut ready = sessions
+            .iter()
+            .filter(|(_, entry)| {
+                entry.caller_key == caller_key
+                    && !entry.delivered
+                    && entry.session.status_snapshot().eof
+            })
+            .map(|(id, entry)| (entry.order, id.clone()))
+            .collect::<Vec<_>>();
+        ready.sort_by_key(|(order, _)| *order);
+
+        ready
+            .into_iter()
+            .filter_map(|(_, id)| {
+                let entry = sessions.get_mut(&id)?;
+                let status = entry.session.status_snapshot();
+                let snapshot = entry.session.snapshot();
+                entry.delivered = true;
+                Some(CompletedJobResult {
+                    job_id: id,
+                    target: entry.session.target.to_string(),
+                    command: entry.command.clone(),
+                    cwd: entry.cwd.clone(),
+                    status: entry.session.state().to_string(),
+                    exit_code: status.exit_code,
+                    elapsed_ms: status.elapsed_ms,
+                    timed_out: status.timed_out,
+                    stdout: String::from_utf8_lossy(&snapshot.stdout).to_string(),
+                    stderr: String::from_utf8_lossy(&snapshot.stderr).to_string(),
+                    stdout_truncated: snapshot.stdout_truncated,
+                    stderr_truncated: snapshot.stderr_truncated,
+                })
+            })
+            .collect()
     }
 
-    fn insert(&self, id: String, session: Arc<CommandSession>) {
+    fn get_for_caller(&self, id: &str, caller_key: &str) -> Result<Arc<CommandSession>> {
+        let sessions = self.sessions.lock().unwrap();
+        let entry = sessions
+            .get(id)
+            .ok_or_else(|| Error::Tool(format!("job {id} not found")))?;
+        if entry.caller_key != caller_key {
+            return Err(Error::Tool(format!("job {id} not found")));
+        }
+        Ok(Arc::clone(&entry.session))
+    }
+
+    fn mark_delivered(&self, id: &str, caller_key: &str) -> Result<()> {
+        let mut sessions = self.sessions.lock().unwrap();
+        let entry = sessions
+            .get_mut(id)
+            .ok_or_else(|| Error::Tool(format!("job {id} not found")))?;
+        if entry.caller_key != caller_key {
+            return Err(Error::Tool(format!("job {id} not found")));
+        }
+        entry.delivered = true;
+        Ok(())
+    }
+
+    fn insert(&self, id: String, entry: JobEntry) {
         let mut sessions = self.sessions.lock().unwrap();
         if sessions.len() >= MAX_RETAINED_JOBS {
-            sessions.retain(|_, session| !session.status_snapshot().finished);
+            sessions
+                .retain(|_, entry| !entry.session.status_snapshot().finished || !entry.delivered);
         }
         if sessions.len() >= MAX_RETAINED_JOBS {
             if let Some(id) = sessions
                 .iter()
-                .find_map(|(id, session)| session.status_snapshot().finished.then(|| id.clone()))
+                .filter(|(_, entry)| entry.session.status_snapshot().finished)
+                .min_by_key(|(_, entry)| (if entry.delivered { 0_u8 } else { 1_u8 }, entry.order))
+                .map(|(id, _)| id.clone())
             {
                 sessions.remove(&id);
             }
         }
-        sessions.insert(id, session);
+        sessions.insert(id, entry);
     }
 
     fn insert_foreground(&self, id: String, entry: ForegroundSession) {
@@ -805,5 +1026,121 @@ mod tests {
                 max_bytes: None,
             })
             .unwrap();
+    }
+
+    #[test]
+    fn adaptive_exec_promotes_same_session_without_rerunning() {
+        let state = test_state();
+        let outcome = state
+            .jobs
+            .run_adaptive_with_threshold(
+                &state,
+                ExecStartRequest {
+                    target: Some("local".into()),
+                    command: "printf before; sleep 0.08; printf after".into(),
+                    cwd: None,
+                    timeout_ms: Some(1000),
+                    max_output_bytes: None,
+                    secret_env: BTreeMap::new(),
+                },
+                None,
+                "caller-a",
+                Duration::from_millis(15),
+            )
+            .unwrap();
+        let job_id = match outcome {
+            AdaptiveExecOutput::Backgrounded { job_id, .. } => job_id,
+            AdaptiveExecOutput::Completed(_) => panic!("command should have been backgrounded"),
+        };
+        let waited = state
+            .jobs
+            .wait_for_caller(
+                JobWaitRequest {
+                    job_id,
+                    wait_timeout_ms: Some(1000),
+                    stdout_since_seq: None,
+                    stderr_since_seq: None,
+                    max_bytes: None,
+                },
+                "caller-a",
+            )
+            .unwrap();
+        assert_eq!(waited.output.stdout, "beforeafter");
+        assert!(waited.output.eof);
+    }
+
+    #[test]
+    fn completed_job_inbox_is_caller_scoped_and_drains_once() {
+        let state = test_state();
+        let started = state
+            .jobs
+            .start_for_caller(
+                &state,
+                ExecStartRequest {
+                    target: Some("local".into()),
+                    command: "printf queued".into(),
+                    cwd: None,
+                    timeout_ms: Some(1000),
+                    max_output_bytes: None,
+                    secret_env: BTreeMap::new(),
+                },
+                "caller-a",
+            )
+            .unwrap();
+        while state
+            .jobs
+            .poll_for_caller(
+                JobPollRequest {
+                    job_id: started.job_id.clone(),
+                },
+                "caller-a",
+            )
+            .unwrap()
+            .status
+            == "running"
+        {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(state.jobs.take_completed_for_caller("caller-b").is_empty());
+        let completed = state.jobs.take_completed_for_caller("caller-a");
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].job_id, started.job_id);
+        assert_eq!(completed[0].stdout, "queued");
+        assert!(state.jobs.take_completed_for_caller("caller-a").is_empty());
+    }
+
+    #[test]
+    fn job_wait_claims_completion_before_inbox_delivery() {
+        let state = test_state();
+        let started = state
+            .jobs
+            .start_for_caller(
+                &state,
+                ExecStartRequest {
+                    target: Some("local".into()),
+                    command: "sleep 0.02; printf claimed".into(),
+                    cwd: None,
+                    timeout_ms: Some(1000),
+                    max_output_bytes: None,
+                    secret_env: BTreeMap::new(),
+                },
+                "caller-a",
+            )
+            .unwrap();
+        let waited = state
+            .jobs
+            .wait_for_caller(
+                JobWaitRequest {
+                    job_id: started.job_id,
+                    wait_timeout_ms: Some(1000),
+                    stdout_since_seq: None,
+                    stderr_since_seq: None,
+                    max_bytes: None,
+                },
+                "caller-a",
+            )
+            .unwrap();
+        assert_eq!(waited.output.stdout, "claimed");
+        assert!(state.jobs.take_completed_for_caller("caller-a").is_empty());
     }
 }

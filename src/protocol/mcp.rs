@@ -61,6 +61,14 @@ pub fn serve_stdio(state: Arc<AppState>) -> Result<()> {
 }
 
 pub fn handle_json_bytes(state: Arc<AppState>, bytes: &[u8]) -> Result<Option<Vec<u8>>> {
+    handle_json_bytes_for_caller(state, bytes, "direct")
+}
+
+pub fn handle_json_bytes_for_caller(
+    state: Arc<AppState>,
+    bytes: &[u8],
+    caller_key: &str,
+) -> Result<Option<Vec<u8>>> {
     let value = match serde_json::from_slice::<Value>(bytes) {
         Ok(value) => value,
         Err(err) => {
@@ -69,13 +77,17 @@ pub fn handle_json_bytes(state: Arc<AppState>, bytes: &[u8]) -> Result<Option<Ve
         }
     };
 
-    handle_json_value(state, value)?
+    handle_json_value_for_caller(state, value, caller_key)?
         .map(|response| serde_json::to_vec(&response))
         .transpose()
         .map_err(Error::Json)
 }
 
-pub fn handle_json_value(state: Arc<AppState>, value: Value) -> Result<Option<Value>> {
+fn handle_json_value_for_caller(
+    state: Arc<AppState>,
+    value: Value,
+    caller_key: &str,
+) -> Result<Option<Value>> {
     if let Value::Array(requests) = value {
         if requests.is_empty() {
             return serde_json::to_value(parse_error("parse error: empty batch".to_string()))
@@ -85,7 +97,7 @@ pub fn handle_json_value(state: Arc<AppState>, value: Value) -> Result<Option<Va
 
         let mut responses = Vec::new();
         for request in requests {
-            if let Some(response) = handle_request_value(Arc::clone(&state), request)? {
+            if let Some(response) = handle_request_value(Arc::clone(&state), request, caller_key)? {
                 responses.push(response);
             }
         }
@@ -96,13 +108,17 @@ pub fn handle_json_value(state: Arc<AppState>, value: Value) -> Result<Option<Va
             Ok(Some(Value::Array(responses)))
         }
     } else {
-        handle_request_value(state, value)
+        handle_request_value(state, value, caller_key)
     }
 }
 
-fn handle_request_value(state: Arc<AppState>, value: Value) -> Result<Option<Value>> {
+fn handle_request_value(
+    state: Arc<AppState>,
+    value: Value,
+    caller_key: &str,
+) -> Result<Option<Value>> {
     let response = match serde_json::from_value::<RpcRequest>(value) {
-        Ok(request) => handle_request(state, request),
+        Ok(request) => handle_request(state, request, caller_key),
         Err(err) => Some(parse_error(format!("parse error: {err}"))),
     };
 
@@ -124,7 +140,11 @@ fn parse_error(message: String) -> RpcResponse {
     }
 }
 
-fn handle_request(state: Arc<AppState>, request: RpcRequest) -> Option<RpcResponse> {
+fn handle_request(
+    state: Arc<AppState>,
+    request: RpcRequest,
+    caller_key: &str,
+) -> Option<RpcResponse> {
     if request.method.starts_with("notifications/") {
         return None;
     }
@@ -143,6 +163,7 @@ fn handle_request(state: Arc<AppState>, request: RpcRequest) -> Option<RpcRespon
             state,
             id.as_ref(),
             request.params.unwrap_or_else(|| json!({})),
+            caller_key,
         ),
         "resources/list" => Ok(apps::list_resources(
             state.config.server.public_base_url.as_deref(),
@@ -201,7 +222,12 @@ fn initialize(state: &AppState, params: Value) -> Result<Value> {
     }))
 }
 
-fn tools_call(state: Arc<AppState>, request_id: Option<&Value>, params: Value) -> Result<Value> {
+fn tools_call(
+    state: Arc<AppState>,
+    request_id: Option<&Value>,
+    params: Value,
+    caller_key: &str,
+) -> Result<Value> {
     #[derive(Deserialize)]
     struct ToolCallParams {
         name: String,
@@ -210,13 +236,31 @@ fn tools_call(state: Arc<AppState>, request_id: Option<&Value>, params: Value) -
     }
 
     let params: ToolCallParams = serde_json::from_value(params)?;
-    match tools::call_tool_with_request_id(
+    let attach_completed = !matches!(
+        params.name.as_str(),
+        "job_poll" | "job_output" | "job_wait" | "result_read" | "exec_stream"
+    );
+    match tools::call_tool_with_context(
         Arc::clone(&state),
         &params.name,
         params.arguments.unwrap_or_else(|| json!({})),
         request_id,
+        caller_key,
     ) {
         Ok(mut value) => {
+            let completed_jobs = if attach_completed {
+                state.jobs.take_completed_for_caller(caller_key)
+            } else {
+                Vec::new()
+            };
+            if !completed_jobs.is_empty() {
+                if let Some(object) = value.as_object_mut() {
+                    object.insert(
+                        "completed_jobs".to_string(),
+                        serde_json::to_value(&completed_jobs)?,
+                    );
+                }
+            }
             if caches_app_result(&params.name) {
                 let result_id = state.results.store(&value)?;
                 if let Some(object) = value.as_object_mut() {
@@ -260,19 +304,53 @@ fn tools_call(state: Arc<AppState>, request_id: Option<&Value>, params: Value) -
                 Vec::new()
             };
 
+            let mut content = content;
+            if !completed_jobs.is_empty() {
+                content.push(json!({
+                    "type": "text",
+                    "text": format!(
+                        "{} background job{} completed; full results are in structuredContent.completed_jobs.",
+                        completed_jobs.len(),
+                        if completed_jobs.len() == 1 { "" } else { "s" }
+                    ),
+                }));
+            }
+
             Ok(json!({
                 "content": content,
                 "structuredContent": value,
                 "isError": false,
             }))
         }
-        Err(err) => Ok(json!({
-            "content": [{
+        Err(err) => {
+            let completed_jobs = if attach_completed {
+                state.jobs.take_completed_for_caller(caller_key)
+            } else {
+                Vec::new()
+            };
+            let mut content = vec![json!({
                 "type": "text",
                 "text": err.to_string(),
-            }],
-            "isError": true,
-        })),
+            })];
+            if !completed_jobs.is_empty() {
+                content.push(json!({
+                    "type": "text",
+                    "text": format!(
+                        "{} background job{} completed; full results are in structuredContent.completed_jobs.",
+                        completed_jobs.len(),
+                        if completed_jobs.len() == 1 { "" } else { "s" }
+                    ),
+                }));
+            }
+            let mut response = json!({
+                "content": content,
+                "isError": true,
+            });
+            if !completed_jobs.is_empty() {
+                response["structuredContent"] = json!({ "completed_jobs": completed_jobs });
+            }
+            Ok(response)
+        }
     }
 }
 
@@ -292,4 +370,151 @@ fn caches_app_result(name: &str) -> bool {
             | "file_patch"
             | "file_move"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::config::{Config, TargetConfig};
+    use crate::tooling::job::JobPollRequest;
+    use std::time::Duration;
+    use tempfile::tempdir;
+
+    fn test_state() -> Arc<AppState> {
+        let temp = tempdir().unwrap();
+        let path = temp.keep();
+        let mut config = Config::default();
+        if let Some(TargetConfig::Local(local)) = config.targets.get_mut("local") {
+            local.enabled = true;
+            local.policy.allow_exec = true;
+        }
+        config.server.default_target = Some("local".to_string());
+        config.server.oauth_state_file = None;
+        config.server.runtime_dir = path.join("runtime");
+        Arc::new(AppState::new(config).unwrap())
+    }
+
+    fn call_tool_for(
+        state: Arc<AppState>,
+        caller_key: &str,
+        id: u64,
+        name: &str,
+        arguments: Value,
+    ) -> Value {
+        handle_json_value_for_caller(
+            state,
+            json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": { "name": name, "arguments": arguments }
+            }),
+            caller_key,
+        )
+        .unwrap()
+        .unwrap()
+    }
+
+    #[test]
+    fn completed_jobs_attach_to_next_non_result_tool_call_once() {
+        let state = test_state();
+        let started = call_tool_for(
+            Arc::clone(&state),
+            "session:a",
+            1,
+            "exec_start",
+            json!({
+                "target": "local",
+                "command": "sleep 0.02; printf queued",
+                "timeout_ms": 1000
+            }),
+        );
+        let job_id = started["result"]["structuredContent"]["job_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        while state
+            .jobs
+            .poll_for_caller(
+                JobPollRequest {
+                    job_id: job_id.clone(),
+                },
+                "session:a",
+            )
+            .unwrap()
+            .status
+            == "running"
+        {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        let other = call_tool_for(
+            Arc::clone(&state),
+            "session:b",
+            2,
+            "target_current",
+            json!({}),
+        );
+        assert!(other["result"]["structuredContent"]
+            .get("completed_jobs")
+            .is_none());
+
+        let delivered = call_tool_for(
+            Arc::clone(&state),
+            "session:a",
+            3,
+            "target_current",
+            json!({}),
+        );
+        let completed = delivered["result"]["structuredContent"]["completed_jobs"]
+            .as_array()
+            .unwrap();
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0]["job_id"], job_id);
+        assert_eq!(completed[0]["stdout"], "queued");
+
+        let drained = call_tool_for(
+            Arc::clone(&state),
+            "session:a",
+            4,
+            "target_current",
+            json!({}),
+        );
+        assert!(drained["result"]["structuredContent"]
+            .get("completed_jobs")
+            .is_none());
+    }
+
+    #[test]
+    fn job_wait_claims_result_before_completion_inbox() {
+        let state = test_state();
+        let started = call_tool_for(
+            Arc::clone(&state),
+            "session:a",
+            1,
+            "exec_start",
+            json!({
+                "target": "local",
+                "command": "sleep 0.02; printf waited",
+                "timeout_ms": 1000
+            }),
+        );
+        let job_id = started["result"]["structuredContent"]["job_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let waited = call_tool_for(
+            Arc::clone(&state),
+            "session:a",
+            2,
+            "job_wait",
+            json!({ "job_id": job_id, "wait_timeout_ms": 1000 }),
+        );
+        assert_eq!(waited["result"]["structuredContent"]["stdout"], "waited");
+
+        let next = call_tool_for(state, "session:a", 3, "target_current", json!({}));
+        assert!(next["result"]["structuredContent"]
+            .get("completed_jobs")
+            .is_none());
+    }
 }

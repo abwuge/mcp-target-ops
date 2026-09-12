@@ -6,7 +6,7 @@ use crate::{
         state::AppState,
         target::ResolvedTarget,
     },
-    tooling::job::ExecStartRequest,
+    tooling::job::{AdaptiveExecOutput, ExecStartRequest},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -33,6 +33,14 @@ pub struct ExecRequest {
 pub struct ExecResponse {
     pub command: String,
     pub resolved_target: ResolvedTarget,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<&'static str>,
+    #[serde(skip_serializing_if = "is_false")]
+    pub auto_backgrounded: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_action: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -124,15 +132,63 @@ pub struct RawExecOutput {
     pub timed_out: bool,
 }
 
-pub fn run(state: &AppState, req: ExecRequest) -> Result<ExecResponse> {
-    run_with_request_id(state, req, None)
-}
-
-pub fn run_with_request_id(
+pub fn run_with_context(
     state: &AppState,
     req: ExecRequest,
     request_id: Option<&Value>,
+    caller_key: &str,
 ) -> Result<ExecResponse> {
+    let command = req.command.clone();
+    let request = ExecStartRequest {
+        target: req.target,
+        command: req.command,
+        cwd: req.cwd,
+        timeout_ms: req.timeout_ms,
+        max_output_bytes: req.max_output_bytes,
+        secret_env: req.secret_env,
+    };
+
+    match state
+        .jobs
+        .run_adaptive(state, request, request_id, caller_key)?
+    {
+        AdaptiveExecOutput::Completed(output) => Ok(ExecResponse {
+            command,
+            resolved_target: output.resolved_target,
+            job_id: None,
+            status: None,
+            auto_backgrounded: false,
+            next_action: None,
+            exit_code: output.exit_code,
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            stdout_truncated: output.stdout_truncated,
+            stderr_truncated: output.stderr_truncated,
+            timed_out: output.timed_out,
+        }),
+        AdaptiveExecOutput::Backgrounded {
+            resolved_target,
+            job_id,
+        } => Ok(ExecResponse {
+            command,
+            resolved_target,
+            job_id: Some(job_id),
+            status: Some("running"),
+            auto_backgrounded: true,
+            next_action: Some(
+                "Use job_wait to wait for completion, or continue with other work; do not repeatedly poll.",
+            ),
+            exit_code: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            stdout_truncated: false,
+            stderr_truncated: false,
+            timed_out: false,
+        }),
+    }
+}
+
+fn run_to_completion(state: &AppState, req: ExecRequest) -> Result<ExecResponse> {
     let command = req.command.clone();
     let output = state.jobs.run_foreground(
         state,
@@ -144,12 +200,15 @@ pub fn run_with_request_id(
             max_output_bytes: req.max_output_bytes,
             secret_env: req.secret_env,
         },
-        request_id,
+        None,
     )?;
-
     Ok(ExecResponse {
         command,
         resolved_target: output.resolved_target,
+        job_id: None,
+        status: None,
+        auto_backgrounded: false,
+        next_action: None,
         exit_code: output.exit_code,
         stdout: String::from_utf8_lossy(&output.stdout).to_string(),
         stderr: String::from_utf8_lossy(&output.stderr).to_string(),
@@ -252,7 +311,7 @@ fn run_batch_item(
         secret_env: secret_env.clone(),
     };
 
-    match run(state, request) {
+    match run_to_completion(state, request) {
         Ok(response) => {
             let success = response.exit_code == Some(0) && !response.timed_out;
             ExecBatchItemResponse {
@@ -306,6 +365,10 @@ mod tests {
         let response = ExecResponse {
             command: "true".to_string(),
             resolved_target: ResolvedTarget::new(TargetId::Local, TargetSource::Explicit),
+            job_id: None,
+            status: None,
+            auto_backgrounded: false,
+            next_action: None,
             exit_code: Some(0),
             stdout: String::new(),
             stderr: String::new(),

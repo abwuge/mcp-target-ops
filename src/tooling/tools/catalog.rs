@@ -37,7 +37,7 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
             required_string("tool", "Downstream MCP tool name."),
             optional_value("arguments", "JSON object passed as downstream tool arguments. Defaults to an empty object.", json!({"type":"object","additionalProperties":true})),
         ])),
-        tool("exec", "Run one short non-interactive shell command or script and wait for its final result. Prefer exec_start when a command may run for more than a few seconds or live output would be useful. Use exec_batch for several logically independent commands. Prefer file_read/file_find over cat, sed, or grep when reading known files.", object_schema(vec![
+        tool("exec", "Run one non-interactive shell command or script. Long-running executions may be promoted automatically to a background job and return job_id instead of blocking. When that happens, use job_wait to wait once for completion or continue with other work; do not repeatedly poll. Prefer exec_start when a command is known in advance to be long-running or live output matters. Use exec_batch for several short, logically independent commands. Prefer file_read/file_find over cat, sed, or grep when reading known files.", object_schema(vec![
             optional_string("target", "Target id: local or ssh:<profile>. Omit to use active target."),
             required_string("command", "Shell command or script to execute as one shell unit."),
             optional_string("cwd", "Working directory."),

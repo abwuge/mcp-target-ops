@@ -4,7 +4,10 @@ mod oauth;
 mod response;
 
 pub(crate) use self::response::respond_json;
-use self::response::{respond_bytes, respond_empty, respond_empty_with_allow, respond_icon};
+use self::response::{
+    respond_bytes, respond_bytes_with_headers, respond_empty, respond_empty_with_allow,
+    respond_icon,
+};
 use crate::{
     core::{
         error::{Error, Result},
@@ -12,7 +15,8 @@ use crate::{
     },
     protocol::{actions, mcp},
 };
-use serde_json::json;
+use rand::{rngs::OsRng, RngCore};
+use serde_json::{json, Value};
 use std::{collections::BTreeMap, sync::Arc, thread};
 use tiny_http::{Method, Request, Server};
 
@@ -66,10 +70,30 @@ fn handle_request(state: Arc<AppState>, mut request: Request) -> Result<()> {
 
     match (method, path.as_str()) {
         (Method::Post, "/" | MCP_PATH) => {
+            let incoming_session = auth::mcp_session_id(&request);
+            let fallback_caller_key = auth::caller_key(&request);
             let mut body = Vec::new();
             request.as_reader().read_to_end(&mut body)?;
-            match mcp::handle_json_bytes(state, &body)? {
-                Some(response) => respond_bytes(request, 200, response),
+            let new_session =
+                (incoming_session.is_none() && is_initialize_body(&body)).then(new_mcp_session_id);
+            let caller_key = new_session
+                .as_ref()
+                .or(incoming_session.as_ref())
+                .map(|session| format!("session:{session}"))
+                .unwrap_or(fallback_caller_key);
+            match mcp::handle_json_bytes_for_caller(state, &body, &caller_key)? {
+                Some(response) => {
+                    if let Some(session_id) = new_session.as_deref() {
+                        respond_bytes_with_headers(
+                            request,
+                            200,
+                            response,
+                            vec![("Mcp-Session-Id", session_id)],
+                        )
+                    } else {
+                        respond_bytes(request, 200, response)
+                    }
+                }
                 None => respond_empty(request, 202),
             }
         }
@@ -96,6 +120,30 @@ fn handle_request(state: Arc<AppState>, mut request: Request) -> Result<()> {
             }),
         ),
     }
+}
+
+fn is_initialize_body(body: &[u8]) -> bool {
+    serde_json::from_slice::<Value>(body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("method")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .as_deref()
+        == Some("initialize")
+}
+
+fn new_mcp_session_id() -> String {
+    let mut bytes = [0_u8; 24];
+    OsRng.fill_bytes(&mut bytes);
+    let mut value = String::with_capacity(8 + bytes.len() * 2);
+    value.push_str("session_");
+    for byte in bytes {
+        value.push_str(&format!("{byte:02x}"));
+    }
+    value
 }
 
 fn is_public_endpoint(method: &Method, path: &str) -> bool {

@@ -81,6 +81,10 @@ pub(super) fn output_schema(name: &str) -> Value {
             "properties": {
                 "command": { "type": "string" },
                 "resolved_target": resolved_target_schema(),
+                "job_id": { "type": "string" },
+                "status": { "type": "string", "enum": ["running"] },
+                "auto_backgrounded": { "type": "boolean" },
+                "next_action": { "type": "string" },
                 "exit_code": nullable_integer_schema(),
                 "stdout": { "type": "string" },
                 "stderr": { "type": "string" },
@@ -486,6 +490,10 @@ pub(super) fn output_schema(name: &str) -> Value {
     if caches_app_result(name) {
         schema["properties"]["result_id"] = json!({ "type": "string" });
     }
+    schema["properties"]["completed_jobs"] = json!({
+        "type": "array",
+        "items": completed_job_schema()
+    });
     schema
 }
 
@@ -505,6 +513,28 @@ fn caches_app_result(name: &str) -> bool {
             | "file_patch"
             | "file_move"
     )
+}
+
+fn completed_job_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "job_id": { "type": "string" },
+            "target": { "type": "string" },
+            "command": { "type": "string" },
+            "cwd": { "type": "string" },
+            "status": { "type": "string", "enum": ["completed", "failed", "cancelled", "timed_out"] },
+            "exit_code": nullable_integer_schema(),
+            "elapsed_ms": { "type": "integer", "minimum": 0 },
+            "timed_out": { "type": "boolean" },
+            "stdout": { "type": "string" },
+            "stderr": { "type": "string" },
+            "stdout_truncated": { "type": "boolean" },
+            "stderr_truncated": { "type": "boolean" }
+        },
+        "required": ["job_id", "target", "command", "status", "elapsed_ms", "timed_out", "stdout_truncated", "stderr_truncated"],
+        "additionalProperties": false
+    })
 }
 
 fn file_read_batch_item_schema() -> Value {

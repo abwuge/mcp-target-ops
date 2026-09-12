@@ -31,14 +31,15 @@ use serde_json::{json, Value};
 use std::{str::FromStr, sync::Arc, time::Duration};
 
 pub fn call_tool(state: Arc<AppState>, name: &str, args: Value) -> Result<Value> {
-    call_tool_with_request_id(state, name, args, None)
+    call_tool_with_context(state, name, args, None, "direct")
 }
 
-pub fn call_tool_with_request_id(
+pub fn call_tool_with_context(
     state: Arc<AppState>,
     name: &str,
     args: Value,
     request_id: Option<&Value>,
+    caller_key: &str,
 ) -> Result<Value> {
     match name {
         "server_info" => Ok(server_info(&state)),
@@ -63,10 +64,11 @@ pub fn call_tool_with_request_id(
             )?;
             Ok(json!({ "server": req.server, "tool": req.tool, "result": result }))
         }
-        "exec" => Ok(serde_json::to_value(exec::run_with_request_id(
+        "exec" => Ok(serde_json::to_value(exec::run_with_context(
             &state,
             parse::<ExecRequest>(args)?,
             request_id,
+            caller_key,
         )?)?),
         "exec_batch" => Ok(serde_json::to_value(exec::run_batch(
             &state,
@@ -86,37 +88,31 @@ pub fn call_tool_with_request_id(
                 .ok_or_else(|| Error::Tool("result_read requires result_id".to_string()))?;
             Ok(serde_json::to_value(state.results.read(result_id)?)?)
         }
-        "exec_start" => Ok(serde_json::to_value(
-            state.jobs.start(&state, parse::<ExecStartRequest>(args)?)?,
+        "exec_start" => Ok(serde_json::to_value(state.jobs.start_for_caller(
+            &state,
+            parse::<ExecStartRequest>(args)?,
+            caller_key,
+        )?)?),
+        "job_poll" => Ok(serde_json::to_value(
+            state
+                .jobs
+                .poll_for_caller(parse::<JobPollRequest>(args)?, caller_key)?,
         )?),
-        "job_poll" => {
-            Ok(serde_json::to_value(state.jobs.poll(parse::<
-                JobPollRequest,
-            >(
-                args
-            )?)?)?)
-        }
-        "job_output" => {
-            Ok(serde_json::to_value(state.jobs.output(parse::<
-                JobOutputRequest,
-            >(
-                args
-            )?)?)?)
-        }
-        "job_wait" => {
-            Ok(serde_json::to_value(state.jobs.wait(parse::<
-                JobWaitRequest,
-            >(
-                args
-            )?)?)?)
-        }
-        "job_cancel" => {
-            Ok(serde_json::to_value(state.jobs.cancel(parse::<
-                JobCancelRequest,
-            >(
-                args
-            )?)?)?)
-        }
+        "job_output" => Ok(serde_json::to_value(
+            state
+                .jobs
+                .output_for_caller(parse::<JobOutputRequest>(args)?, caller_key)?,
+        )?),
+        "job_wait" => Ok(serde_json::to_value(
+            state
+                .jobs
+                .wait_for_caller(parse::<JobWaitRequest>(args)?, caller_key)?,
+        )?),
+        "job_cancel" => Ok(serde_json::to_value(
+            state
+                .jobs
+                .cancel_for_caller(parse::<JobCancelRequest>(args)?, caller_key)?,
+        )?),
         "file_read" => Ok(serde_json::to_value(fs::read(
             &state,
             parse::<FileReadRequest>(args)?,
