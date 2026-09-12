@@ -23,7 +23,7 @@ a human-readable MCP App for reviewing file changes.
 
 ## Highlights
 
-- One interface for local and SSH targets: 32 model-facing tools plus one App-only stream helper
+- One interface for local and SSH targets: 33 model-facing tools plus two App-only helpers
 - Persistent OpenSSH workers for remote file operations
 - Live foreground command output plus cancellable background jobs with incremental output
 - Persistent PTY terminals with live resize support
@@ -323,14 +323,14 @@ advanced deployments; see the example configuration.
 
 ## Tool catalog
 
-Target Ops publishes 34 tool descriptors: 32 model-facing tools and two App-only helpers, `exec_stream` and `result_read`.
+Target Ops publishes 35 tool descriptors: 33 model-facing tools and two App-only helpers, `exec_stream` and `result_read`.
 
 | Area | Tools |
 | --- | --- |
 | Server | `server_info` |
 | Targets | `target_list`, `target_current`, `target_select`, `target_connect`, `target_disconnect` |
 | Downstream MCP | `mcp_server_list`, `mcp_tools_list`, `mcp_tool_call` |
-| Commands and jobs | `exec`, `exec_batch`, `exec_start`, `job_poll`, `job_output`, `job_cancel`; App-only: `exec_stream`, `result_read` |
+| Commands and jobs | `exec`, `exec_batch`, `exec_start`, `job_poll`, `job_output`, `job_wait`, `job_cancel`; App-only: `exec_stream`, `result_read` |
 | Files and directories | `file_read`, `file_list`, `file_find`, `file_edit`, `file_write`, `file_delete`, `file_import`, `file_export`, `file_patch`, `file_move`, `file_chmod`, `directory_create` |
 | Terminals | `terminal_open`, `terminal_send`, `terminal_read`, `terminal_resize`, `terminal_close` |
 
@@ -356,6 +356,8 @@ or control flow; use `exec_batch` for unrelated inspections instead of joining
 them with shell separators.
 
 `exec`, `exec_batch`, and `exec_start` bind to the stable `ui://target-ops/exec-terminal/v1.html` MCP App. Synchronous `exec` remains the short-command path and returns its final result normally. For commands likely to run more than a few seconds, or whenever live output matters, prefer `exec_start`: it returns a job ID immediately, allowing the App to poll `job_output` about every 180 ms without being blocked by the parent tool call. ANSI SGR color/style sequences are rendered safely instead of being shown as raw escape codes.
+
+For model-side workflows that only need to continue after a background command finishes, prefer `job_wait` over repeated `job_poll` or `job_output` calls. `job_wait` waits server-side for up to 60 seconds by default (configurable per call, capped at 120 seconds), then returns the current job status together with incremental stdout/stderr and `wait_timed_out`.
 
 All Target Ops Apps use the same result-card lifecycle. Successful cards collapse after about three seconds; failed or warning-like cards also collapse automatically after a slightly longer delay of about six seconds because most such failures are recoverable workflow events. After about 30 seconds, cards enter a sleep state and discard heavy output/diff DOM. Static tool results are cached under `runtime_dir/results/` for one hour with a 100 MiB global cap and can be restored by the App-only `result_read` helper using an opaque per-result `result_id`. Long-running job cards rebuild from the retained job output buffer. The cards remain present and reopenable; Target Ops does not automatically request iframe teardown.
 

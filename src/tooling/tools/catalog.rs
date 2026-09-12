@@ -59,7 +59,7 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
             required_string("result_id", "Opaque result id returned with the original App-backed tool result."),
         ])),
         tool("exec_batch", "Run multiple logically independent non-interactive commands in one tool call and return a separate result for each. Prefer this over combining unrelated inspections with shell separators; use exec for commands that must share shell state such as cd, variables, pipelines, or control flow. Prefer batch file_read for reading several known files.", exec_batch_schema()),
-        tool("exec_start", "Start a non-interactive command as a background job and return immediately. Prefer this for longer commands or when live output matters; the command App streams progress through job_output while the model remains free to continue. Jobs support cancellation and optional runtime timeouts.", object_schema(vec![
+        tool("exec_start", "Start a non-interactive command as a background job and return immediately. Prefer this for longer commands or when live output matters. Use job_wait when the model only needs to continue after completion; use job_output for incremental output. The command App streams progress through job_output independently. Jobs support cancellation and optional runtime timeouts.", object_schema(vec![
             optional_string("target", "Target id: local or ssh:<profile>. Omit to use active target."),
             required_string("command", "Shell command to execute."),
             optional_string("cwd", "Working directory."),
@@ -72,6 +72,13 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
         ])),
         tool("job_output", "Read incremental stdout and stderr from a background job using independent sequence cursors.", object_schema(vec![
             required_string("job_id", "Job id returned by exec_start."),
+            optional_integer("stdout_since_seq", "Last stdout sequence already consumed. Omit or use 0 for buffered output."),
+            optional_integer("stderr_since_seq", "Last stderr sequence already consumed. Omit or use 0 for buffered output."),
+            optional_integer("max_bytes", "Maximum bytes to return from each stream."),
+        ])),
+        tool("job_wait", "Wait for a background job to finish without repeated client polling, then return its status and incremental output. The wait window defaults to 60 seconds and is capped at 120 seconds.", object_schema(vec![
+            required_string("job_id", "Job id returned by exec_start."),
+            optional_integer("wait_timeout_ms", "Maximum time to wait in this call. Defaults to 60000 ms and is capped at 120000 ms."),
             optional_integer("stdout_since_seq", "Last stdout sequence already consumed. Omit or use 0 for buffered output."),
             optional_integer("stderr_since_seq", "Last stderr sequence already consumed. Omit or use 0 for buffered output."),
             optional_integer("max_bytes", "Maximum bytes to return from each stream."),
@@ -284,6 +291,7 @@ fn tool_annotations(name: &str) -> Value {
             | "mcp_tools_list"
             | "job_poll"
             | "job_output"
+            | "job_wait"
             | "exec_stream"
             | "result_read"
             | "file_read"
@@ -664,7 +672,7 @@ mod tests {
         let tools = list_tools(None);
         let tools = tools.as_array().expect("tool list is an array");
 
-        assert_eq!(tools.len(), 34);
+        assert_eq!(tools.len(), 35);
         for tool in tools {
             let name = tool["name"].as_str().expect("tool has a name");
             assert_eq!(

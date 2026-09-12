@@ -187,6 +187,29 @@ pub(super) fn output_schema(name: &str) -> Value {
             "required": ["job_id", "target", "status", "elapsed_ms", "timed_out", "stdout_from_seq", "stdout_next_seq", "stdout", "stdout_truncated", "stderr_from_seq", "stderr_next_seq", "stderr", "stderr_truncated", "eof"],
             "additionalProperties": false
         }),
+        "job_wait" => json!({
+            "type": "object",
+            "properties": {
+                "job_id": { "type": "string" },
+                "target": { "type": "string" },
+                "status": { "type": "string", "enum": ["running", "completed", "failed", "cancelled", "timed_out"] },
+                "exit_code": nullable_integer_schema(),
+                "elapsed_ms": { "type": "integer", "minimum": 0 },
+                "timed_out": { "type": "boolean" },
+                "stdout_from_seq": { "type": "integer", "minimum": 0 },
+                "stdout_next_seq": { "type": "integer", "minimum": 0 },
+                "stdout": { "type": "string" },
+                "stdout_truncated": { "type": "boolean" },
+                "stderr_from_seq": { "type": "integer", "minimum": 0 },
+                "stderr_next_seq": { "type": "integer", "minimum": 0 },
+                "stderr": { "type": "string" },
+                "stderr_truncated": { "type": "boolean" },
+                "eof": { "type": "boolean" },
+                "wait_timed_out": { "type": "boolean" }
+            },
+            "required": ["job_id", "target", "status", "elapsed_ms", "timed_out", "stdout_from_seq", "stdout_next_seq", "stdout", "stdout_truncated", "stderr_from_seq", "stderr_next_seq", "stderr", "stderr_truncated", "eof", "wait_timed_out"],
+            "additionalProperties": false
+        }),
         "job_cancel" => json!({
             "type": "object",
             "properties": {

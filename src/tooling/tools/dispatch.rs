@@ -15,7 +15,8 @@ use crate::{
             FileWriteRequest,
         },
         job::{
-            ExecStartRequest, ExecStreamRequest, JobCancelRequest, JobOutputRequest, JobPollRequest,
+            ExecStartRequest, ExecStreamRequest, JobCancelRequest, JobOutputRequest,
+            JobPollRequest, JobWaitRequest,
         },
         mcp_client,
         terminal::{
@@ -98,6 +99,13 @@ pub fn call_tool_with_request_id(
         "job_output" => {
             Ok(serde_json::to_value(state.jobs.output(parse::<
                 JobOutputRequest,
+            >(
+                args
+            )?)?)?)
+        }
+        "job_wait" => {
+            Ok(serde_json::to_value(state.jobs.wait(parse::<
+                JobWaitRequest,
             >(
                 args
             )?)?)?)

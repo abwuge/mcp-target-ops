@@ -307,14 +307,14 @@ URL 或秘密值。高级部署仍可使用内联 URL 或文件秘密引用，�
 
 ## 工具列表
 
-Target Ops 当前发布 34 个工具描述：32 个模型可见工具，以及 2 个仅供 App 使用的 `exec_stream` 与 `result_read`。
+Target Ops 当前发布 35 个工具描述：33 个模型可见工具，以及 2 个仅供 App 使用的 `exec_stream` 与 `result_read`。
 
 | 类别 | 工具 |
 | --- | --- |
 | 服务 | `server_info` |
 | 目标 | `target_list`、`target_current`、`target_select`、`target_connect`、`target_disconnect` |
 | 下游 MCP | `mcp_server_list`、`mcp_tools_list`、`mcp_tool_call` |
-| 命令与任务 | `exec`、`exec_batch`、`exec_start`、`job_poll`、`job_output`、`job_cancel`；仅 App：`exec_stream`、`result_read` |
+| 命令与任务 | `exec`、`exec_batch`、`exec_start`、`job_poll`、`job_output`、`job_wait`、`job_cancel`；仅 App：`exec_stream`、`result_read` |
 | 文件与目录 | `file_read`、`file_list`、`file_find`、`file_edit`、`file_write`、`file_delete`、`file_import`、`file_export`、`file_patch`、`file_move`、`file_chmod`、`directory_create` |
 | 终端 | `terminal_open`、`terminal_send`、`terminal_read`、`terminal_resize`、`terminal_close` |
 
@@ -338,6 +338,8 @@ scope。
 依赖的检查，应优先使用 `exec_batch`，而不是用 shell 分隔符强行拼接。
 
 `exec`、`exec_batch` 与 `exec_start` 都绑定到稳定的 `ui://target-ops/exec-terminal/v1.html` MCP App。同步 `exec` 保持为短命令路径并正常等待最终结果；预计运行超过几秒，或实时输出有价值时，应优先使用 `exec_start`。它会立即返回 job id，因此 App 可以在主工具调用结束后约每 180 ms 调用一次 `job_output` 获取 stdout/stderr 增量，不会再被同步父调用阻塞。ANSI SGR 颜色/样式会被安全渲染。
+
+对于模型侧只需要“等后台命令结束后再继续”的工作流，应优先使用 `job_wait`，而不是反复调用 `job_poll` 或 `job_output`。`job_wait` 默认在服务端等待最多 60 秒（单次可配置，最高 120 秒），随后一次返回当前任务状态、stdout/stderr 增量以及 `wait_timed_out`。
 
 所有 Target Ops App 使用统一的结果卡生命周期：成功卡约 3 秒后自动折叠；失败、超时或类似 warning 的卡片也会自动折叠，只是延迟稍长，约 6 秒，因为这类异常通常会被模型自己继续处理。约 30 秒后卡片进入 sleep，清空完整输出、diff、代码行和 ANSI DOM，只保留轻量摘要。静态工具结果缓存在 `runtime_dir/results/` 下，TTL 为 1 小时，总容量上限 100 MiB；用户重新展开时由仅 App 可见的 `result_read` 按每个结果独立生成的不可预测 `result_id` 恢复。长命令卡则从保留的 job output buffer 重新构造。当前不自动请求 iframe teardown，因此历史卡片仍可重新打开。
 

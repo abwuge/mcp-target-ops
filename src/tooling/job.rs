@@ -77,6 +77,19 @@ pub struct JobOutputRequest {
     pub max_bytes: Option<usize>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct JobWaitRequest {
+    pub job_id: String,
+    #[serde(default)]
+    pub wait_timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub stdout_since_seq: Option<u64>,
+    #[serde(default)]
+    pub stderr_since_seq: Option<u64>,
+    #[serde(default)]
+    pub max_bytes: Option<usize>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct JobOutputResponse {
     pub job_id: String,
@@ -95,6 +108,13 @@ pub struct JobOutputResponse {
     pub stderr: String,
     pub stderr_truncated: bool,
     pub eof: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct JobWaitResponse {
+    #[serde(flatten)]
+    pub output: JobOutputResponse,
+    pub wait_timed_out: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -312,6 +332,23 @@ impl JobRegistry {
             stderr: String::from_utf8_lossy(&delta.stderr).to_string(),
             stderr_truncated: delta.stderr_truncated,
             eof: delta.eof,
+        })
+    }
+
+    pub fn wait(&self, req: JobWaitRequest) -> Result<JobWaitResponse> {
+        let session = self.get(&req.job_id)?;
+        let wait_timeout =
+            Duration::from_millis(req.wait_timeout_ms.unwrap_or(60_000).min(120_000));
+        let completed = session.wait_for_eof(Some(wait_timeout));
+        let output = self.output(JobOutputRequest {
+            job_id: req.job_id,
+            stdout_since_seq: req.stdout_since_seq,
+            stderr_since_seq: req.stderr_since_seq,
+            max_bytes: req.max_bytes,
+        })?;
+        Ok(JobWaitResponse {
+            wait_timed_out: !completed && !output.eof,
+            output,
         })
     }
 
@@ -693,5 +730,80 @@ mod tests {
             .unwrap();
         assert_eq!(output.stdout, "onetwo");
         assert!(output.eof);
+    }
+
+    #[test]
+    fn job_wait_blocks_until_completion_and_returns_output() {
+        let state = test_state();
+        let started = state
+            .jobs
+            .start(
+                &state,
+                ExecStartRequest {
+                    target: Some("local".into()),
+                    command: "sleep 0.05; printf waited".into(),
+                    cwd: None,
+                    timeout_ms: Some(1000),
+                    max_output_bytes: None,
+                    secret_env: BTreeMap::new(),
+                },
+            )
+            .unwrap();
+        let waited = state
+            .jobs
+            .wait(JobWaitRequest {
+                job_id: started.job_id,
+                wait_timeout_ms: Some(1000),
+                stdout_since_seq: None,
+                stderr_since_seq: None,
+                max_bytes: None,
+            })
+            .unwrap();
+        assert!(!waited.wait_timed_out);
+        assert!(waited.output.eof);
+        assert_eq!(waited.output.status, "completed");
+        assert_eq!(waited.output.stdout, "waited");
+    }
+
+    #[test]
+    fn job_wait_can_return_when_wait_window_expires() {
+        let state = test_state();
+        let started = state
+            .jobs
+            .start(
+                &state,
+                ExecStartRequest {
+                    target: Some("local".into()),
+                    command: "sleep 0.2; printf done".into(),
+                    cwd: None,
+                    timeout_ms: Some(1000),
+                    max_output_bytes: None,
+                    secret_env: BTreeMap::new(),
+                },
+            )
+            .unwrap();
+        let waited = state
+            .jobs
+            .wait(JobWaitRequest {
+                job_id: started.job_id.clone(),
+                wait_timeout_ms: Some(20),
+                stdout_since_seq: None,
+                stderr_since_seq: None,
+                max_bytes: None,
+            })
+            .unwrap();
+        assert!(waited.wait_timed_out);
+        assert_eq!(waited.output.status, "running");
+        assert!(!waited.output.eof);
+        state
+            .jobs
+            .wait(JobWaitRequest {
+                job_id: started.job_id,
+                wait_timeout_ms: Some(1000),
+                stdout_since_seq: None,
+                stderr_since_seq: None,
+                max_bytes: None,
+            })
+            .unwrap();
     }
 }

@@ -10,7 +10,7 @@ use std::{
     process::{Child, Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
     },
     thread,
     time::{Duration, Instant},
@@ -30,6 +30,7 @@ pub struct CommandSession {
     stderr_eof: Arc<AtomicBool>,
     status: Arc<Mutex<CommandStatus>>,
     cancel_requested: Arc<AtomicBool>,
+    event: SessionEvent,
 }
 
 struct CommandStatus {
@@ -38,6 +39,8 @@ struct CommandStatus {
     exit_code: Option<i32>,
     timed_out: bool,
 }
+
+type SessionEvent = Arc<(Mutex<u64>, Condvar)>;
 
 struct CaptureBuffer {
     bytes: Mutex<Vec<u8>>,
@@ -94,8 +97,6 @@ pub struct CommandSnapshot {
     pub stdout_truncated: bool,
     pub stderr_truncated: bool,
     pub timed_out: bool,
-    pub finished: bool,
-    pub eof: bool,
 }
 
 #[derive(Debug)]
@@ -141,17 +142,20 @@ impl CommandSession {
         let stderr_capture = Arc::new(CaptureBuffer::new(max_output));
         let stdout_eof = Arc::new(AtomicBool::new(false));
         let stderr_eof = Arc::new(AtomicBool::new(false));
+        let event = Arc::new((Mutex::new(0), Condvar::new()));
         spawn_reader(
             stdout_pipe,
             Arc::clone(&stdout),
             Arc::clone(&stdout_capture),
             Arc::clone(&stdout_eof),
+            Arc::clone(&event),
         );
         spawn_reader(
             stderr_pipe,
             Arc::clone(&stderr),
             Arc::clone(&stderr_capture),
             Arc::clone(&stderr_eof),
+            Arc::clone(&event),
         );
 
         let status = Arc::new(Mutex::new(CommandStatus {
@@ -161,7 +165,12 @@ impl CommandSession {
             timed_out: false,
         }));
         let cancel_requested = Arc::new(AtomicBool::new(false));
-        spawn_monitor(Arc::clone(&child), Arc::clone(&status), timeout);
+        spawn_monitor(
+            Arc::clone(&child),
+            Arc::clone(&status),
+            timeout,
+            Arc::clone(&event),
+        );
 
         Ok(Arc::new(Self {
             target,
@@ -174,16 +183,42 @@ impl CommandSession {
             stderr_eof,
             status,
             cancel_requested,
+            event,
         }))
     }
 
     pub fn wait(&self) -> CommandSnapshot {
+        self.wait_for_eof(None);
+        self.snapshot()
+    }
+
+    pub fn wait_for_eof(&self, timeout: Option<Duration>) -> bool {
+        let deadline = timeout.and_then(|duration| Instant::now().checked_add(duration));
+        let (generation, event) = &*self.event;
+        let mut observed = generation.lock().unwrap();
         loop {
-            let snapshot = self.snapshot();
-            if snapshot.finished && snapshot.eof {
-                return snapshot;
+            if self.status_snapshot().eof {
+                return true;
             }
-            thread::sleep(Duration::from_millis(10));
+            let current = *observed;
+            if let Some(deadline) = deadline {
+                let now = Instant::now();
+                if now >= deadline {
+                    return false;
+                }
+                let remaining = deadline.saturating_duration_since(now);
+                let (next, result) = event
+                    .wait_timeout_while(observed, remaining, |generation| *generation == current)
+                    .unwrap();
+                observed = next;
+                if result.timed_out() && *observed == current && !self.status_snapshot().eof {
+                    return false;
+                }
+            } else {
+                observed = event
+                    .wait_while(observed, |generation| *generation == current)
+                    .unwrap();
+            }
         }
     }
 
@@ -217,8 +252,6 @@ impl CommandSession {
             stdout_truncated,
             stderr_truncated,
             timed_out: status.timed_out,
-            finished: status.finished,
-            eof: status.eof,
         }
     }
 
@@ -278,6 +311,7 @@ fn spawn_reader(
     buffer: Arc<RingBuffer>,
     capture: Arc<CaptureBuffer>,
     eof: Arc<AtomicBool>,
+    event: SessionEvent,
 ) {
     thread::spawn(move || {
         let mut scratch = [0_u8; 8192];
@@ -287,11 +321,13 @@ fn spawn_reader(
                 Ok(n) => {
                     buffer.push(&scratch[..n]);
                     capture.push(&scratch[..n]);
+                    notify_event(&event);
                 }
                 Err(_) => break,
             }
         }
         eof.store(true, Ordering::Release);
+        notify_event(&event);
     });
 }
 
@@ -299,6 +335,7 @@ fn spawn_monitor(
     child: Arc<Mutex<Child>>,
     status: Arc<Mutex<CommandStatus>>,
     timeout: Option<Duration>,
+    event: SessionEvent,
 ) {
     thread::spawn(move || loop {
         let maybe_status = {
@@ -307,14 +344,18 @@ fn spawn_monitor(
         };
         match maybe_status {
             Ok(Some(exit)) => {
-                let mut status = status.lock().unwrap();
-                status.exit_code = exit.code();
-                status.finished = Some(Instant::now());
+                {
+                    let mut status = status.lock().unwrap();
+                    status.exit_code = exit.code();
+                    status.finished = Some(Instant::now());
+                }
+                notify_event(&event);
                 break;
             }
             Ok(None) => {}
             Err(_) => {
                 status.lock().unwrap().finished = Some(Instant::now());
+                notify_event(&event);
                 break;
             }
         }
@@ -327,15 +368,25 @@ fn spawn_monitor(
             let mut child = child.lock().unwrap();
             let _ = terminate_process_group(&mut child);
             let exit = child.wait().ok();
-            let mut status = status.lock().unwrap();
-            status.exit_code = exit.and_then(|status| status.code());
-            status.timed_out = true;
-            status.finished = Some(Instant::now());
+            {
+                let mut status = status.lock().unwrap();
+                status.exit_code = exit.and_then(|status| status.code());
+                status.timed_out = true;
+                status.finished = Some(Instant::now());
+            }
+            notify_event(&event);
             break;
         }
 
         thread::sleep(Duration::from_millis(20));
     });
+}
+
+fn notify_event(event: &SessionEvent) {
+    let (generation, condvar) = &**event;
+    let mut generation = generation.lock().unwrap();
+    *generation = generation.wrapping_add(1);
+    condvar.notify_all();
 }
 
 fn configure_process_group(command: &mut Command) {
@@ -394,7 +445,7 @@ mod tests {
         .unwrap();
         let snapshot = session.wait();
         assert!(snapshot.timed_out);
-        assert!(snapshot.eof);
+        assert!(session.status_snapshot().eof);
         assert!(started.elapsed() < Duration::from_millis(700));
     }
 
