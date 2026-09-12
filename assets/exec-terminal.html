@@ -5,104 +5,254 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 :root {
-  color-scheme: dark;
-  font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  --bg: #0d1117;
-  --panel: #161b22;
-  --panel-2: #0d1117;
-  --border: #30363d;
-  --text: #e6edf3;
-  --muted: #8b949e;
-  --green: #3fb950;
-  --red: #f85149;
-  --yellow: #d29922;
-  --blue: #58a6ff;
+  color-scheme: light dark;
+  font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --bg: #ffffff;
+  --surface: #f6f8fa;
+  --code-bg: #f6f8fa;
+  --border: #d0d7de;
+  --text: #1f2328;
+  --muted: #656d76;
+  --success: #1a7f37;
+  --error: #cf222e;
+  --warning: #9a6700;
+  --accent: #0969da;
+  --ansi-black: #24292f;
+  --ansi-red: #cf222e;
+  --ansi-green: #1a7f37;
+  --ansi-yellow: #9a6700;
+  --ansi-blue: #0969da;
+  --ansi-magenta: #8250df;
+  --ansi-cyan: #1b7c83;
+  --ansi-white: #d0d7de;
+  --ansi-bright-black: #57606a;
+  --ansi-bright-red: #a40e26;
+  --ansi-bright-green: #2da44e;
+  --ansi-bright-yellow: #bf8700;
+  --ansi-bright-blue: #218bff;
+  --ansi-bright-magenta: #a475f9;
+  --ansi-bright-cyan: #3192aa;
+  --ansi-bright-white: #f6f8fa;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --code-bg: #0d1117;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --success: #3fb950;
+    --error: #ff7b72;
+    --warning: #d29922;
+    --accent: #58a6ff;
+    --ansi-black: #484f58;
+    --ansi-red: #ff7b72;
+    --ansi-green: #3fb950;
+    --ansi-yellow: #d29922;
+    --ansi-blue: #58a6ff;
+    --ansi-magenta: #bc8cff;
+    --ansi-cyan: #39c5cf;
+    --ansi-white: #b1bac4;
+    --ansi-bright-black: #6e7681;
+    --ansi-bright-red: #ffa198;
+    --ansi-bright-green: #56d364;
+    --ansi-bright-yellow: #e3b341;
+    --ansi-bright-blue: #79c0ff;
+    --ansi-bright-magenta: #d2a8ff;
+    --ansi-bright-cyan: #56d4dd;
+    --ansi-bright-white: #f0f6fc;
+  }
 }
 * { box-sizing: border-box; }
-body { margin: 0; padding: 10px; background: transparent; color: var(--text); }
-.terminal { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--bg); box-shadow: 0 8px 24px rgb(0 0 0 / .12); }
-.titlebar { min-height: 38px; display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; padding: 0 12px; border-bottom: 1px solid var(--border); background: var(--panel); }
-.lights { display: flex; gap: 6px; }
-.light { width: 10px; height: 10px; border-radius: 50%; background: #484f58; }
-.light.red { background: #ff5f56; }
-.light.yellow { background: #ffbd2e; }
-.light.green { background: #27c93f; }
-.title { min-width: 0; text-align: center; color: var(--muted); font: 11px/1.2 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.badge { justify-self: end; border: 1px solid var(--border); border-radius: 999px; padding: 2px 7px; color: var(--muted); font: 10px/1.4 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-.badge.ok { color: var(--green); border-color: color-mix(in srgb, var(--green) 45%, var(--border)); }
-.badge.error { color: var(--red); border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
-.badge.timeout { color: var(--yellow); border-color: color-mix(in srgb, var(--yellow) 45%, var(--border)); }
-.screen { min-height: 70px; max-height: 520px; overflow: auto; padding: 12px 14px; scrollbar-color: #484f58 transparent; }
-.prompt { display: flex; gap: 7px; align-items: baseline; margin-bottom: 8px; color: var(--muted); user-select: none; }
-.prompt .symbol { color: var(--green); font-weight: 700; }
-.prompt .target { color: var(--blue); }
-.stream { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
-.stream.stdout { color: var(--text); }
-.stream.stderr { color: #ff7b72; }
-.stream + .stream { margin-top: 8px; }
+body { margin: 0; padding: 8px; background: transparent; color: var(--text); }
+.result { overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); }
+.header { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; padding: 9px 12px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.heading { min-width: 0; margin-right: auto; }
+.title { font-weight: 650; line-height: 1.25; }
+.subtitle { margin-top: 1px; color: var(--muted); font-size: 11px; }
+.chip { border: 1px solid var(--border); border-radius: 999px; padding: 2px 7px; color: var(--muted); font-size: 10px; line-height: 1.4; white-space: nowrap; }
+.chip.ok { color: var(--success); }
+.chip.error { color: var(--error); }
+.chip.timeout { color: var(--warning); }
+.section { padding: 10px 12px; }
+.section + .section { border-top: 1px solid var(--border); }
+.label { margin-bottom: 5px; color: var(--muted); font-size: 10px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; }
+pre { margin: 0; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
+.command { max-height: 140px; overflow: auto; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--code-bg); }
+.output { max-height: 430px; overflow: auto; }
+.stderr-section .label { color: var(--error); }
 .empty { color: var(--muted); font-style: italic; }
-.notice { margin-top: 9px; padding-top: 9px; border-top: 1px dashed var(--border); color: var(--yellow); }
-.footer { display: flex; flex-wrap: wrap; gap: 8px 14px; padding: 7px 12px; border-top: 1px solid var(--border); background: var(--panel); color: var(--muted); font: 10px/1.4 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-.footer span { white-space: nowrap; }
+.notice { padding: 8px 12px; border-top: 1px solid var(--border); color: var(--warning); background: var(--surface); font-size: 11px; }
 @media (max-width: 520px) {
-  body { padding: 6px; }
-  .titlebar { grid-template-columns: auto 1fr; }
-  .badge { grid-column: 1 / -1; justify-self: start; margin-bottom: 7px; }
-  .title { text-align: right; }
-  .screen { max-height: 420px; padding: 11px 12px; }
-}
-@media (prefers-reduced-motion: reduce) {
-  * { scroll-behavior: auto !important; }
+  body { padding: 5px; }
+  .header, .section, .notice { padding-left: 10px; padding-right: 10px; }
+  .output { max-height: 360px; }
 }
 </style>
 </head>
 <body>
-<div class="terminal">
-  <div class="titlebar">
-    <div class="lights" aria-hidden="true"><span class="light red"></span><span class="light yellow"></span><span class="light green"></span></div>
-    <div class="title" id="title">Target Ops · exec</div>
-    <div class="badge" id="status">waiting</div>
+<div class="result">
+  <div class="header">
+    <div class="heading">
+      <div class="title">Command result</div>
+      <div class="subtitle">Non-interactive execution</div>
+    </div>
+    <div class="chip" id="target">target</div>
+    <div class="chip" id="status">waiting</div>
   </div>
-  <div class="screen" id="screen">
-    <div class="prompt"><span class="symbol">$</span><span class="target" id="target">target</span><span id="command">exec</span></div>
-    <pre class="stream empty" id="empty">Waiting for command output…</pre>
-    <pre class="stream stdout" id="stdout"></pre>
-    <pre class="stream stderr" id="stderr"></pre>
-    <div class="notice" id="notice" hidden></div>
+
+  <div class="section">
+    <div class="label">Command</div>
+    <pre class="command" id="command">Waiting for command…</pre>
   </div>
-  <div class="footer" id="footer"></div>
+
+  <div class="section" id="stdoutSection" hidden>
+    <div class="label">stdout</div>
+    <pre class="output" id="stdout"></pre>
+  </div>
+
+  <div class="section stderr-section" id="stderrSection" hidden>
+    <div class="label">stderr</div>
+    <pre class="output" id="stderr"></pre>
+  </div>
+
+  <div class="section" id="emptySection">
+    <pre class="empty" id="empty">Waiting for command output…</pre>
+  </div>
+
+  <div class="notice" id="notice" hidden></div>
 </div>
 <script>
 (() => {
-  const title = document.getElementById('title');
-  const status = document.getElementById('status');
   const target = document.getElementById('target');
+  const status = document.getElementById('status');
   const command = document.getElementById('command');
   const stdout = document.getElementById('stdout');
   const stderr = document.getElementById('stderr');
+  const stdoutSection = document.getElementById('stdoutSection');
+  const stderrSection = document.getElementById('stderrSection');
+  const emptySection = document.getElementById('emptySection');
   const empty = document.getElementById('empty');
   const notice = document.getElementById('notice');
-  const footer = document.getElementById('footer');
-  const screen = document.getElementById('screen');
+
+  const normalColors = [
+    'var(--ansi-black)', 'var(--ansi-red)', 'var(--ansi-green)', 'var(--ansi-yellow)',
+    'var(--ansi-blue)', 'var(--ansi-magenta)', 'var(--ansi-cyan)', 'var(--ansi-white)'
+  ];
+  const brightColors = [
+    'var(--ansi-bright-black)', 'var(--ansi-bright-red)', 'var(--ansi-bright-green)', 'var(--ansi-bright-yellow)',
+    'var(--ansi-bright-blue)', 'var(--ansi-bright-magenta)', 'var(--ansi-bright-cyan)', 'var(--ansi-bright-white)'
+  ];
+
+  function freshAnsiState() {
+    return { bold: false, dim: false, italic: false, underline: false, inverse: false, fg: null, bg: null };
+  }
+
+  function xtermColor(index) {
+    if (!Number.isInteger(index) || index < 0 || index > 255) return null;
+    if (index < 8) return normalColors[index];
+    if (index < 16) return brightColors[index - 8];
+    if (index >= 232) {
+      const level = 8 + (index - 232) * 10;
+      return `rgb(${level} ${level} ${level})`;
+    }
+    const n = index - 16;
+    const component = value => value === 0 ? 0 : 55 + value * 40;
+    const r = component(Math.floor(n / 36));
+    const g = component(Math.floor((n % 36) / 6));
+    const b = component(n % 6);
+    return `rgb(${r} ${g} ${b})`;
+  }
+
+  function applySgr(state, rawCodes) {
+    const codes = rawCodes === '' ? [0] : rawCodes.split(';').map(value => Number(value || 0));
+    for (let i = 0; i < codes.length; i += 1) {
+      const code = codes[i];
+      if (code === 0) Object.assign(state, freshAnsiState());
+      else if (code === 1) state.bold = true;
+      else if (code === 2) state.dim = true;
+      else if (code === 3) state.italic = true;
+      else if (code === 4) state.underline = true;
+      else if (code === 7) state.inverse = true;
+      else if (code === 22) { state.bold = false; state.dim = false; }
+      else if (code === 23) state.italic = false;
+      else if (code === 24) state.underline = false;
+      else if (code === 27) state.inverse = false;
+      else if (code >= 30 && code <= 37) state.fg = normalColors[code - 30];
+      else if (code === 39) state.fg = null;
+      else if (code >= 40 && code <= 47) state.bg = normalColors[code - 40];
+      else if (code === 49) state.bg = null;
+      else if (code >= 90 && code <= 97) state.fg = brightColors[code - 90];
+      else if (code >= 100 && code <= 107) state.bg = brightColors[code - 100];
+      else if ((code === 38 || code === 48) && codes[i + 1] === 5 && Number.isInteger(codes[i + 2])) {
+        const color = xtermColor(codes[i + 2]);
+        if (code === 38) state.fg = color;
+        else state.bg = color;
+        i += 2;
+      } else if ((code === 38 || code === 48) && codes[i + 1] === 2 && codes.slice(i + 2, i + 5).every(Number.isInteger)) {
+        const [r, g, b] = codes.slice(i + 2, i + 5).map(value => Math.max(0, Math.min(255, value)));
+        const color = `rgb(${r} ${g} ${b})`;
+        if (code === 38) state.fg = color;
+        else state.bg = color;
+        i += 4;
+      }
+    }
+  }
+
+  function stripUnsupportedControls(text) {
+    return text
+      .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, '')
+      .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+      .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
+  }
+
+  function appendStyledText(container, text, state) {
+    if (!text) return;
+    const cleaned = stripUnsupportedControls(text);
+    if (!cleaned) return;
+    const span = document.createElement('span');
+    span.textContent = cleaned;
+    const fg = state.inverse ? state.bg : state.fg;
+    const bg = state.inverse ? state.fg : state.bg;
+    if (fg) span.style.color = fg;
+    if (bg) span.style.backgroundColor = bg;
+    if (state.bold) span.style.fontWeight = '700';
+    if (state.dim) span.style.opacity = '.72';
+    if (state.italic) span.style.fontStyle = 'italic';
+    if (state.underline) span.style.textDecoration = 'underline';
+    container.appendChild(span);
+  }
+
+  function renderAnsi(container, text) {
+    container.replaceChildren();
+    const state = freshAnsiState();
+    const sgr = /\x1b\[([0-9;]*)m/g;
+    let cursor = 0;
+    let match;
+    while ((match = sgr.exec(text)) !== null) {
+      appendStyledText(container, text.slice(cursor, match.index), state);
+      applySgr(state, match[1]);
+      cursor = sgr.lastIndex;
+    }
+    appendStyledText(container, text.slice(cursor), state);
+  }
 
   function render(raw, toolInput) {
     const data = raw && typeof raw === 'object' ? raw : {};
     const resolvedTarget = data.resolved_target?.target || data.target || 'target';
-    const source = data.resolved_target?.source;
     const exitCode = data.exit_code;
     const timedOut = data.timed_out === true;
     const stdoutText = typeof data.stdout === 'string' ? data.stdout : '';
     const stderrText = typeof data.stderr === 'string' ? data.stderr : '';
+    const commandText = typeof toolInput?.command === 'string' && toolInput.command
+      ? toolInput.command
+      : 'Command unavailable';
 
     target.textContent = resolvedTarget;
-    command.textContent = typeof toolInput?.command === 'string' && toolInput.command ? toolInput.command : 'exec';
-    title.textContent = `Target Ops · ${resolvedTarget}`;
-    stdout.textContent = stdoutText;
-    stderr.textContent = stderrText;
-    empty.hidden = Boolean(stdoutText || stderrText);
-    if (!stdoutText && !stderrText) empty.textContent = 'Command completed without output.';
+    command.textContent = commandText;
 
-    status.className = 'badge';
+    status.className = 'chip';
     if (timedOut) {
       status.textContent = 'timed out';
       status.classList.add('timeout');
@@ -116,25 +266,19 @@ body { margin: 0; padding: 10px; background: transparent; color: var(--text); }
       status.textContent = 'finished';
     }
 
+    stdoutSection.hidden = !stdoutText;
+    stderrSection.hidden = !stderrText;
+    emptySection.hidden = Boolean(stdoutText || stderrText);
+    if (!stdoutText && !stderrText) empty.textContent = 'Command completed without output.';
+    renderAnsi(stdout, stdoutText);
+    renderAnsi(stderr, stderrText);
+
     const notices = [];
     if (data.stdout_truncated) notices.push('stdout was truncated');
     if (data.stderr_truncated) notices.push('stderr was truncated');
     if (timedOut) notices.push('command exceeded its timeout');
     notice.hidden = notices.length === 0;
     notice.textContent = notices.join(' · ');
-
-    const meta = [];
-    meta.push(`<span>target: ${escapeHtml(resolvedTarget)}</span>`);
-    if (source) meta.push(`<span>source: ${escapeHtml(source)}</span>`);
-    if (typeof exitCode === 'number') meta.push(`<span>exit: ${exitCode}</span>`);
-    if (data.stdout_truncated) meta.push('<span>stdout: truncated</span>');
-    if (data.stderr_truncated) meta.push('<span>stderr: truncated</span>');
-    footer.innerHTML = meta.join('');
-    screen.scrollTop = screen.scrollHeight;
-  }
-
-  function escapeHtml(value) {
-    return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
   }
 
   let rpcId = 0;
@@ -164,7 +308,7 @@ body { margin: 0; padding: 10px; background: transparent; color: var(--text); }
 
   async function initializeBridge() {
     await rpcRequest('ui/initialize', {
-      appInfo: { name: 'target-ops-exec-terminal', version: '1.0.0' },
+      appInfo: { name: 'target-ops-exec-result', version: '1.1.0' },
       appCapabilities: {},
       protocolVersion: '2026-01-26',
     });

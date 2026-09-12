@@ -536,7 +536,7 @@ mod tests {
     }
 
     #[test]
-    fn exec_binds_terminal_style_app_resource() {
+    fn exec_binds_command_result_app_resource() {
         let tools = list_tools(None);
         let exec = tools
             .as_array()

@@ -19,10 +19,10 @@ struct AppResource {
 const RESOURCES: [AppResource; 2] = [
     AppResource {
         uri: EXEC_TERMINAL_UI_URI,
-        name: "target-ops-exec-terminal",
-        title: "Target Ops command output",
-        description: "Terminal-style view of Target Ops exec results.",
-        widget_description: "Shows command output in a compact terminal-style view with stdout, stderr, exit status, target, timeout, and truncation state.",
+        name: "target-ops-exec-result",
+        title: "Target Ops command result",
+        description: "Non-interactive view of Target Ops exec results.",
+        widget_description: "Shows the executed command, ANSI-styled stdout and stderr, target, exit status, timeout, and truncation state without implying an interactive terminal.",
         html: EXEC_TERMINAL_UI_HTML,
         prefers_border: false,
     },
@@ -103,16 +103,16 @@ mod tests {
         let resources = listed["resources"].as_array().expect("resources array");
         assert_eq!(resources.len(), 2);
 
-        let terminal = resources
+        let exec_result = resources
             .iter()
             .find(|resource| resource["uri"] == EXEC_TERMINAL_UI_URI)
-            .expect("terminal resource");
-        assert_eq!(terminal["mimeType"], MCP_APP_MIME_TYPE);
-        assert_eq!(terminal["_meta"]["ui"]["prefersBorder"], false);
-        assert_eq!(terminal["_meta"]["openai/widgetPrefersBorder"], false);
-        assert_eq!(terminal["_meta"]["ui"]["domain"], widget_domain);
-        assert_eq!(terminal["_meta"]["ui"]["csp"]["connectDomains"], json!([]));
-        assert_eq!(terminal["_meta"]["ui"]["csp"]["resourceDomains"], json!([]));
+            .expect("exec result resource");
+        assert_eq!(exec_result["mimeType"], MCP_APP_MIME_TYPE);
+        assert_eq!(exec_result["_meta"]["ui"]["prefersBorder"], false);
+        assert_eq!(exec_result["_meta"]["openai/widgetPrefersBorder"], false);
+        assert_eq!(exec_result["_meta"]["ui"]["domain"], widget_domain);
+        assert_eq!(exec_result["_meta"]["ui"]["csp"]["connectDomains"], json!([]));
+        assert_eq!(exec_result["_meta"]["ui"]["csp"]["resourceDomains"], json!([]));
 
         let file_change = resources
             .iter()
@@ -125,15 +125,18 @@ mod tests {
     }
 
     #[test]
-    fn reads_exec_terminal_resource() {
+    fn reads_exec_result_resource() {
         let read = read_resource(EXEC_TERMINAL_UI_URI, Some("https://mcp.example.com"))
-            .expect("terminal resource exists");
+            .expect("exec result resource exists");
         assert_eq!(read["contents"][0]["mimeType"], MCP_APP_MIME_TYPE);
         let html = read["contents"][0]["text"].as_str().unwrap();
         assert!(html.contains("ui/notifications/tool-result"));
         assert!(html.contains("rpcRequest('ui/initialize'"));
         assert!(html.contains("ui/notifications/initialized"));
-        assert!(html.contains("appInfo: { name: 'target-ops-exec-terminal'"));
+        assert!(html.contains("appInfo: { name: 'target-ops-exec-result'"));
+        assert!(html.contains("Command result"));
+        assert!(html.contains("Non-interactive execution"));
+        assert!(html.contains("renderAnsi"));
         assert!(html.contains("stdout_truncated"));
         assert!(html.contains("stderr_truncated"));
         assert!(html.contains("timed_out"));
