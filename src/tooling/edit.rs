@@ -62,14 +62,7 @@ pub fn apply_text_edits(
 
     let new_sha256 = sha256_hex(current.as_bytes());
     let changed = original != current;
-    let diff = if changed {
-        TextDiff::from_lines(original, &current)
-            .unified_diff()
-            .header("before", "after")
-            .to_string()
-    } else {
-        String::new()
-    };
+    let diff = unified_diff(original, &current);
 
     Ok(EditOutcome {
         changed,
@@ -78,4 +71,15 @@ pub fn apply_text_edits(
         diff,
         text: current,
     })
+}
+
+pub fn unified_diff(original: &str, current: &str) -> String {
+    if original == current {
+        return String::new();
+    }
+
+    TextDiff::from_lines(original, current)
+        .unified_diff()
+        .header("before", "after")
+        .to_string()
 }

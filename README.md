@@ -217,9 +217,17 @@ last read position. `terminal_resize` changes the live PTY size.
 The MCP tool descriptors include standard tool annotations and ChatGPT Apps
 metadata. File-changing tools bind to the MCP App resource
 `ui://target-ops/file-change/v1.html`, served as
-`text/html;profile=mcp-app`. The widget renders the affected target and paths,
-write status, hashes, and a unified diff when one is available. It has no
-external network or asset dependencies.
+`text/html;profile=mcp-app`. The widget is optimized for human review: newly
+created files show their full content, modified UTF-8 files show an editor-style
+inline diff with colored added/removed backgrounds and line-number gutters, and
+`file_delete` shows the complete pre-delete content. Hashes, byte counts, target,
+and encoding are kept in a collapsed Details section. The widget has no external
+network or asset dependencies.
+
+`file_delete` removes one file only (directories are refused), optionally checks
+an expected SHA-256 first, and supports `dry_run=true` to preview the deletion
+without removing anything. The response retains the old content so the UI can
+show exactly what is being deleted.
 
 `file_import` is the attachment-to-target path. Its `file` argument is exposed
 as a binary file parameter and is tagged with `_meta["openai/fileParams"]`.

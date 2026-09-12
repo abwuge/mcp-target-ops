@@ -614,6 +614,35 @@ mv "$src" "$dst" || exit 1
     }
 }
 
+pub fn remove_file(
+    sessions: &SshSessionRegistry,
+    target_name: &str,
+    ssh: &SshTargetConfig,
+    path: &str,
+    timeout: Duration,
+) -> Result<()> {
+    let output = remote_sh(
+        sessions,
+        target_name,
+        ssh,
+        r#"if [ -d "$1" ] && [ ! -L "$1" ]; then
+    printf "%s\n" "refusing to delete a directory: $1" >&2
+    exit 2
+fi
+rm -- "$1""#,
+        &[path],
+        timeout,
+    )?;
+    if output.exit_code == Some(0) {
+        Ok(())
+    } else {
+        Err(Error::Tool(format!(
+            "remote delete failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )))
+    }
+}
+
 pub fn chmod_path(
     sessions: &SshSessionRegistry,
     target_name: &str,

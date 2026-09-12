@@ -10,8 +10,9 @@ use crate::{
         exec::{self, ExecRequest},
         file_bridge::{self, FileExportRequest, FileImportRequest},
         fs::{
-            self, DirectoryCreateRequest, FileChmodRequest, FileEditRequest, FileFindRequest,
-            FileListRequest, FileMoveRequest, FilePatchRequest, FileReadRequest, FileWriteRequest,
+            self, DirectoryCreateRequest, FileChmodRequest, FileDeleteRequest, FileEditRequest,
+            FileFindRequest, FileListRequest, FileMoveRequest, FilePatchRequest, FileReadRequest,
+            FileWriteRequest,
         },
         job::{ExecStartRequest, JobCancelRequest, JobOutputRequest, JobPollRequest},
         mcp_client,
@@ -104,6 +105,7 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
         ])),
         tool("file_edit", "Apply exact text replacements with sha256 compare-and-swap support. Existing file permissions are preserved. Writes require explicit target by default.", file_edit_schema()),
         tool("file_write", "Create or replace a UTF-8 or base64 file atomically. Existing files require overwrite=true or an expected sha256. Writes require explicit target by default.", file_write_schema()),
+        tool("file_delete", "Delete one file after optionally checking its sha256. Returns the deleted content for review. Directories are refused.", file_delete_schema()),
         tool("file_import", "Import a ChatGPT or connector file reference into a target path. Accepts platform-rewritten local paths or HTTPS download URLs and preserves the normal target write policy.", file_import_schema()),
         tool("file_export", "Export one target file as an MCP embedded resource and ChatGPT-compatible file output.", file_export_schema()),
         tool("file_patch", "Apply a unified diff to one UTF-8 file, or a standard multi-file unified diff rooted at path. Single-file mode supports sha256 compare-and-swap; multi-file mode validates all files before writing and rolls back earlier writes if a later write fails.", file_patch_schema()),
@@ -205,6 +207,10 @@ pub fn call_tool(state: Arc<AppState>, name: &str, args: Value) -> Result<Value>
         "file_write" => Ok(serde_json::to_value(fs::write(
             &state,
             parse::<FileWriteRequest>(args)?,
+        )?)?),
+        "file_delete" => Ok(serde_json::to_value(fs::delete(
+            &state,
+            parse::<FileDeleteRequest>(args)?,
         )?)?),
         "file_import" => Ok(serde_json::to_value(file_bridge::import(
             &state,
@@ -406,7 +412,7 @@ fn tool(
 
     if matches!(
         name,
-        "file_edit" | "file_write" | "file_import" | "file_patch" | "file_move"
+        "file_edit" | "file_write" | "file_delete" | "file_import" | "file_patch" | "file_move"
     ) {
         meta.insert(
             "ui".to_string(),
@@ -478,6 +484,7 @@ fn tool_annotations(name: &str) -> Value {
             | "mcp_tool_call"
             | "file_edit"
             | "file_write"
+            | "file_delete"
             | "file_import"
             | "file_patch"
             | "file_move"
@@ -690,9 +697,27 @@ fn output_schema(name: &str) -> Value {
                 "written": { "type": "boolean" },
                 "old_sha256": nullable_string_schema(),
                 "new_sha256": { "type": "string" },
-                "bytes": { "type": "integer", "minimum": 0 }
+                "bytes": { "type": "integer", "minimum": 0 },
+                "encoding": { "type": "string", "enum": ["utf-8", "base64"] },
+                "content": nullable_string_schema(),
+                "diff": { "type": "string" }
             },
-            "required": ["resolved_target", "path", "created", "written", "new_sha256", "bytes"],
+            "required": ["resolved_target", "path", "created", "written", "new_sha256", "bytes", "encoding", "diff"],
+            "additionalProperties": false
+        }),
+        "file_delete" => json!({
+            "type": "object",
+            "properties": {
+                "resolved_target": resolved_target_schema(),
+                "path": { "type": "string" },
+                "deleted": { "type": "boolean" },
+                "written": { "type": "boolean" },
+                "old_sha256": { "type": "string" },
+                "bytes": { "type": "integer", "minimum": 0 },
+                "encoding": { "type": "string", "enum": ["utf-8", "base64"] },
+                "content": { "type": "string" }
+            },
+            "required": ["resolved_target", "path", "deleted", "written", "old_sha256", "bytes", "encoding", "content"],
             "additionalProperties": false
         }),
         "file_import" => json!({
@@ -716,9 +741,12 @@ fn output_schema(name: &str) -> Value {
                 "written": { "type": "boolean" },
                 "old_sha256": nullable_string_schema(),
                 "new_sha256": { "type": "string" },
-                "bytes": { "type": "integer", "minimum": 0 }
+                "bytes": { "type": "integer", "minimum": 0 },
+                "encoding": { "type": "string", "enum": ["utf-8", "base64"] },
+                "content": nullable_string_schema(),
+                "diff": { "type": "string" }
             },
-            "required": ["source", "resolved_target", "path", "created", "written", "new_sha256", "bytes"],
+            "required": ["source", "resolved_target", "path", "created", "written", "new_sha256", "bytes", "encoding", "diff"],
             "additionalProperties": false
         }),
         "file_export" => json!({
@@ -1128,6 +1156,21 @@ fn file_write_schema() -> Value {
     })
 }
 
+fn file_delete_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "target": { "type": "string", "description": "Target id. For writes this is required by default policy." },
+            "path": { "type": "string", "description": "Existing file path to delete." },
+            "expected_sha256": { "type": "string", "description": "Optional CAS guard from file_read." },
+            "dry_run": { "type": "boolean", "description": "Preview the deletion and return existing content without removing the file." },
+            "timeout_ms": { "type": "integer", "description": "Timeout for remote file access." }
+        },
+        "required": ["path"],
+        "additionalProperties": false
+    })
+}
+
 fn file_import_schema() -> Value {
     json!({
         "type": "object",
@@ -1251,7 +1294,7 @@ mod tests {
         let tools = list_tools(None);
         let tools = tools.as_array().expect("tool list is an array");
 
-        assert_eq!(tools.len(), 30);
+        assert_eq!(tools.len(), 31);
         for tool in tools {
             let name = tool["name"].as_str().expect("tool has a name");
             assert_eq!(

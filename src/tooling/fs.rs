@@ -1,4 +1,4 @@
-use super::edit::{apply_text_edits, EditOutcome, TextEdit};
+use super::edit::{apply_text_edits, unified_diff, EditOutcome, TextEdit};
 use crate::{
     core::{
         config::TargetConfig,
@@ -140,6 +140,35 @@ pub struct FileWriteResponse {
     pub old_sha256: Option<String>,
     pub new_sha256: String,
     pub bytes: usize,
+    pub encoding: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    pub diff: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct FileDeleteRequest {
+    #[serde(default)]
+    pub target: Option<String>,
+    pub path: String,
+    #[serde(default)]
+    pub expected_sha256: Option<String>,
+    #[serde(default)]
+    pub dry_run: bool,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FileDeleteResponse {
+    pub resolved_target: ResolvedTarget,
+    pub path: String,
+    pub deleted: bool,
+    pub written: bool,
+    pub old_sha256: String,
+    pub bytes: usize,
+    pub encoding: String,
+    pub content: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -444,6 +473,21 @@ pub fn write(state: &AppState, req: FileWriteRequest) -> Result<FileWriteRespons
     }
 
     let new_sha256 = sha256_hex(&content);
+    let new_text = std::str::from_utf8(&content).ok();
+    let diff = old_bytes
+        .as_deref()
+        .and_then(|bytes| std::str::from_utf8(bytes).ok())
+        .zip(new_text)
+        .map(|(old, new)| unified_diff(old, new))
+        .unwrap_or_default();
+    let (encoding, ui_content) = match new_text {
+        Some(text) => ("utf-8".to_string(), (!exists).then(|| text.to_string())),
+        None => (
+            "base64".to_string(),
+            (!exists).then(|| BASE64.encode(&content)),
+        ),
+    };
+
     write_bytes(state, &target, config, &req.path, &content, mode, timeout)?;
 
     Ok(FileWriteResponse {
@@ -454,6 +498,59 @@ pub fn write(state: &AppState, req: FileWriteRequest) -> Result<FileWriteRespons
         old_sha256,
         new_sha256,
         bytes: content.len(),
+        encoding,
+        content: ui_content,
+        diff,
+    })
+}
+
+pub fn delete(state: &AppState, req: FileDeleteRequest) -> Result<FileDeleteResponse> {
+    let (target, source) = state.resolve_target(req.target.as_deref())?;
+    let config = state.get_target_config(&target)?;
+    policy::check_file(&target, config, &req.path, FileAccess::Write, source)?;
+
+    let timeout = Duration::from_millis(
+        req.timeout_ms
+            .unwrap_or_else(|| policy::target_policy(config).default_timeout_ms),
+    );
+    let bytes = read_bytes(state, &target, config, &req.path, timeout)?;
+    let old_sha256 = sha256_hex(&bytes);
+    if let Some(expected) = req.expected_sha256.as_deref() {
+        if expected != old_sha256 {
+            return Err(Error::Tool(format!(
+                "file changed before delete: expected sha256 {expected}, got {old_sha256}"
+            )));
+        }
+    }
+
+    let (encoding, content) = match String::from_utf8(bytes.clone()) {
+        Ok(text) => ("utf-8".to_string(), text),
+        Err(_) => ("base64".to_string(), BASE64.encode(&bytes)),
+    };
+
+    if !req.dry_run {
+        match (target.clone(), config) {
+            (TargetId::Local, TargetConfig::Local(_)) => fs::remove_file(&req.path)?,
+            (TargetId::Ssh(name), TargetConfig::Ssh(ssh_config)) => {
+                ssh::remove_file(&state.ssh_sessions, &name, ssh_config, &req.path, timeout)?
+            }
+            _ => {
+                return Err(Error::Target(format!(
+                    "target {target} has mismatched config"
+                )))
+            }
+        }
+    }
+
+    Ok(FileDeleteResponse {
+        resolved_target: state.resolved_target_value(target, source),
+        path: req.path,
+        deleted: !req.dry_run,
+        written: !req.dry_run,
+        old_sha256,
+        bytes: bytes.len(),
+        encoding,
+        content,
     })
 }
 
