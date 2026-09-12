@@ -1,12 +1,14 @@
 use crate::core::{
     error::{Error, Result},
     secret::SecretRef,
+    target::TargetId,
 };
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
+    str::FromStr,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -235,18 +237,16 @@ impl Default for PolicyConfig {
 
 impl Config {
     pub fn load(path: Option<PathBuf>) -> Result<Self> {
-        let config = match path {
-            Some(path) => Self::load_from_path(&path),
-            None => {
-                let default_path = default_config_path();
-                if default_path.exists() {
-                    Self::load_from_path(&default_path)
-                } else {
-                    Ok(Config::default())
-                }
-            }
-        }?;
+        if let Some(path) = path {
+            return Self::load_from_path(&path);
+        }
 
+        let default_path = default_config_path();
+        if default_path.exists() {
+            return Self::load_from_path(&default_path);
+        }
+
+        let config = Config::default();
         config.validate()?;
         Ok(config)
     }
@@ -281,6 +281,18 @@ impl Config {
     }
 
     fn validate(&self) -> Result<()> {
+        if self.server.terminal_ring_buffer_bytes == 0 {
+            return Err(Error::Config(
+                "server.terminal_ring_buffer_bytes must be greater than 0".to_string(),
+            ));
+        }
+
+        if self.server.runtime_dir.as_os_str().is_empty() {
+            return Err(Error::Config(
+                "server.runtime_dir must not be empty".to_string(),
+            ));
+        }
+
         if let Some(token) = &self.server.http_bearer_token {
             if token.trim().is_empty() || token.trim() != token {
                 return Err(Error::Config(
@@ -349,6 +361,8 @@ impl Config {
             ));
         }
 
+        self.validate_targets()?;
+
         for (name, mcp) in &self.mcp_servers {
             if name.trim().is_empty() || name.trim() != name {
                 return Err(Error::Config(
@@ -383,6 +397,16 @@ impl Config {
                         "mcp_servers.{name}.secret_target must not be empty or padded with whitespace"
                     )));
                 }
+                let target_id = TargetId::from_str(target).map_err(|err| {
+                    Error::Config(format!(
+                        "mcp_servers.{name}.secret_target is invalid: {err}"
+                    ))
+                })?;
+                if !self.targets.contains_key(target_id.config_key()) {
+                    return Err(Error::Config(format!(
+                        "mcp_servers.{name}.secret_target refers to unconfigured target {target_id}"
+                    )));
+                }
             }
             if mcp.timeout_ms == 0 {
                 return Err(Error::Config(format!(
@@ -398,6 +422,94 @@ impl Config {
 
         Ok(())
     }
+
+    fn validate_targets(&self) -> Result<()> {
+        for (name, target) in &self.targets {
+            if name.trim().is_empty() || name.trim() != name {
+                return Err(Error::Config(
+                    "target names must not be empty or padded with whitespace".to_string(),
+                ));
+            }
+
+            match (name.as_str(), target) {
+                ("local", TargetConfig::Local(local)) => {
+                    validate_target_shell("targets.local.shell", local.shell.as_deref())?;
+                    validate_policy("targets.local.policy", &local.policy)?;
+                }
+                ("local", TargetConfig::Ssh(_)) => {
+                    return Err(Error::Config(
+                        "targets.local is reserved for kind = \"local\"".to_string(),
+                    ));
+                }
+                (_, TargetConfig::Local(_)) => {
+                    return Err(Error::Config(format!(
+                        "targets.{name} uses kind = \"local\"; the local target must be configured as targets.local"
+                    )));
+                }
+                (_, TargetConfig::Ssh(ssh)) => {
+                    if ssh.host.trim().is_empty() || ssh.host.trim() != ssh.host {
+                        return Err(Error::Config(format!(
+                            "targets.{name}.host must not be empty or padded with whitespace"
+                        )));
+                    }
+                    if ssh.port == 0 {
+                        return Err(Error::Config(format!(
+                            "targets.{name}.port must be greater than 0"
+                        )));
+                    }
+                    if let Some(path) = &ssh.identity_file {
+                        if path.as_os_str().is_empty() {
+                            return Err(Error::Config(format!(
+                                "targets.{name}.identity_file must not be empty"
+                            )));
+                        }
+                    }
+                    validate_target_shell(&format!("targets.{name}.shell"), ssh.shell.as_deref())?;
+                    validate_policy(&format!("targets.{name}.policy"), &ssh.policy)?;
+                }
+            }
+        }
+
+        if let Some(default_target) = &self.server.default_target {
+            if default_target.trim() != default_target {
+                return Err(Error::Config(
+                    "server.default_target must not be padded with whitespace".to_string(),
+                ));
+            }
+            let target = TargetId::from_str(default_target)
+                .map_err(|err| Error::Config(format!("server.default_target is invalid: {err}")))?;
+            if !self.targets.contains_key(target.config_key()) {
+                return Err(Error::Config(format!(
+                    "server.default_target refers to unconfigured target {target}"
+                )));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+fn validate_target_shell(label: &str, shell: Option<&str>) -> Result<()> {
+    if shell.is_some_and(|value| value.trim().is_empty() || value.trim() != value) {
+        return Err(Error::Config(format!(
+            "{label} must not be empty or padded with whitespace"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_policy(label: &str, policy: &PolicyConfig) -> Result<()> {
+    if policy.default_timeout_ms == 0 {
+        return Err(Error::Config(format!(
+            "{label}.default_timeout_ms must be greater than 0"
+        )));
+    }
+    if policy.max_output_bytes == 0 {
+        return Err(Error::Config(format!(
+            "{label}.max_output_bytes must be greater than 0"
+        )));
+    }
+    Ok(())
 }
 
 fn default_name() -> String {
@@ -523,4 +635,77 @@ pub fn default_config_path() -> PathBuf {
     home.join(".config")
         .join("mcp-target-ops")
         .join("config.toml")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_config(source: &str) -> Config {
+        let mut config: Config = toml::from_str(source).expect("valid TOML");
+        config.ensure_local_target();
+        config
+    }
+
+    #[test]
+    fn accepts_local_and_named_ssh_targets() {
+        let config = parse_config(
+            r#"
+            [server]
+            default_target = "ssh:dev"
+
+            [targets.dev]
+            kind = "ssh"
+            host = "dev.example.com"
+            "#,
+        );
+
+        config.validate().expect("target layout is valid");
+    }
+
+    #[test]
+    fn rejects_local_target_under_a_named_profile() {
+        let config = parse_config(
+            r#"
+            [targets.other]
+            kind = "local"
+            "#,
+        );
+
+        let err = config
+            .validate()
+            .expect_err("named local target is invalid");
+        assert!(err.to_string().contains("targets.other"));
+    }
+
+    #[test]
+    fn rejects_ssh_target_using_the_reserved_local_key() {
+        let config = parse_config(
+            r#"
+            [targets.local]
+            kind = "ssh"
+            host = "example.com"
+            "#,
+        );
+
+        let err = config
+            .validate()
+            .expect_err("reserved local key is invalid");
+        assert!(err.to_string().contains("targets.local"));
+    }
+
+    #[test]
+    fn rejects_unconfigured_default_target() {
+        let config = parse_config(
+            r#"
+            [server]
+            default_target = "ssh:missing"
+            "#,
+        );
+
+        let err = config
+            .validate()
+            .expect_err("default target must be configured");
+        assert!(err.to_string().contains("unconfigured target ssh:missing"));
+    }
 }

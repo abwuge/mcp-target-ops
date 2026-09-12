@@ -45,10 +45,6 @@ pub struct TargetPolicySummary {
 impl AppState {
     pub fn new(config: Config) -> Result<Self> {
         config.ensure_runtime_dir()?;
-        let active = match &config.server.default_target {
-            Some(target) => Some(TargetId::from_str(target)?),
-            None => None,
-        };
 
         Ok(Self {
             ssh_sessions: SshSessionRegistry::new(),
@@ -56,7 +52,7 @@ impl AppState {
             jobs: JobRegistry::new(),
             oauth: Mutex::new(OAuthState::load(config.server.oauth_state_file.clone())?),
             config,
-            active_target: Mutex::new(active),
+            active_target: Mutex::new(None),
             started_at: SystemTime::now(),
         })
     }
@@ -136,5 +132,45 @@ impl AppState {
         }
 
         summaries
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::{tempdir, TempDir};
+
+    fn state_with_default_target() -> (TempDir, AppState) {
+        let temp = tempdir().expect("temporary directory");
+        let mut config = Config::default();
+        config.server.default_target = Some("local".to_string());
+        config.server.oauth_state_file = None;
+        config.server.runtime_dir = temp.path().join("runtime");
+        let state = AppState::new(config).expect("state initializes");
+        (temp, state)
+    }
+
+    #[test]
+    fn default_target_is_a_fallback_not_an_active_selection() {
+        let (_temp, state) = state_with_default_target();
+        assert_eq!(state.current_target(), None);
+
+        let (target, source) = state.resolve_target(None).expect("default target resolves");
+        assert_eq!(target, TargetId::Local);
+        assert_eq!(source, TargetSource::Default);
+    }
+
+    #[test]
+    fn explicit_and_active_targets_take_precedence_over_the_default() {
+        let (_temp, state) = state_with_default_target();
+
+        let (_, source) = state
+            .resolve_target(Some("local"))
+            .expect("explicit target resolves");
+        assert_eq!(source, TargetSource::Explicit);
+
+        state.set_active_target(TargetId::Local);
+        let (_, source) = state.resolve_target(None).expect("active target resolves");
+        assert_eq!(source, TargetSource::Active);
     }
 }

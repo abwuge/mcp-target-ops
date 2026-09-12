@@ -3,12 +3,14 @@
 FROM rust:1-bookworm AS builder
 WORKDIR /app
 
-COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY Cargo.toml Cargo.lock rust-toolchain.toml build.rs ./
+COPY assets/mcp-target-ops.ico ./assets/mcp-target-ops.ico
 RUN mkdir src \
     && printf 'fn main() {}\n' > src/main.rs \
     && cargo build --locked --release \
     && rm -rf src
 
+COPY assets ./assets
 COPY src ./src
 RUN touch src/main.rs \
     && cargo build --locked --release

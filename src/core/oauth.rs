@@ -153,6 +153,12 @@ impl OAuthState {
         self.clients.contains_key(client_id)
     }
 
+    pub fn client_name(&self, client_id: &str) -> Option<&str> {
+        self.clients
+            .get(client_id)
+            .and_then(|client| client.client_name.as_deref())
+    }
+
     pub fn issue_authorization_code(
         &mut self,
         request: AuthorizationCodeRequest,

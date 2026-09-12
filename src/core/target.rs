@@ -57,8 +57,19 @@ impl FromStr for TargetId {
         }
 
         if let Some(name) = value.strip_prefix("ssh:") {
-            if name.trim().is_empty() {
+            if name.is_empty() {
                 return Err(Error::Target("empty ssh target name".to_string()));
+            }
+            if name.trim() != name {
+                return Err(Error::Target(
+                    "ssh target names must not be padded with whitespace".to_string(),
+                ));
+            }
+            if name == "local" {
+                return Err(Error::Target(
+                    "ssh:local is invalid because 'local' is reserved for the local target"
+                        .to_string(),
+                ));
             }
             return Ok(TargetId::Ssh(name.to_string()));
         }
@@ -90,5 +101,9 @@ mod tests {
             TargetId::Ssh("dev".to_string())
         );
         assert!("dev".parse::<TargetId>().is_err());
+        assert!("ssh:".parse::<TargetId>().is_err());
+        assert!("ssh: dev".parse::<TargetId>().is_err());
+        assert!("ssh:dev ".parse::<TargetId>().is_err());
+        assert!("ssh:local".parse::<TargetId>().is_err());
     }
 }

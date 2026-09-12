@@ -4,7 +4,7 @@ use crate::{
         oauth::{AuthorizationCodeRequest, OAuthError, TokenLifetimes, TokenResponse},
         state::AppState,
     },
-    protocol::{gpts, mcp},
+    protocol::{actions, html::escape, mcp, oauth_page},
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -55,8 +55,8 @@ fn handle_request(state: Arc<AppState>, mut request: Request) -> Result<()> {
         return respond_unauthorized(&state, request);
     }
 
-    if gpts::is_action_path(&path) {
-        return gpts::handle_request(state, request, method, &path);
+    if actions::is_action_path(&path) {
+        return actions::handle_request(state, request, method, &path);
     }
 
     match (method, path.as_str()) {
@@ -99,7 +99,7 @@ fn is_public_endpoint(method: &Method, path: &str) -> bool {
         (Method::Get, "/")
             | (Method::Get, FAVICON_PATH)
             | (Method::Get, "/health")
-            | (Method::Get, gpts::OPENAPI_PATH)
+            | (Method::Get, actions::OPENAPI_PATH)
             | (Method::Get, PROTECTED_RESOURCE_METADATA_PATH)
             | (Method::Get, AUTHORIZATION_SERVER_METADATA_PATH)
             | (Method::Get, AUTHORIZE_PATH)
@@ -129,8 +129,8 @@ fn handle_public_request(
                         "health": endpoint(&base_url, "/health"),
                         "favicon": endpoint(&base_url, FAVICON_PATH),
                         "mcp": endpoint(&base_url, MCP_PATH),
-                        "gpts_openapi_schema": endpoint(&base_url, gpts::OPENAPI_PATH),
-                        "gpts_actions_prefix": endpoint(&base_url, gpts::ACTIONS_PREFIX),
+                        "openapi_schema": endpoint(&base_url, actions::OPENAPI_PATH),
+                        "actions_prefix": endpoint(&base_url, actions::ACTIONS_PREFIX),
                         "oauth_protected_resource": endpoint(&base_url, PROTECTED_RESOURCE_METADATA_PATH),
                         "oauth_authorization_server": endpoint(&base_url, AUTHORIZATION_SERVER_METADATA_PATH)
                     }
@@ -147,9 +147,9 @@ fn handle_public_request(
                 "oauth_enabled": state.config.server.oauth_enabled,
             }),
         ),
-        (Method::Get, gpts::OPENAPI_PATH) => {
+        (Method::Get, actions::OPENAPI_PATH) => {
             let base_url = public_base_url(&state, &request);
-            let document = gpts::openapi_document(&state, &base_url);
+            let document = actions::openapi_document(&state, &base_url);
             respond_json(request, 200, document)
         }
         (Method::Get, PROTECTED_RESOURCE_METADATA_PATH)
@@ -386,10 +386,18 @@ fn handle_authorize(state: Arc<AppState>, mut request: Request, method: Method) 
         _ => Params::new(),
     };
 
+    if params.get("decision").map(String::as_str) == Some("deny") {
+        return redirect_authorize_error(request, &params, "access_denied");
+    }
+
     if state.config.server.oauth_authorization_password.is_some()
         && !params.contains_key("password")
     {
-        return respond_html(request, 200, consent_page(&state, &params));
+        return respond_html(
+            request,
+            200,
+            oauth_page::render(&state, &params, None, FAVICON_PATH, AUTHORIZE_PATH),
+        );
     }
 
     if let Some(expected_password) = state.config.server.oauth_authorization_password.as_deref() {
@@ -397,8 +405,13 @@ fn handle_authorize(state: Arc<AppState>, mut request: Request, method: Method) 
             return respond_html(
                 request,
                 401,
-                "<!doctype html><title>Unauthorized</title><h1>Unauthorized</h1><p>Invalid password.</p>"
-                    .to_string(),
+                oauth_page::render(
+                    &state,
+                    &params,
+                    Some("Incorrect authorization password. Please try again."),
+                    FAVICON_PATH,
+                    AUTHORIZE_PATH,
+                ),
             );
         }
     }
@@ -736,6 +749,15 @@ fn respond_bytes_with_headers(
 fn respond_html(request: Request, status: u16, body: String) -> Result<()> {
     let mut response = Response::from_string(body).with_status_code(StatusCode(status));
     response.add_header(header("Content-Type", "text/html; charset=utf-8"));
+    response.add_header(header("Cache-Control", "no-store"));
+    response.add_header(header("Pragma", "no-cache"));
+    response.add_header(header("Referrer-Policy", "no-referrer"));
+    response.add_header(header("X-Content-Type-Options", "nosniff"));
+    response.add_header(header("X-Frame-Options", "DENY"));
+    response.add_header(header(
+        "Content-Security-Policy",
+        "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    ));
     add_common_headers(&mut response);
     request.respond(response).map_err(Error::Io)
 }
@@ -777,7 +799,7 @@ fn redirect_authorize_error(request: Request, params: &Params, error: &str) -> R
             400,
             format!(
                 "<!doctype html><title>OAuth error</title><h1>OAuth error</h1><p>{}</p>",
-                html_escape(error)
+                escape(error)
             ),
         );
     };
@@ -966,74 +988,6 @@ fn quote_header_value(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-fn consent_page(state: &AppState, params: &Params) -> String {
-    let hidden_inputs = params
-        .iter()
-        .filter(|(key, _)| key.as_str() != "password")
-        .map(|(key, value)| {
-            format!(
-                r#"<input type="hidden" name="{}" value="{}">"#,
-                html_escape(key),
-                html_escape(value)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let client_id = params.get("client_id").map(String::as_str).unwrap_or("");
-    let scope = params
-        .get("scope")
-        .cloned()
-        .unwrap_or_else(|| state.config.server.oauth_scopes.join(" "));
-
-    format!(
-        r#"<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="icon" href="{favicon_path}" type="image/x-icon">
-  <title>Authorize {name}</title>
-  <style>
-    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 3rem auto; max-width: 36rem; line-height: 1.5; padding: 0 1rem; }}
-    .app-icon {{ display: block; width: 5rem; height: 5rem; margin-bottom: 1rem; }}
-    label, input, button {{ display: block; width: 100%; box-sizing: border-box; }}
-    input {{ margin: .35rem 0 1rem; padding: .65rem; }}
-    button {{ padding: .75rem; }}
-    code {{ overflow-wrap: anywhere; }}
-  </style>
-</head>
-<body>
-  <img class="app-icon" src="{favicon_path}" alt="">
-  <h1>Authorize {name}</h1>
-  <p>Client <code>{client_id}</code> is requesting access to scope <code>{scope}</code>.</p>
-  <form method="post" action="{authorize_path}">
-    {hidden_inputs}
-    <label>Password
-      <input name="password" type="password" autocomplete="current-password" autofocus>
-    </label>
-    <button type="submit">Authorize</button>
-  </form>
-</body>
-</html>"#,
-        name = html_escape(&state.config.server.name),
-        client_id = html_escape(client_id),
-        scope = html_escape(&scope),
-        favicon_path = FAVICON_PATH,
-        authorize_path = AUTHORIZE_PATH,
-        hidden_inputs = hidden_inputs,
-    )
-}
-
-fn html_escape(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
-}
-
 #[cfg(test)]
 fn authorization_matches(value: &str, expected_token: &str) -> bool {
     let Some((scheme, token)) = value.split_once(' ') else {
@@ -1055,7 +1009,7 @@ mod tests {
         authorization_matches, is_public_endpoint, parse_urlencoded, percent_decode,
         percent_encode, redirect_uri_allowed, APP_ICON, FAVICON_PATH,
     };
-    use crate::protocol::gpts;
+    use crate::protocol::actions;
     use tiny_http::Method;
 
     #[test]
@@ -1102,9 +1056,9 @@ mod tests {
     }
 
     #[test]
-    fn gpts_schema_is_public_but_actions_require_http_auth() {
+    fn actions_schema_is_public_but_actions_require_http_auth() {
         assert!(is_public_endpoint(&Method::Get, FAVICON_PATH));
-        assert!(is_public_endpoint(&Method::Get, gpts::OPENAPI_PATH));
+        assert!(is_public_endpoint(&Method::Get, actions::OPENAPI_PATH));
         assert!(!is_public_endpoint(&Method::Get, "/actions/v1/targets"));
         assert!(!is_public_endpoint(&Method::Post, "/actions/v1/files/read"));
     }

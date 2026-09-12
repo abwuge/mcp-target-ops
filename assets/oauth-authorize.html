@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="icon" href="@@FAVICON_PATH@@" type="image/x-icon">
+  <title>Authorize @@CLIENT_NAME@@ · @@SERVER_NAME@@</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --page: #f4f6fb;
+      --page-accent: rgba(79, 70, 229, .14);
+      --card: rgba(255, 255, 255, .88);
+      --card-solid: #ffffff;
+      --text: #161a25;
+      --muted: #626b7d;
+      --subtle: #858ea0;
+      --border: rgba(15, 23, 42, .11);
+      --field: rgba(248, 250, 252, .92);
+      --field-focus: rgba(79, 70, 229, .16);
+      --primary: #4f46e5;
+      --primary-hover: #4338ca;
+      --primary-text: #ffffff;
+      --chip: rgba(79, 70, 229, .09);
+      --chip-text: #4338ca;
+      --danger-bg: rgba(220, 38, 38, .08);
+      --danger-border: rgba(220, 38, 38, .2);
+      --danger-text: #b91c1c;
+      --shadow: 0 28px 80px rgba(30, 41, 59, .16), 0 6px 18px rgba(30, 41, 59, .08);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --page: #0b0d13;
+        --page-accent: rgba(129, 140, 248, .16);
+        --card: rgba(22, 25, 35, .9);
+        --card-solid: #161923;
+        --text: #f6f7fb;
+        --muted: #aab1c0;
+        --subtle: #858da0;
+        --border: rgba(255, 255, 255, .1);
+        --field: rgba(8, 10, 16, .62);
+        --field-focus: rgba(129, 140, 248, .2);
+        --primary: #818cf8;
+        --primary-hover: #a5b4fc;
+        --primary-text: #10121a;
+        --chip: rgba(129, 140, 248, .14);
+        --chip-text: #c7d2fe;
+        --danger-bg: rgba(248, 113, 113, .1);
+        --danger-border: rgba(248, 113, 113, .22);
+        --danger-text: #fca5a5;
+        --shadow: 0 28px 90px rgba(0, 0, 0, .44), 0 6px 18px rgba(0, 0, 0, .26);
+      }
+    }
+
+    * { box-sizing: border-box; }
+
+    html { min-height: 100%; }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      padding: 32px 18px;
+      overflow-x: hidden;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 18% 8%, var(--page-accent), transparent 34rem),
+        radial-gradient(circle at 88% 92%, rgba(14, 165, 233, .09), transparent 30rem),
+        var(--page);
+      font: 15px/1.55 Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .shell { width: min(100%, 540px); }
+
+    .brand {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 9px;
+      margin: 0 0 16px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 650;
+      letter-spacing: .01em;
+    }
+
+    .brand svg { width: 15px; height: 15px; }
+
+    .card {
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      background: var(--card);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(22px);
+      -webkit-backdrop-filter: blur(22px);
+    }
+
+    .content { padding: 34px 34px 30px; }
+
+    .app-mark {
+      width: 72px;
+      height: 72px;
+      margin: 0 auto 22px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      background: var(--card-solid);
+      box-shadow: 0 10px 30px rgba(30, 41, 59, .12);
+    }
+
+    .app-mark img { width: 48px; height: 48px; object-fit: contain; }
+
+    h1 {
+      margin: 0;
+      text-align: center;
+      font-size: clamp(25px, 5vw, 31px);
+      line-height: 1.18;
+      letter-spacing: -.035em;
+    }
+
+    .lead {
+      max-width: 430px;
+      margin: 12px auto 26px;
+      text-align: center;
+      color: var(--muted);
+    }
+
+    .request {
+      margin: 0 0 24px;
+      padding: 18px;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: color-mix(in srgb, var(--field) 78%, transparent);
+    }
+
+    .request-title {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      margin: 0 0 12px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .request-title svg { width: 18px; height: 18px; color: var(--primary); }
+
+    .scope-list { display: flex; flex-wrap: wrap; gap: 8px; }
+
+    .scope-chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      background: var(--chip);
+      color: var(--chip-text);
+      font: 600 12px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      overflow-wrap: anywhere;
+    }
+
+    .error {
+      margin: 0 0 18px;
+      padding: 12px 14px;
+      border: 1px solid var(--danger-border);
+      border-radius: 12px;
+      background: var(--danger-bg);
+      color: var(--danger-text);
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    form { margin: 0; }
+
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .password-field { position: relative; }
+
+    input[type="password"],
+    input[type="text"] {
+      width: 100%;
+      height: 50px;
+      padding: 0 48px 0 14px;
+      border: 1px solid var(--border);
+      border-radius: 13px;
+      outline: none;
+      background: var(--field);
+      color: var(--text);
+      font: inherit;
+      transition: border-color .16s ease, box-shadow .16s ease, background .16s ease;
+    }
+
+    input:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 4px var(--field-focus);
+      background: var(--card-solid);
+    }
+
+    .toggle-password {
+      position: absolute;
+      top: 50%;
+      right: 8px;
+      width: 36px;
+      height: 36px;
+      display: grid;
+      place-items: center;
+      transform: translateY(-50%);
+      border: 0;
+      border-radius: 9px;
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+    }
+
+    .toggle-password:hover { background: var(--chip); color: var(--text); }
+    .toggle-password svg { width: 18px; height: 18px; }
+
+    .form-actions {
+      display: grid;
+      grid-template-columns: minmax(0, .8fr) minmax(0, 1.35fr);
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .cancel,
+    .authorize {
+      min-height: 50px;
+      border-radius: 13px;
+      font: 700 15px/1 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      cursor: pointer;
+      transition: transform .14s ease, background .14s ease, border-color .14s ease, box-shadow .14s ease;
+    }
+
+    .cancel {
+      border: 1px solid var(--border);
+      background: var(--field);
+      color: var(--muted);
+    }
+
+    .cancel:hover {
+      border-color: color-mix(in srgb, var(--text) 24%, transparent);
+      background: var(--card-solid);
+      color: var(--text);
+    }
+
+    .authorize {
+      border: 0;
+      background: var(--primary);
+      color: var(--primary-text);
+      box-shadow: 0 10px 24px color-mix(in srgb, var(--primary) 28%, transparent);
+    }
+
+    .authorize:hover {
+      background: var(--primary-hover);
+      box-shadow: 0 13px 30px color-mix(in srgb, var(--primary) 34%, transparent);
+      transform: translateY(-1px);
+    }
+
+    .cancel:active, .authorize:active { transform: translateY(0); }
+    .cancel:focus-visible, .authorize:focus-visible, .toggle-password:focus-visible { outline: 3px solid var(--field-focus); outline-offset: 2px; }
+
+    details {
+      margin-top: 18px;
+      color: var(--subtle);
+      font-size: 12px;
+    }
+
+    summary { cursor: pointer; user-select: none; }
+
+    .detail-grid {
+      display: grid;
+      gap: 1px;
+      margin-top: 10px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 11px;
+      background: var(--border);
+    }
+
+    .detail-row {
+      display: grid;
+      grid-template-columns: 92px minmax(0, 1fr);
+      gap: 10px;
+      padding: 10px 11px;
+      background: var(--field);
+    }
+
+    .detail-label {
+      color: var(--subtle);
+      font-size: 11px;
+      font-weight: 650;
+    }
+
+    .detail-value {
+      min-width: 0;
+      color: var(--muted);
+      font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      overflow-wrap: anywhere;
+      user-select: all;
+    }
+
+    .security-note {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      padding: 17px 34px 20px;
+      border-top: 1px solid var(--border);
+      color: var(--subtle);
+      background: color-mix(in srgb, var(--field) 55%, transparent);
+      font-size: 12px;
+    }
+
+    .security-note svg { width: 16px; height: 16px; flex: 0 0 auto; margin-top: 1px; }
+
+    @media (max-width: 560px) {
+      body { padding: 18px 12px; place-items: start center; }
+      .brand { margin-top: 8px; }
+      .card { border-radius: 20px; }
+      .content { padding: 28px 21px 24px; }
+      .security-note { padding: 15px 21px 18px; }
+      .app-mark { width: 66px; height: 66px; border-radius: 18px; }
+      .app-mark img { width: 44px; height: 44px; }
+      .form-actions { grid-template-columns: 1fr; }
+      .authorize { order: -1; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <div class="brand" aria-label="Secure authorization">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7 10V7a5 5 0 0 1 10 0v3m-9 0h8a2 2 0 0 1 2 2v7H6v-7a2 2 0 0 1 2-2Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Secure authorization
+    </div>
+
+    <section class="card" aria-labelledby="page-title">
+      <div class="content">
+        <div class="app-mark"><img src="@@FAVICON_PATH@@" alt=""></div>
+        <h1 id="page-title">Connect @@CLIENT_NAME@@</h1>
+        <p class="lead">Allow this client to use the operations permitted by @@SERVER_NAME@@.</p>
+
+        <div class="request">
+          <div class="request-title">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m9 12 2 2 4-4m6 2a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Requested access
+          </div>
+          <div class="scope-list">@@SCOPE_CHIPS@@</div>
+        </div>
+
+        @@ERROR_BLOCK@@
+
+        <form method="post" action="@@AUTHORIZE_PATH@@">
+          @@HIDDEN_INPUTS@@
+          <label for="password">Authorization password</label>
+          <div class="password-field">
+            <input id="password" name="password" type="password" autocomplete="current-password" aria-invalid="@@ARIA_INVALID@@" required autofocus spellcheck="false">
+            <button class="toggle-password" type="button" aria-label="Show password" aria-pressed="false">
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="12" r="2.8" stroke="currentColor" stroke-width="1.7"/></svg>
+            </button>
+          </div>
+          <div class="form-actions">
+            <button class="cancel" type="submit" name="decision" value="deny" formnovalidate>Cancel</button>
+            <button class="authorize" type="submit" name="decision" value="approve">Authorize and continue</button>
+          </div>
+        </form>
+
+        <details>
+          <summary>Connection details</summary>
+          <div class="detail-grid">
+            <div class="detail-row"><span class="detail-label">Client</span><span class="detail-value">@@CLIENT_NAME@@</span></div>
+            <div class="detail-row"><span class="detail-label">Client ID</span><span class="detail-value">@@CLIENT_ID@@</span></div>
+            <div class="detail-row"><span class="detail-label">Return to</span><span class="detail-value">@@REDIRECT_URI@@</span></div>
+          </div>
+        </details>
+      </div>
+
+      <div class="security-note">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3 5 6v5c0 4.5 2.8 8.1 7 10 4.2-1.9 7-5.5 7-10V6l-7-3Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+        <span>Only continue if you initiated this connection. The password is verified by @@SERVER_NAME@@ and is not sent to the requesting client.</span>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    (() => {
+      const input = document.getElementById('password');
+      const toggle = document.querySelector('.toggle-password');
+      if (!input || !toggle) return;
+      toggle.addEventListener('click', () => {
+        const reveal = input.type === 'password';
+        input.type = reveal ? 'text' : 'password';
+        toggle.setAttribute('aria-pressed', String(reveal));
+        toggle.setAttribute('aria-label', reveal ? 'Hide password' : 'Show password');
+        input.focus({ preventScroll: true });
+      });
+    })();
+  </script>
+</body>
+</html>

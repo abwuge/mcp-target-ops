@@ -6,6 +6,17 @@ mod transport;
 use crate::core::{config::Config, error::Result, state::AppState};
 use std::{path::PathBuf, sync::Arc};
 
+const HELP: &str = r#"Usage: mcp-target-ops [OPTIONS]
+
+Options:
+  -c, --config PATH    TOML configuration path
+      --http ADDR      Listen over HTTP instead of stdio
+  -V, --version        Print version information
+  -h, --help           Print this help
+
+Long options also accept --config=PATH, --http=ADDR, and --http-addr=ADDR.
+Without --config, MCP_TARGET_OPS_CONFIG or ~/.config/mcp-target-ops/config.toml is used when present."#;
+
 struct Args {
     config_path: Option<PathBuf>,
     http_addr: Option<String>,
@@ -58,12 +69,17 @@ fn parse_args() -> Args {
                 parsed.http_addr = Some(next_arg(&mut args, &arg));
             }
             "--help" | "-h" => {
-                println!(
-                    "Usage: mcp-target-ops [--config path/to/config.toml] [--http 127.0.0.1:8765]\n\nFlags also accept --config=PATH and --http=ADDR.\nIf --http is omitted, the server uses stdio transport.\nIf --config is omitted, MCP_TARGET_OPS_CONFIG or ~/.config/mcp-target-ops/config.toml is used when present."
-                );
+                println!("{HELP}");
                 std::process::exit(0);
             }
-            _ => {}
+            "--version" | "-V" => {
+                println!("mcp-target-ops {}", env!("CARGO_PKG_VERSION"));
+                std::process::exit(0);
+            }
+            other => {
+                eprintln!("unknown argument: {other}\nTry 'mcp-target-ops --help'.");
+                std::process::exit(2);
+            }
         }
     }
 

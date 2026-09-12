@@ -1,16 +1,18 @@
 [server]
 name = "mcp-target-ops"
+# Fallback used only when a call has no explicit target and no target was selected
+# with target_select. It is not treated as the active target.
 default_target = "ssh:dev"
 terminal_ring_buffer_bytes = 524288
 runtime_dir = "/tmp/mcp-target-ops"
-# Optional HTTP bearer auth. You can also set MCP_TARGET_OPS_HTTP_TOKEN
-# instead of storing a token here. This is the recommended authentication mode
-# for a private GPTs Action.
+# Optional static HTTP bearer authentication. Prefer MCP_TARGET_OPS_HTTP_TOKEN
+# instead of storing the token here. This is the simplest mode for a private
+# GPT Action or another single-service client.
 # http_bearer_token = "change-me"
 #
-# Public HTTPS origin used by OAuth metadata and by the generated GPTs OpenAPI
-# Schema. Set this for GPTs even when OAuth is disabled, or use
-# MCP_TARGET_OPS_PUBLIC_BASE_URL.
+# Exact public HTTPS origin used by OAuth metadata, the generated GPT Actions
+# OpenAPI document, and the ChatGPT MCP App widget domain. Do not include a
+# trailing slash. You may also use MCP_TARGET_OPS_PUBLIC_BASE_URL.
 # public_base_url = "https://mcp.example.com"
 #
 # Optional OAuth support for remote HTTP MCP / ChatGPT Apps.
@@ -21,7 +23,8 @@ runtime_dir = "/tmp/mcp-target-ops"
 # oauth_authorization_code_ttl_secs = 600
 # oauth_access_token_ttl_secs = 3600
 # oauth_refresh_token_ttl_secs = 2592000
-# OAuth clients and tokens persist across restarts. Defaults to:
+# OAuth clients and tokens persist across restarts. Defaults to the path below;
+# MCP_TARGET_OPS_OAUTH_STATE_FILE can override it. On Unix the file must be 0600.
 # oauth_state_file = "/home/me/.config/mcp-target-ops/oauth-state.json"
 
 # Optional downstream Streamable HTTP MCP server. Prefer a dedicated mode-0600
@@ -45,7 +48,8 @@ runtime_dir = "/tmp/mcp-target-ops"
 # [mcp_servers.other.secret_headers]
 # Authorization = { path = "/home/me/secrets.toml", format = "toml", key = "mcp.Authorization" }
 
-# Local host is intentionally disabled by default. Enable only for trusted setups.
+# "local" is the reserved key for the single local target. Local access is
+# intentionally disabled by default; enable it only for trusted setups.
 [targets.local]
 kind = "local"
 enabled = false
@@ -60,7 +64,8 @@ allow_select_active = false
 require_explicit_target_for_write = true
 allowed_roots = ["/tmp"]
 
-# Example SSH target. External target id is "ssh:dev".
+# Every non-local target must use kind = "ssh". This section is exposed as the
+# external target id "ssh:dev".
 [targets.dev]
 kind = "ssh"
 enabled = true
