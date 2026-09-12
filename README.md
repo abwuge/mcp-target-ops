@@ -23,7 +23,7 @@ a human-readable MCP App for reviewing file changes.
 
 ## Highlights
 
-- One 31-tool interface for local and SSH targets
+- One 32-tool interface for local and SSH targets
 - Persistent OpenSSH workers for ordinary remote command and file operations
 - Foreground commands plus cancellable background jobs with incremental output
 - Persistent PTY terminals with live resize support
@@ -323,14 +323,14 @@ advanced deployments; see the example configuration.
 
 ## Tool catalog
 
-Target Ops currently exposes 31 tools.
+Target Ops currently exposes 32 tools.
 
 | Area | Tools |
 | --- | --- |
 | Server | `server_info` |
 | Targets | `target_list`, `target_current`, `target_select`, `target_connect`, `target_disconnect` |
 | Downstream MCP | `mcp_server_list`, `mcp_tools_list`, `mcp_tool_call` |
-| Commands and jobs | `exec`, `exec_start`, `job_poll`, `job_output`, `job_cancel` |
+| Commands and jobs | `exec`, `exec_batch`, `exec_start`, `job_poll`, `job_output`, `job_cancel` |
 | Files and directories | `file_read`, `file_list`, `file_find`, `file_edit`, `file_write`, `file_delete`, `file_import`, `file_export`, `file_patch`, `file_move`, `file_chmod`, `directory_create` |
 | Terminals | `terminal_open`, `terminal_send`, `terminal_read`, `terminal_resize`, `terminal_close` |
 
@@ -349,15 +349,23 @@ values.
 
 ### Commands and background jobs
 
-`exec` runs a bounded non-interactive shell command. In ChatGPT it binds to the
-stable `ui://target-ops/exec-terminal/v1.html` MCP App, which presents stdout,
-stderr, target, exit status, timeout, and truncation state as a compact
-non-interactive command result. ANSI SGR color/style sequences are rendered
-safely instead of being shown as raw escape codes. `ExecResponse` also includes
-the executed command so the App can show it reliably without depending on
-client-specific tool-input forwarding. The stable resource URI is retained for
-compatibility even though the visual design no longer imitates an interactive
-terminal.
+`exec` runs one bounded non-interactive shell command or script. `exec_batch`
+runs up to 32 logically independent commands in one tool call, sequentially by
+default or in parallel when explicitly requested, and returns one structured
+result per command. Sequential batches may stop on the first failure. Use
+`exec` when commands need shared shell state such as `cd`, variables, pipelines,
+or control flow; use `exec_batch` for unrelated inspections instead of joining
+them with shell separators.
+
+Both tools bind to the stable `ui://target-ops/exec-terminal/v1.html` MCP App.
+Single-command results show stdout, stderr, target, exit status, timeout, and
+truncation state; long successful output is collapsed. Batch results use compact
+command rows, keep successful commands collapsed, and automatically expand
+failures. ANSI SGR color/style sequences are rendered safely instead of being
+shown as raw escape codes. `ExecResponse` also includes the executed command so
+the App can show it reliably without depending on client-specific tool-input
+forwarding. The stable resource URI is retained for compatibility even though
+the visual design no longer imitates an interactive terminal.
 
 Child stdin is disconnected from the MCP control stream. `exec_start` starts a
 dedicated process and returns a job ID immediately; use independent

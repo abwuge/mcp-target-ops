@@ -7,7 +7,7 @@ use crate::{
         target::{ResolvedTarget, TargetId, TargetSource},
     },
     tooling::{
-        exec::{self, ExecRequest},
+        exec::{self, ExecBatchRequest, ExecRequest},
         file_bridge::{self, FileExportRequest, FileImportRequest},
         fs::{
             self, DirectoryCreateRequest, FileChmodRequest, FileDeleteRequest, FileEditRequest,
@@ -54,6 +54,10 @@ pub fn call_tool(state: Arc<AppState>, name: &str, args: Value) -> Result<Value>
         "exec" => Ok(serde_json::to_value(exec::run(
             &state,
             parse::<ExecRequest>(args)?,
+        )?)?),
+        "exec_batch" => Ok(serde_json::to_value(exec::run_batch(
+            &state,
+            parse::<ExecBatchRequest>(args)?,
         )?)?),
         "exec_start" => Ok(serde_json::to_value(
             state.jobs.start(&state, parse::<ExecStartRequest>(args)?)?,

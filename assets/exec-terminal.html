@@ -9,6 +9,7 @@
   font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --bg: #ffffff;
   --surface: #f6f8fa;
+  --surface-hover: #eef1f4;
   --code-bg: #f6f8fa;
   --border: #d0d7de;
   --text: #1f2328;
@@ -38,6 +39,7 @@
   :root {
     --bg: #0d1117;
     --surface: #161b22;
+    --surface-hover: #1f2630;
     --code-bg: #0d1117;
     --border: #30363d;
     --text: #e6edf3;
@@ -76,17 +78,44 @@ body { margin: 0; padding: 8px; background: transparent; color: var(--text); }
 .chip.error { color: var(--error); }
 .chip.timeout { color: var(--warning); }
 .section { padding: 10px 12px; }
-.section + .section { border-top: 1px solid var(--border); }
-.label { margin-bottom: 5px; color: var(--muted); font-size: 10px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; }
-pre { margin: 0; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
-.command { max-height: 140px; overflow: auto; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--code-bg); }
+.section + .section, .section + details, details + .section, details + details { border-top: 1px solid var(--border); }
+.label, .output-summary { color: var(--muted); font-size: 10px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; }
+.label { margin-bottom: 5px; }
+pre, code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+pre { margin: 0; font-size: 12px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
+.command { max-height: 150px; overflow: auto; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--code-bg); }
+details.output-section { padding: 0; }
+details.output-section > summary { cursor: pointer; list-style: none; padding: 8px 12px; user-select: none; }
+details.output-section > summary::-webkit-details-marker { display: none; }
+details.output-section > summary::before { content: '›'; display: inline-block; margin-right: 6px; color: var(--muted); transform: rotate(0deg); transition: transform .12s ease; }
+details.output-section[open] > summary::before { transform: rotate(90deg); }
+.output-wrap { padding: 0 12px 10px; }
 .output { max-height: 430px; overflow: auto; }
-.stderr-section .label { color: var(--error); }
+.stderr .output-summary { color: var(--error); }
 .empty { color: var(--muted); font-style: italic; }
 .notice { padding: 8px 12px; border-top: 1px solid var(--border); color: var(--warning); background: var(--surface); font-size: 11px; }
+.batch-list { display: grid; }
+.batch-item { border-top: 1px solid var(--border); }
+.batch-item:first-child { border-top: 0; }
+.batch-item > summary { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 7px; align-items: center; cursor: pointer; list-style: none; padding: 8px 12px; user-select: none; }
+.batch-item > summary::-webkit-details-marker { display: none; }
+.batch-item > summary:hover { background: var(--surface-hover); }
+.batch-mark { width: 16px; text-align: center; font-weight: 700; }
+.batch-mark.ok { color: var(--success); }
+.batch-mark.error { color: var(--error); }
+.batch-mark.timeout { color: var(--warning); }
+.batch-command { min-width: 0; overflow: hidden; color: var(--text); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+.batch-meta { color: var(--muted); font-size: 10px; white-space: nowrap; }
+.batch-body { padding: 0 12px 10px 37px; }
+.batch-body .command { margin-bottom: 8px; }
+.cwd { margin: -2px 0 8px; color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
+.inline-error { margin-top: 8px; padding: 7px 9px; border: 1px solid color-mix(in srgb, var(--error) 35%, var(--border)); border-radius: 7px; color: var(--error); background: color-mix(in srgb, var(--error) 6%, transparent); font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.item-notice { margin-top: 7px; color: var(--warning); font-size: 10px; }
 @media (max-width: 520px) {
   body { padding: 5px; }
   .header, .section, .notice { padding-left: 10px; padding-right: 10px; }
+  .batch-item > summary { padding-left: 10px; padding-right: 10px; }
+  .batch-body { padding-left: 35px; padding-right: 10px; }
   .output { max-height: 360px; }
 }
 </style>
@@ -95,45 +124,24 @@ pre { margin: 0; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Co
 <div class="result">
   <div class="header">
     <div class="heading">
-      <div class="title">Command result</div>
-      <div class="subtitle">Non-interactive execution</div>
+      <div class="title" id="title">Command result</div>
+      <div class="subtitle" id="subtitle">Non-interactive execution</div>
     </div>
     <div class="chip" id="target">target</div>
     <div class="chip" id="status">waiting</div>
   </div>
-
-  <div class="section">
-    <div class="label">Command</div>
-    <pre class="command" id="command">Waiting for command…</pre>
+  <div id="content">
+    <div class="section"><pre class="empty">Waiting for command output…</pre></div>
   </div>
-
-  <div class="section" id="stdoutSection" hidden>
-    <div class="label">stdout</div>
-    <pre class="output" id="stdout"></pre>
-  </div>
-
-  <div class="section stderr-section" id="stderrSection" hidden>
-    <div class="label">stderr</div>
-    <pre class="output" id="stderr"></pre>
-  </div>
-
-  <div class="section" id="emptySection">
-    <pre class="empty" id="empty">Waiting for command output…</pre>
-  </div>
-
   <div class="notice" id="notice" hidden></div>
 </div>
 <script>
 (() => {
+  const title = document.getElementById('title');
+  const subtitle = document.getElementById('subtitle');
   const target = document.getElementById('target');
   const status = document.getElementById('status');
-  const command = document.getElementById('command');
-  const stdout = document.getElementById('stdout');
-  const stderr = document.getElementById('stderr');
-  const stdoutSection = document.getElementById('stdoutSection');
-  const stderrSection = document.getElementById('stderrSection');
-  const emptySection = document.getElementById('emptySection');
-  const empty = document.getElementById('empty');
+  const content = document.getElementById('content');
   const notice = document.getElementById('notice');
 
   const normalColors = [
@@ -144,6 +152,13 @@ pre { margin: 0; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Co
     'var(--ansi-bright-black)', 'var(--ansi-bright-red)', 'var(--ansi-bright-green)', 'var(--ansi-bright-yellow)',
     'var(--ansi-bright-blue)', 'var(--ansi-bright-magenta)', 'var(--ansi-bright-cyan)', 'var(--ansi-bright-white)'
   ];
+
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
 
   function freshAnsiState() {
     return { bold: false, dim: false, italic: false, underline: false, inverse: false, fg: null, bg: null };
@@ -238,8 +253,53 @@ pre { margin: 0; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Co
     appendStyledText(container, text.slice(cursor), state);
   }
 
-  function render(raw, toolInput) {
-    const data = raw && typeof raw === 'object' ? raw : {};
+  function lineCount(text) {
+    if (!text) return 0;
+    return text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
+  }
+
+  function formatDuration(ms) {
+    if (!Number.isFinite(ms)) return '';
+    if (ms < 1000) return `${ms} ms`;
+    if (ms < 10000) return `${(ms / 1000).toFixed(2)} s`;
+    return `${(ms / 1000).toFixed(1)} s`;
+  }
+
+  function commandPreview(value) {
+    const first = String(value || '').split('\n').find(line => line.trim()) || 'Command unavailable';
+    return first.length > 120 ? `${first.slice(0, 117)}…` : first;
+  }
+
+  function makeCommandSection(commandText, cwdText) {
+    const section = el('div', 'section');
+    section.appendChild(el('div', 'label', 'Command'));
+    section.appendChild(el('pre', 'command', commandText || 'Command unavailable'));
+    if (cwdText) section.appendChild(el('div', 'cwd', `cwd · ${cwdText}`));
+    return section;
+  }
+
+  function makeOutputDetails(label, text, open, isError) {
+    const details = el('details', `output-section${isError ? ' stderr' : ''}`);
+    details.open = open;
+    const lines = lineCount(text);
+    const summary = el('summary', 'output-summary', `${label}${lines ? ` · ${lines} line${lines === 1 ? '' : 's'}` : ''}`);
+    const wrap = el('div', 'output-wrap');
+    const pre = el('pre', 'output');
+    renderAnsi(pre, text);
+    wrap.appendChild(pre);
+    details.append(summary, wrap);
+    return details;
+  }
+
+  function setStatus(text, kind) {
+    status.textContent = text;
+    status.className = 'chip';
+    if (kind) status.classList.add(kind);
+  }
+
+  function renderSingle(data, toolInput) {
+    title.textContent = 'Command result';
+    subtitle.textContent = 'Non-interactive execution';
     const resolvedTarget = data.resolved_target?.target || data.target || 'target';
     const exitCode = data.exit_code;
     const timedOut = data.timed_out === true;
@@ -250,28 +310,23 @@ pre { margin: 0; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Co
       : (typeof toolInput?.command === 'string' && toolInput.command ? toolInput.command : 'Command unavailable');
 
     target.textContent = resolvedTarget;
-    command.textContent = commandText;
+    if (timedOut) setStatus('timed out', 'timeout');
+    else if (exitCode === 0) setStatus('exit 0', 'ok');
+    else if (typeof exitCode === 'number') setStatus(`exit ${exitCode}`, 'error');
+    else setStatus('finished');
 
-    status.className = 'chip';
-    if (timedOut) {
-      status.textContent = 'timed out';
-      status.classList.add('timeout');
-    } else if (exitCode === 0) {
-      status.textContent = 'exit 0';
-      status.classList.add('ok');
-    } else if (typeof exitCode === 'number') {
-      status.textContent = `exit ${exitCode}`;
-      status.classList.add('error');
-    } else {
-      status.textContent = 'finished';
+    content.replaceChildren();
+    content.appendChild(makeCommandSection(commandText));
+    if (stdoutText) {
+      const longOutput = lineCount(stdoutText) > 30 || stdoutText.length > 4000;
+      content.appendChild(makeOutputDetails('stdout', stdoutText, !longOutput || exitCode !== 0 || timedOut, false));
     }
-
-    stdoutSection.hidden = !stdoutText;
-    stderrSection.hidden = !stderrText;
-    emptySection.hidden = Boolean(stdoutText || stderrText);
-    if (!stdoutText && !stderrText) empty.textContent = 'Command completed without output.';
-    renderAnsi(stdout, stdoutText);
-    renderAnsi(stderr, stderrText);
+    if (stderrText) content.appendChild(makeOutputDetails('stderr', stderrText, true, true));
+    if (!stdoutText && !stderrText) {
+      const section = el('div', 'section');
+      section.appendChild(el('pre', 'empty', 'Command completed without output.'));
+      content.appendChild(section);
+    }
 
     const notices = [];
     if (data.stdout_truncated) notices.push('stdout was truncated');
@@ -279,6 +334,85 @@ pre { margin: 0; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Co
     if (timedOut) notices.push('command exceeded its timeout');
     notice.hidden = notices.length === 0;
     notice.textContent = notices.join(' · ');
+  }
+
+  function renderBatchItem(item) {
+    const success = item.success === true;
+    const timedOut = item.timed_out === true;
+    const details = el('details', 'batch-item');
+    details.open = !success;
+
+    const summary = document.createElement('summary');
+    let mark = '✓';
+    let markKind = 'ok';
+    if (timedOut) { mark = '◷'; markKind = 'timeout'; }
+    else if (!success) { mark = '✕'; markKind = 'error'; }
+    summary.appendChild(el('span', `batch-mark ${markKind}`, mark));
+    summary.appendChild(el('code', 'batch-command', commandPreview(item.command)));
+
+    const meta = [];
+    if (typeof item.exit_code === 'number') meta.push(`exit ${item.exit_code}`);
+    else if (timedOut) meta.push('timeout');
+    else if (item.error) meta.push('error');
+    const duration = formatDuration(item.elapsed_ms);
+    if (duration) meta.push(duration);
+    summary.appendChild(el('span', 'batch-meta', meta.join(' · ')));
+    details.appendChild(summary);
+
+    const body = el('div', 'batch-body');
+    if (String(item.command || '').includes('\n')) body.appendChild(el('pre', 'command', item.command));
+    if (item.cwd) body.appendChild(el('div', 'cwd', `cwd · ${item.cwd}`));
+
+    const stdoutText = typeof item.stdout === 'string' ? item.stdout : '';
+    const stderrText = typeof item.stderr === 'string' ? item.stderr : '';
+    if (stdoutText) body.appendChild(makeOutputDetails('stdout', stdoutText, !success && lineCount(stdoutText) <= 30, false));
+    if (stderrText) body.appendChild(makeOutputDetails('stderr', stderrText, !success, true));
+    if (!stdoutText && !stderrText && !item.error) body.appendChild(el('pre', 'empty', 'Command completed without output.'));
+    if (item.error) body.appendChild(el('div', 'inline-error', item.error));
+
+    const notices = [];
+    if (item.stdout_truncated) notices.push('stdout truncated');
+    if (item.stderr_truncated) notices.push('stderr truncated');
+    if (timedOut) notices.push('timeout exceeded');
+    if (notices.length) body.appendChild(el('div', 'item-notice', notices.join(' · ')));
+    details.appendChild(body);
+    return details;
+  }
+
+  function renderBatch(data) {
+    const results = Array.isArray(data.results) ? data.results : [];
+    const requested = Number.isInteger(data.requested_count) ? data.requested_count : results.length;
+    const executed = Number.isInteger(data.executed_count) ? data.executed_count : results.length;
+    const succeeded = Number.isInteger(data.succeeded) ? data.succeeded : results.filter(item => item.success === true).length;
+    const failed = Number.isInteger(data.failed) ? data.failed : executed - succeeded;
+    const mode = data.mode === 'parallel' ? 'parallel' : 'sequential';
+
+    title.textContent = 'Command batch';
+    subtitle.textContent = `${mode} · ${executed}/${requested} executed`;
+    target.textContent = data.resolved_target?.target || data.target || 'target';
+    setStatus(failed ? `${succeeded} passed · ${failed} failed` : `${succeeded} passed`, failed ? 'error' : 'ok');
+
+    const list = el('div', 'batch-list');
+    for (const item of results) list.appendChild(renderBatchItem(item));
+    if (!results.length) {
+      const section = el('div', 'section');
+      section.appendChild(el('pre', 'empty', 'No command results returned.'));
+      content.replaceChildren(section);
+    } else {
+      content.replaceChildren(list);
+    }
+
+    const notices = [];
+    if (data.stopped_early) notices.push(`stopped early after ${executed} of ${requested} commands`);
+    if (Number(data.timed_out) > 0) notices.push(`${data.timed_out} command${data.timed_out === 1 ? '' : 's'} timed out`);
+    notice.hidden = notices.length === 0;
+    notice.textContent = notices.join(' · ');
+  }
+
+  function render(raw, toolInput) {
+    const data = raw && typeof raw === 'object' ? raw : {};
+    if (Array.isArray(data.results) && ('requested_count' in data || 'executed_count' in data)) renderBatch(data);
+    else renderSingle(data, toolInput);
   }
 
   let rpcId = 0;
@@ -308,7 +442,7 @@ pre { margin: 0; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Co
 
   async function initializeBridge() {
     await rpcRequest('ui/initialize', {
-      appInfo: { name: 'target-ops-exec-result', version: '1.1.0' },
+      appInfo: { name: 'target-ops-exec-result', version: '1.2.0' },
       appCapabilities: {},
       protocolVersion: '2026-01-26',
     });

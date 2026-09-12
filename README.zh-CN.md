@@ -20,7 +20,7 @@ SSH 主机上执行命令、管理文件、持续读取后台任务输出，以�
 
 ## 核心能力
 
-- 本机与 SSH 目标共用一套包含 31 个工具的接口
+- 本机与 SSH 目标共用一套包含 32 个工具的接口
 - 普通远程命令与文件操作复用持久 OpenSSH worker
 - 支持前台命令，以及可取消、可增量读取输出的后台任务
 - 支持持久 PTY 终端和实时窗口尺寸调整
@@ -307,14 +307,14 @@ URL 或秘密值。高级部署仍可使用内联 URL 或文件秘密引用，�
 
 ## 工具列表
 
-Target Ops 当前共提供 31 个工具。
+Target Ops 当前共提供 32 个工具。
 
 | 类别 | 工具 |
 | --- | --- |
 | 服务 | `server_info` |
 | 目标 | `target_list`、`target_current`、`target_select`、`target_connect`、`target_disconnect` |
 | 下游 MCP | `mcp_server_list`、`mcp_tools_list`、`mcp_tool_call` |
-| 命令与任务 | `exec`、`exec_start`、`job_poll`、`job_output`、`job_cancel` |
+| 命令与任务 | `exec`、`exec_batch`、`exec_start`、`job_poll`、`job_output`、`job_cancel` |
 | 文件与目录 | `file_read`、`file_list`、`file_find`、`file_edit`、`file_write`、`file_delete`、`file_import`、`file_export`、`file_patch`、`file_move`、`file_chmod`、`directory_create` |
 | 终端 | `terminal_open`、`terminal_send`、`terminal_read`、`terminal_resize`、`terminal_close` |
 
@@ -332,11 +332,17 @@ scope。
 
 ### 命令与后台任务
 
-`exec` 执行受限的非交互式 shell 命令。在 ChatGPT 中，它会绑定稳定的
-`ui://target-ops/exec-terminal/v1.html` MCP App，以紧凑的非交互式命令结果界面展示
-stdout、stderr、目标、退出码、超时和截断状态。ANSI SGR 颜色/样式会被安全渲染，
-不再直接显示原始转义码。`ExecResponse` 也会携带实际执行的命令，因此 App 无需依赖
-不同客户端是否转发工具输入，也能稳定显示命令。为兼容客户端缓存与资源发现，资源
+`exec` 执行一个受限的非交互式 shell 命令或脚本。`exec_batch` 可在一次工具调用中
+执行最多 32 个彼此独立的命令，默认顺序执行，也可以显式请求并行执行，并为每条命令
+返回独立的结构化结果；顺序模式还可在首次失败时停止。若多条命令需要共享 `cd`、变量、
+管道或控制流等 shell 状态，应继续使用 `exec`；若只是为了减少工具调用而批量进行互不
+依赖的检查，应优先使用 `exec_batch`，而不是用 shell 分隔符强行拼接。
+
+两者都绑定到稳定的 `ui://target-ops/exec-terminal/v1.html` MCP App。单条命令会展示
+stdout、stderr、目标、退出码、超时和截断状态，并自动折叠较长的成功输出；批量结果
+采用紧凑命令行列表，成功项默认收起，失败项自动展开。ANSI SGR 颜色/样式会被安全
+渲染，不再直接显示原始转义码。`ExecResponse` 也会携带实际执行的命令，因此 App 无需
+依赖不同客户端是否转发工具输入，也能稳定显示命令。为兼容客户端缓存与资源发现，资源
 URI 保持不变，但视觉设计不再模拟可交互终端。
 
 子进程 stdin 与 MCP 控制流隔离。`exec_start` 使用独立进程启动任务并立即返回任务

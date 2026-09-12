@@ -91,6 +91,25 @@ pub(super) fn output_schema(name: &str) -> Value {
             "required": ["command", "resolved_target"],
             "additionalProperties": false
         }),
+        "exec_batch" => json!({
+            "type": "object",
+            "properties": {
+                "resolved_target": resolved_target_schema(),
+                "mode": { "type": "string", "enum": ["sequential", "parallel"] },
+                "requested_count": { "type": "integer", "minimum": 1 },
+                "executed_count": { "type": "integer", "minimum": 0 },
+                "succeeded": { "type": "integer", "minimum": 0 },
+                "failed": { "type": "integer", "minimum": 0 },
+                "timed_out": { "type": "integer", "minimum": 0 },
+                "stopped_early": { "type": "boolean" },
+                "results": {
+                    "type": "array",
+                    "items": exec_batch_item_schema()
+                }
+            },
+            "required": ["resolved_target", "mode", "requested_count", "executed_count", "succeeded", "failed", "timed_out", "stopped_early", "results"],
+            "additionalProperties": false
+        }),
         "exec_start" => json!({
             "type": "object",
             "properties": {
@@ -398,6 +417,28 @@ pub(super) fn output_schema(name: &str) -> Value {
         }),
         _ => unreachable!("output schema missing for tool {name}"),
     }
+}
+
+fn exec_batch_item_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "index": { "type": "integer", "minimum": 0 },
+            "command": { "type": "string" },
+            "cwd": { "type": "string" },
+            "exit_code": nullable_integer_schema(),
+            "stdout": { "type": "string" },
+            "stderr": { "type": "string" },
+            "stdout_truncated": { "type": "boolean" },
+            "stderr_truncated": { "type": "boolean" },
+            "timed_out": { "type": "boolean" },
+            "error": { "type": "string" },
+            "elapsed_ms": { "type": "integer", "minimum": 0 },
+            "success": { "type": "boolean" }
+        },
+        "required": ["index", "command", "elapsed_ms", "success"],
+        "additionalProperties": false
+    })
 }
 
 fn resolved_target_schema() -> Value {

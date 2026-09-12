@@ -34,14 +34,15 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
             required_string("tool", "Downstream MCP tool name."),
             optional_value("arguments", "JSON object passed as downstream tool arguments. Defaults to an empty object.", json!({"type":"object","additionalProperties":true})),
         ])),
-        tool("exec", "Run a non-interactive command on the explicit target or current active target.", object_schema(vec![
+        tool("exec", "Run one non-interactive shell command or script on the explicit target or current active target. Use exec_batch instead when you need several logically independent command results.", object_schema(vec![
             optional_string("target", "Target id: local or ssh:<profile>. Omit to use active target."),
-            required_string("command", "Shell command to execute."),
+            required_string("command", "Shell command or script to execute as one shell unit."),
             optional_string("cwd", "Working directory."),
             optional_integer("timeout_ms", "Timeout in milliseconds."),
             optional_integer("max_output_bytes", "Maximum bytes to return for stdout and stderr."),
             optional_value("secret_env", "Map environment variable names to secret references. Secret values are resolved inside Target Ops and are not included in the tool request or tool metadata; commands can still expose them if they print their environment.", secret_env_schema()),
         ])),
+        tool("exec_batch", "Run multiple logically independent non-interactive commands in one tool call and return a separate result for each. Prefer this over combining unrelated inspections with shell separators; use exec for commands that must share shell state such as cd, variables, pipelines, or control flow.", exec_batch_schema()),
         tool("exec_start", "Start a non-interactive command as a background job. Jobs use dedicated processes, support incremental output and cancellation, and do not block later tool calls.", object_schema(vec![
             optional_string("target", "Target id: local or ssh:<profile>. Omit to use active target."),
             required_string("command", "Shell command to execute."),
@@ -158,7 +159,7 @@ fn tool(
         );
     }
 
-    if name == "exec" {
+    if matches!(name, "exec" | "exec_batch") {
         meta.insert(
             "ui".to_string(),
             json!({ "resourceUri": EXEC_TERMINAL_UI_URI }),
@@ -167,13 +168,18 @@ fn tool(
             "openai/outputTemplate".to_string(),
             Value::String(EXEC_TERMINAL_UI_URI.to_string()),
         );
+        let (invoking, invoked) = if name == "exec_batch" {
+            ("Running command batch…", "Command batch finished")
+        } else {
+            ("Running command…", "Command finished")
+        };
         meta.insert(
             "openai/toolInvocation/invoking".to_string(),
-            Value::String("Running command…".to_string()),
+            Value::String(invoking.to_string()),
         );
         meta.insert(
             "openai/toolInvocation/invoked".to_string(),
-            Value::String("Command finished".to_string()),
+            Value::String(invoked.to_string()),
         );
     }
 
@@ -246,6 +252,7 @@ fn tool_annotations(name: &str) -> Value {
     let destructive = matches!(
         name,
         "exec"
+            | "exec_batch"
             | "exec_start"
             | "job_cancel"
             | "mcp_tool_call"
@@ -259,7 +266,7 @@ fn tool_annotations(name: &str) -> Value {
     );
     let open_world = matches!(
         name,
-        "exec" | "exec_start" | "mcp_tools_list" | "mcp_tool_call" | "file_import"
+        "exec" | "exec_batch" | "exec_start" | "mcp_tools_list" | "mcp_tool_call" | "file_import"
     );
 
     json!({
@@ -339,6 +346,37 @@ fn optional_integer(name: &'static str, description: &'static str) -> Prop {
         required: false,
         value: json!({ "type": "integer", "description": description }),
     }
+}
+
+fn exec_batch_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "target": { "type": "string", "description": "Target id: local or ssh:<profile>. Omit to use active target." },
+            "commands": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 32,
+                "description": "Independent commands. Results preserve this order even in parallel mode.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "command": { "type": "string", "description": "One shell command or script unit." },
+                        "cwd": { "type": "string", "description": "Working directory for this command." },
+                        "timeout_ms": { "type": "integer", "description": "Timeout in milliseconds for this command." },
+                        "max_output_bytes": { "type": "integer", "description": "Maximum bytes returned for this command's stdout and stderr." }
+                    },
+                    "required": ["command"],
+                    "additionalProperties": false
+                }
+            },
+            "mode": { "type": "string", "enum": ["sequential", "parallel"], "description": "Execution mode. Defaults to sequential." },
+            "stop_on_error": { "type": "boolean", "description": "In sequential mode, stop after the first non-zero, timed-out, or tool-level failure. Defaults to false." },
+            "secret_env": { "description": "Shared secret environment map for all commands. Secret values are resolved inside Target Ops and omitted from tool metadata.", "type": "object", "additionalProperties": secret_ref_schema() }
+        },
+        "required": ["commands"],
+        "additionalProperties": false
+    })
 }
 
 fn file_edit_schema() -> Value {
@@ -546,7 +584,7 @@ mod tests {
         let tools = list_tools(None);
         let tools = tools.as_array().expect("tool list is an array");
 
-        assert_eq!(tools.len(), 31);
+        assert_eq!(tools.len(), 32);
         for tool in tools {
             let name = tool["name"].as_str().expect("tool has a name");
             assert_eq!(
@@ -581,24 +619,26 @@ mod tests {
     }
 
     #[test]
-    fn exec_binds_command_result_app_resource() {
+    fn exec_tools_bind_command_result_app_resource() {
         let tools = list_tools(None);
-        let exec = tools
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|tool| tool["name"] == "exec")
-            .expect("exec tool");
+        let tools = tools.as_array().unwrap();
 
-        assert_eq!(exec["_meta"]["ui"]["resourceUri"], EXEC_TERMINAL_UI_URI);
-        assert_eq!(exec["_meta"]["openai/outputTemplate"], EXEC_TERMINAL_UI_URI);
-        assert_eq!(
-            exec["_meta"]["openai/toolInvocation/invoking"],
-            "Running command…"
-        );
-        assert_eq!(
-            exec["_meta"]["openai/toolInvocation/invoked"],
-            "Command finished"
-        );
+        for (name, invoking, invoked) in [
+            ("exec", "Running command…", "Command finished"),
+            (
+                "exec_batch",
+                "Running command batch…",
+                "Command batch finished",
+            ),
+        ] {
+            let tool = tools
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .expect("exec tool");
+            assert_eq!(tool["_meta"]["ui"]["resourceUri"], EXEC_TERMINAL_UI_URI);
+            assert_eq!(tool["_meta"]["openai/outputTemplate"], EXEC_TERMINAL_UI_URI);
+            assert_eq!(tool["_meta"]["openai/toolInvocation/invoking"], invoking);
+            assert_eq!(tool["_meta"]["openai/toolInvocation/invoked"], invoked);
+        }
     }
 }
