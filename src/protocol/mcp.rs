@@ -117,6 +117,7 @@ fn handle_request_value(
     value: Value,
     caller_key: &str,
 ) -> Result<Option<Value>> {
+    state.results.touch_session(caller_key)?;
     let response = match serde_json::from_value::<RpcRequest>(value) {
         Ok(request) => handle_request(state, request, caller_key),
         Err(err) => Some(parse_error(format!("parse error: {err}"))),
@@ -262,7 +263,7 @@ fn tools_call(
                 }
             }
             if caches_app_result(&params.name) {
-                let result_id = state.results.store(&value)?;
+                let result_id = state.results.store(caller_key, &value)?;
                 if let Some(object) = value.as_object_mut() {
                     object.insert("result_id".to_string(), Value::String(result_id));
                 }

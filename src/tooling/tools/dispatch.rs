@@ -86,7 +86,9 @@ pub fn call_tool_with_context(
                 .get("result_id")
                 .and_then(Value::as_str)
                 .ok_or_else(|| Error::Tool("result_read requires result_id".to_string()))?;
-            Ok(serde_json::to_value(state.results.read(result_id)?)?)
+            Ok(serde_json::to_value(
+                state.results.read_for_caller(caller_key, result_id)?,
+            )?)
         }
         "exec_start" => Ok(serde_json::to_value(state.jobs.start_for_caller(
             &state,
