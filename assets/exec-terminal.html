@@ -6,453 +6,194 @@
 <style>
 :root {
   color-scheme: light dark;
-  font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --bg: #ffffff;
-  --surface: #f6f8fa;
-  --surface-hover: #eef1f4;
-  --code-bg: #f6f8fa;
-  --border: #d0d7de;
-  --text: #1f2328;
-  --muted: #656d76;
+  font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --border: color-mix(in srgb, currentColor 16%, transparent);
+  --muted: color-mix(in srgb, currentColor 58%, transparent);
+  --accent-bg: color-mix(in srgb, #58a6ff 12%, transparent);
+  --ok-bg: color-mix(in srgb, #2ea043 14%, transparent);
+  --error-bg: color-mix(in srgb, #f85149 15%, transparent);
+  --warn-bg: color-mix(in srgb, #d29922 15%, transparent);
   --success: #1a7f37;
   --error: #cf222e;
   --warning: #9a6700;
-  --accent: #0969da;
-  --ansi-black: #24292f;
-  --ansi-red: #cf222e;
-  --ansi-green: #1a7f37;
-  --ansi-yellow: #9a6700;
-  --ansi-blue: #0969da;
-  --ansi-magenta: #8250df;
-  --ansi-cyan: #1b7c83;
-  --ansi-white: #d0d7de;
-  --ansi-bright-black: #57606a;
-  --ansi-bright-red: #a40e26;
-  --ansi-bright-green: #2da44e;
-  --ansi-bright-yellow: #bf8700;
-  --ansi-bright-blue: #218bff;
-  --ansi-bright-magenta: #a475f9;
-  --ansi-bright-cyan: #3192aa;
-  --ansi-bright-white: #f6f8fa;
+  --ansi-black: #24292f; --ansi-red: #cf222e; --ansi-green: #1a7f37; --ansi-yellow: #9a6700;
+  --ansi-blue: #0969da; --ansi-magenta: #8250df; --ansi-cyan: #1b7c83; --ansi-white: #d0d7de;
+  --ansi-bright-black: #57606a; --ansi-bright-red: #a40e26; --ansi-bright-green: #2da44e; --ansi-bright-yellow: #bf8700;
+  --ansi-bright-blue: #218bff; --ansi-bright-magenta: #a475f9; --ansi-bright-cyan: #3192aa; --ansi-bright-white: #f6f8fa;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0d1117;
-    --surface: #161b22;
-    --surface-hover: #1f2630;
-    --code-bg: #0d1117;
-    --border: #30363d;
-    --text: #e6edf3;
-    --muted: #8b949e;
-    --success: #3fb950;
-    --error: #ff7b72;
-    --warning: #d29922;
-    --accent: #58a6ff;
-    --ansi-black: #484f58;
-    --ansi-red: #ff7b72;
-    --ansi-green: #3fb950;
-    --ansi-yellow: #d29922;
-    --ansi-blue: #58a6ff;
-    --ansi-magenta: #bc8cff;
-    --ansi-cyan: #39c5cf;
-    --ansi-white: #b1bac4;
-    --ansi-bright-black: #6e7681;
-    --ansi-bright-red: #ffa198;
-    --ansi-bright-green: #56d364;
-    --ansi-bright-yellow: #e3b341;
-    --ansi-bright-blue: #79c0ff;
-    --ansi-bright-magenta: #d2a8ff;
-    --ansi-bright-cyan: #56d4dd;
-    --ansi-bright-white: #f0f6fc;
+    --success: #3fb950; --error: #ff7b72; --warning: #d29922;
+    --ansi-black: #484f58; --ansi-red: #ff7b72; --ansi-green: #3fb950; --ansi-yellow: #d29922;
+    --ansi-blue: #58a6ff; --ansi-magenta: #bc8cff; --ansi-cyan: #39c5cf; --ansi-white: #b1bac4;
+    --ansi-bright-black: #6e7681; --ansi-bright-red: #ffa198; --ansi-bright-green: #56d364; --ansi-bright-yellow: #e3b341;
+    --ansi-bright-blue: #79c0ff; --ansi-bright-magenta: #d2a8ff; --ansi-bright-cyan: #56d4dd; --ansi-bright-white: #f0f6fc;
   }
 }
 * { box-sizing: border-box; }
-body { margin: 0; padding: 8px; background: transparent; color: var(--text); }
-.result { overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); }
-.header { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; padding: 9px 12px; border-bottom: 1px solid var(--border); background: var(--surface); }
-.heading { min-width: 0; margin-right: auto; }
-.title { font-weight: 650; line-height: 1.25; }
-.subtitle { margin-top: 1px; color: var(--muted); font-size: 11px; }
-.chip { border: 1px solid var(--border); border-radius: 999px; padding: 2px 7px; color: var(--muted); font-size: 10px; line-height: 1.4; white-space: nowrap; }
-.chip.ok { color: var(--success); }
-.chip.error { color: var(--error); }
-.chip.timeout { color: var(--warning); }
-.section { padding: 10px 12px; }
-.section + .section, .section + details, details + .section, details + details { border-top: 1px solid var(--border); }
-.label, .output-summary { color: var(--muted); font-size: 10px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; }
-.label { margin-bottom: 5px; }
-pre, code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
-pre { margin: 0; font-size: 12px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
-.command { max-height: 150px; overflow: auto; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--code-bg); }
-details.output-section { padding: 0; }
-details.output-section > summary { cursor: pointer; list-style: none; padding: 8px 12px; user-select: none; }
-details.output-section > summary::-webkit-details-marker { display: none; }
-details.output-section > summary::before { content: '›'; display: inline-block; margin-right: 6px; color: var(--muted); transform: rotate(0deg); transition: transform .12s ease; }
-details.output-section[open] > summary::before { transform: rotate(90deg); }
-.output-wrap { padding: 0 12px 10px; }
-.output { max-height: 430px; overflow: auto; }
-.stderr .output-summary { color: var(--error); }
-.empty { color: var(--muted); font-style: italic; }
-.notice { padding: 8px 12px; border-top: 1px solid var(--border); color: var(--warning); background: var(--surface); font-size: 11px; }
-.batch-list { display: grid; }
-.batch-item { border-top: 1px solid var(--border); }
-.batch-item:first-child { border-top: 0; }
-.batch-item > summary { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 7px; align-items: center; cursor: pointer; list-style: none; padding: 8px 12px; user-select: none; }
-.batch-item > summary::-webkit-details-marker { display: none; }
-.batch-item > summary:hover { background: var(--surface-hover); }
-.batch-mark { width: 16px; text-align: center; font-weight: 700; }
-.batch-mark.ok { color: var(--success); }
-.batch-mark.error { color: var(--error); }
-.batch-mark.timeout { color: var(--warning); }
-.batch-command { min-width: 0; overflow: hidden; color: var(--text); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
-.batch-meta { color: var(--muted); font-size: 10px; white-space: nowrap; }
-.batch-body { padding: 0 12px 10px 37px; }
-.batch-body .command { margin-bottom: 8px; }
-.cwd { margin: -2px 0 8px; color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
-.inline-error { margin-top: 8px; padding: 7px 9px; border: 1px solid color-mix(in srgb, var(--error) 35%, var(--border)); border-radius: 7px; color: var(--error); background: color-mix(in srgb, var(--error) 6%, transparent); font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
-.item-notice { margin-top: 7px; color: var(--warning); font-size: 10px; }
-@media (max-width: 520px) {
-  body { padding: 5px; }
-  .header, .section, .notice { padding-left: 10px; padding-right: 10px; }
-  .batch-item > summary { padding-left: 10px; padding-right: 10px; }
-  .batch-body { padding-left: 35px; padding-right: 10px; }
-  .output { max-height: 360px; }
-}
+body { margin: 0; padding: 10px; background: transparent; color: inherit; }
+.card { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.head { display: flex; gap: 10px; padding: 10px 12px; align-items: center; border-bottom: 1px solid var(--border); }
+.file { min-width: 0; flex: 1; }
+.title { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.path { margin-top: 2px; font: 11px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; opacity: .58; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kind, .status { flex: 0 0 auto; border: 1px solid var(--border); border-radius: 999px; padding: 2px 7px; font-size: 11px; }
+.kind { background: var(--accent-bg); }
+.status.ok { background: var(--ok-bg); color: var(--success); }
+.status.error { background: var(--error-bg); color: var(--error); }
+.status.warn { background: var(--warn-bg); color: var(--warning); }
+.viewer { max-height: 480px; overflow: auto; background: color-mix(in srgb, currentColor 2%, transparent); }
+.block + .block, .batch-item + .batch-item { border-top: 1px solid var(--border); }
+.block-label { padding: 6px 10px; border-bottom: 1px solid color-mix(in srgb, currentColor 8%, transparent); color: var(--muted); font: 11px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.command { margin: 0; padding: 8px 10px; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.output-block > summary, .batch-item > summary { cursor: pointer; list-style: none; user-select: none; }
+.output-block > summary::-webkit-details-marker, .batch-item > summary::-webkit-details-marker { display: none; }
+.output-block > summary { padding: 7px 10px; color: var(--muted); font-size: 11px; }
+.output-block > summary::before, .batch-item > summary::before { content: '›'; display: inline-block; width: 12px; color: var(--muted); transition: transform .12s ease; }
+.output-block[open] > summary::before, .batch-item[open] > summary::before { transform: rotate(90deg); }
+.output { margin: 0; padding: 0 10px 9px 22px; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.stderr > summary { color: var(--error); }
+.notice { padding: 14px 12px; color: var(--muted); }
+.notice.error { color: var(--error); background: var(--error-bg); }
+.notice.warn { color: var(--warning); background: var(--warn-bg); }
+.batch-item > summary { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; gap: 6px; align-items: center; padding: 7px 10px; font: 11px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.batch-item > summary::before { grid-column: 1; width: 12px; }
+.batch-command { grid-column: 2; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.batch-state { grid-column: 3; color: var(--muted); white-space: nowrap; }
+.batch-state.error { color: var(--error); }
+.batch-state.warn { color: var(--warning); }
+.batch-body { border-top: 1px solid color-mix(in srgb, currentColor 8%, transparent); }
+.cwd { padding: 0 10px 8px; color: var(--muted); font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+.item-note { padding: 0 10px 8px; color: var(--warning); font-size: 11px; }
+.details { border-top: 1px solid var(--border); }
+.details summary { cursor: pointer; padding: 8px 12px; font-size: 12px; user-select: none; color: var(--muted); }
+.meta { padding: 0 12px 10px; display: grid; gap: 4px; }
+.meta-row { display: grid; grid-template-columns: 78px minmax(0, 1fr); gap: 8px; }
+.meta-label { color: var(--muted); }
+.meta-value { font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
 </style>
 </head>
 <body>
-<div class="result">
-  <div class="header">
-    <div class="heading">
-      <div class="title" id="title">Command result</div>
-      <div class="subtitle" id="subtitle">Non-interactive execution</div>
-    </div>
-    <div class="chip" id="target">target</div>
-    <div class="chip" id="status">waiting</div>
+<div class="card">
+  <div class="head">
+    <div class="file"><div class="title" id="title">Command result</div><div class="path" id="path">Non-interactive execution</div></div>
+    <div class="kind" id="kind">Exec</div>
+    <div class="status" id="status">waiting</div>
   </div>
-  <div id="content">
-    <div class="section"><pre class="empty">Waiting for command output…</pre></div>
-  </div>
-  <div class="notice" id="notice" hidden></div>
+  <div class="viewer" id="viewer"><div class="notice">Waiting for command output…</div></div>
+  <details class="details" id="details"><summary>Details</summary><div class="meta" id="meta"></div></details>
 </div>
 <script>
 (() => {
   const title = document.getElementById('title');
-  const subtitle = document.getElementById('subtitle');
-  const target = document.getElementById('target');
-  const status = document.getElementById('status');
-  const content = document.getElementById('content');
-  const notice = document.getElementById('notice');
+  const pathEl = document.getElementById('path');
+  const kindEl = document.getElementById('kind');
+  const statusEl = document.getElementById('status');
+  const viewer = document.getElementById('viewer');
+  const meta = document.getElementById('meta');
+  const details = document.getElementById('details');
 
-  const normalColors = [
-    'var(--ansi-black)', 'var(--ansi-red)', 'var(--ansi-green)', 'var(--ansi-yellow)',
-    'var(--ansi-blue)', 'var(--ansi-magenta)', 'var(--ansi-cyan)', 'var(--ansi-white)'
-  ];
-  const brightColors = [
-    'var(--ansi-bright-black)', 'var(--ansi-bright-red)', 'var(--ansi-bright-green)', 'var(--ansi-bright-yellow)',
-    'var(--ansi-bright-blue)', 'var(--ansi-bright-magenta)', 'var(--ansi-bright-cyan)', 'var(--ansi-bright-white)'
-  ];
+  const normalColors = ['var(--ansi-black)','var(--ansi-red)','var(--ansi-green)','var(--ansi-yellow)','var(--ansi-blue)','var(--ansi-magenta)','var(--ansi-cyan)','var(--ansi-white)'];
+  const brightColors = ['var(--ansi-bright-black)','var(--ansi-bright-red)','var(--ansi-bright-green)','var(--ansi-bright-yellow)','var(--ansi-bright-blue)','var(--ansi-bright-magenta)','var(--ansi-bright-cyan)','var(--ansi-bright-white)'];
+  const metaRow = (label, value) => value === undefined || value === null || value === '' ? '' : `<div class="meta-row"><div class="meta-label">${escapeHtml(label)}</div><div class="meta-value">${escapeHtml(value)}</div></div>`;
 
-  function el(tag, className, text) {
-    const node = document.createElement(tag);
-    if (className) node.className = className;
-    if (text !== undefined) node.textContent = text;
-    return node;
-  }
-
-  function freshAnsiState() {
-    return { bold: false, dim: false, italic: false, underline: false, inverse: false, fg: null, bg: null };
-  }
-
+  function escapeHtml(value) { return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
+  function element(tag, className, text) { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; }
+  function freshAnsiState() { return { bold:false, dim:false, italic:false, underline:false, inverse:false, fg:null, bg:null }; }
   function xtermColor(index) {
     if (!Number.isInteger(index) || index < 0 || index > 255) return null;
     if (index < 8) return normalColors[index];
     if (index < 16) return brightColors[index - 8];
-    if (index >= 232) {
-      const level = 8 + (index - 232) * 10;
-      return `rgb(${level} ${level} ${level})`;
-    }
-    const n = index - 16;
-    const component = value => value === 0 ? 0 : 55 + value * 40;
-    const r = component(Math.floor(n / 36));
-    const g = component(Math.floor((n % 36) / 6));
-    const b = component(n % 6);
-    return `rgb(${r} ${g} ${b})`;
+    if (index >= 232) { const level = 8 + (index - 232) * 10; return `rgb(${level} ${level} ${level})`; }
+    const n = index - 16; const component = value => value === 0 ? 0 : 55 + value * 40;
+    return `rgb(${component(Math.floor(n / 36))} ${component(Math.floor((n % 36) / 6))} ${component(n % 6)})`;
   }
-
   function applySgr(state, rawCodes) {
     const codes = rawCodes === '' ? [0] : rawCodes.split(';').map(value => Number(value || 0));
     for (let i = 0; i < codes.length; i += 1) {
       const code = codes[i];
       if (code === 0) Object.assign(state, freshAnsiState());
-      else if (code === 1) state.bold = true;
-      else if (code === 2) state.dim = true;
-      else if (code === 3) state.italic = true;
-      else if (code === 4) state.underline = true;
-      else if (code === 7) state.inverse = true;
-      else if (code === 22) { state.bold = false; state.dim = false; }
-      else if (code === 23) state.italic = false;
-      else if (code === 24) state.underline = false;
-      else if (code === 27) state.inverse = false;
-      else if (code >= 30 && code <= 37) state.fg = normalColors[code - 30];
-      else if (code === 39) state.fg = null;
-      else if (code >= 40 && code <= 47) state.bg = normalColors[code - 40];
-      else if (code === 49) state.bg = null;
-      else if (code >= 90 && code <= 97) state.fg = brightColors[code - 90];
-      else if (code >= 100 && code <= 107) state.bg = brightColors[code - 100];
-      else if ((code === 38 || code === 48) && codes[i + 1] === 5 && Number.isInteger(codes[i + 2])) {
-        const color = xtermColor(codes[i + 2]);
-        if (code === 38) state.fg = color;
-        else state.bg = color;
-        i += 2;
-      } else if ((code === 38 || code === 48) && codes[i + 1] === 2 && codes.slice(i + 2, i + 5).every(Number.isInteger)) {
-        const [r, g, b] = codes.slice(i + 2, i + 5).map(value => Math.max(0, Math.min(255, value)));
-        const color = `rgb(${r} ${g} ${b})`;
-        if (code === 38) state.fg = color;
-        else state.bg = color;
-        i += 4;
-      }
+      else if (code === 1) state.bold = true; else if (code === 2) state.dim = true; else if (code === 3) state.italic = true; else if (code === 4) state.underline = true; else if (code === 7) state.inverse = true;
+      else if (code === 22) { state.bold = false; state.dim = false; } else if (code === 23) state.italic = false; else if (code === 24) state.underline = false; else if (code === 27) state.inverse = false;
+      else if (code >= 30 && code <= 37) state.fg = normalColors[code - 30]; else if (code === 39) state.fg = null; else if (code >= 40 && code <= 47) state.bg = normalColors[code - 40]; else if (code === 49) state.bg = null;
+      else if (code >= 90 && code <= 97) state.fg = brightColors[code - 90]; else if (code >= 100 && code <= 107) state.bg = brightColors[code - 100];
+      else if ((code === 38 || code === 48) && codes[i + 1] === 5 && Number.isInteger(codes[i + 2])) { const color = xtermColor(codes[i + 2]); if (code === 38) state.fg = color; else state.bg = color; i += 2; }
+      else if ((code === 38 || code === 48) && codes[i + 1] === 2 && codes.slice(i + 2, i + 5).every(Number.isInteger)) { const [r,g,b] = codes.slice(i + 2, i + 5).map(value => Math.max(0, Math.min(255, value))); const color = `rgb(${r} ${g} ${b})`; if (code === 38) state.fg = color; else state.bg = color; i += 4; }
     }
   }
-
-  function stripUnsupportedControls(text) {
-    return text
-      .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, '')
-      .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
-      .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
-  }
-
+  function stripUnsupportedControls(text) { return text.replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, '').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, ''); }
   function appendStyledText(container, text, state) {
-    if (!text) return;
-    const cleaned = stripUnsupportedControls(text);
-    if (!cleaned) return;
-    const span = document.createElement('span');
-    span.textContent = cleaned;
-    const fg = state.inverse ? state.bg : state.fg;
-    const bg = state.inverse ? state.fg : state.bg;
-    if (fg) span.style.color = fg;
-    if (bg) span.style.backgroundColor = bg;
-    if (state.bold) span.style.fontWeight = '700';
-    if (state.dim) span.style.opacity = '.72';
-    if (state.italic) span.style.fontStyle = 'italic';
-    if (state.underline) span.style.textDecoration = 'underline';
+    const cleaned = stripUnsupportedControls(text); if (!cleaned) return;
+    const span = document.createElement('span'); span.textContent = cleaned;
+    const fg = state.inverse ? state.bg : state.fg; const bg = state.inverse ? state.fg : state.bg;
+    if (fg) span.style.color = fg; if (bg) span.style.backgroundColor = bg; if (state.bold) span.style.fontWeight = '700'; if (state.dim) span.style.opacity = '.72'; if (state.italic) span.style.fontStyle = 'italic'; if (state.underline) span.style.textDecoration = 'underline';
     container.appendChild(span);
   }
-
   function renderAnsi(container, text) {
-    container.replaceChildren();
-    const state = freshAnsiState();
-    const sgr = /\x1b\[([0-9;]*)m/g;
-    let cursor = 0;
-    let match;
-    while ((match = sgr.exec(text)) !== null) {
-      appendStyledText(container, text.slice(cursor, match.index), state);
-      applySgr(state, match[1]);
-      cursor = sgr.lastIndex;
-    }
+    container.replaceChildren(); const state = freshAnsiState(); const sgr = /\x1b\[([0-9;]*)m/g; let cursor = 0; let match;
+    while ((match = sgr.exec(text)) !== null) { appendStyledText(container, text.slice(cursor, match.index), state); applySgr(state, match[1]); cursor = sgr.lastIndex; }
     appendStyledText(container, text.slice(cursor), state);
   }
+  function lineCount(text) { if (!text) return 0; return text.split('\n').length - (text.endsWith('\n') ? 1 : 0); }
+  function commandPreview(value) { const first = String(value || '').split('\n').find(line => line.trim()) || 'Command unavailable'; return first.length > 120 ? `${first.slice(0,117)}…` : first; }
+  function formatDuration(ms) { if (!Number.isFinite(ms)) return ''; if (ms < 1000) return `${ms} ms`; if (ms < 10000) return `${(ms / 1000).toFixed(2)} s`; return `${(ms / 1000).toFixed(1)} s`; }
+  function status(text, className = '') { statusEl.textContent = text; statusEl.className = `status ${className}`.trim(); }
 
-  function lineCount(text) {
-    if (!text) return 0;
-    return text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
-  }
-
-  function formatDuration(ms) {
-    if (!Number.isFinite(ms)) return '';
-    if (ms < 1000) return `${ms} ms`;
-    if (ms < 10000) return `${(ms / 1000).toFixed(2)} s`;
-    return `${(ms / 1000).toFixed(1)} s`;
-  }
-
-  function commandPreview(value) {
-    const first = String(value || '').split('\n').find(line => line.trim()) || 'Command unavailable';
-    return first.length > 120 ? `${first.slice(0, 117)}…` : first;
-  }
-
-  function makeCommandSection(commandText, cwdText) {
-    const section = el('div', 'section');
-    section.appendChild(el('div', 'label', 'Command'));
-    section.appendChild(el('pre', 'command', commandText || 'Command unavailable'));
-    if (cwdText) section.appendChild(el('div', 'cwd', `cwd · ${cwdText}`));
-    return section;
-  }
-
-  function makeOutputDetails(label, text, open, isError) {
-    const details = el('details', `output-section${isError ? ' stderr' : ''}`);
-    details.open = open;
-    const lines = lineCount(text);
-    const summary = el('summary', 'output-summary', `${label}${lines ? ` · ${lines} line${lines === 1 ? '' : 's'}` : ''}`);
-    const wrap = el('div', 'output-wrap');
-    const pre = el('pre', 'output');
-    renderAnsi(pre, text);
-    wrap.appendChild(pre);
-    details.append(summary, wrap);
-    return details;
-  }
-
-  function setStatus(text, kind) {
-    status.textContent = text;
-    status.className = 'chip';
-    if (kind) status.classList.add(kind);
+  function outputDetails(label, text, open, isError) {
+    const block = element('details', `output-block block${isError ? ' stderr' : ''}`); block.open = open;
+    const lines = lineCount(text); block.appendChild(element('summary', '', `${label}${lines ? ` · ${lines} line${lines === 1 ? '' : 's'}` : ''}`));
+    const pre = element('pre', 'output'); renderAnsi(pre, text); block.appendChild(pre); return block;
   }
 
   function renderSingle(data, toolInput) {
-    title.textContent = 'Command result';
-    subtitle.textContent = 'Non-interactive execution';
-    const resolvedTarget = data.resolved_target?.target || data.target || 'target';
-    const exitCode = data.exit_code;
-    const timedOut = data.timed_out === true;
-    const stdoutText = typeof data.stdout === 'string' ? data.stdout : '';
-    const stderrText = typeof data.stderr === 'string' ? data.stderr : '';
-    const commandText = typeof data.command === 'string' && data.command
-      ? data.command
-      : (typeof toolInput?.command === 'string' && toolInput.command ? toolInput.command : 'Command unavailable');
-
-    target.textContent = resolvedTarget;
-    if (timedOut) setStatus('timed out', 'timeout');
-    else if (exitCode === 0) setStatus('exit 0', 'ok');
-    else if (typeof exitCode === 'number') setStatus(`exit ${exitCode}`, 'error');
-    else setStatus('finished');
-
-    content.replaceChildren();
-    content.appendChild(makeCommandSection(commandText));
-    if (stdoutText) {
-      const longOutput = lineCount(stdoutText) > 30 || stdoutText.length > 4000;
-      content.appendChild(makeOutputDetails('stdout', stdoutText, !longOutput || exitCode !== 0 || timedOut, false));
-    }
-    if (stderrText) content.appendChild(makeOutputDetails('stderr', stderrText, true, true));
-    if (!stdoutText && !stderrText) {
-      const section = el('div', 'section');
-      section.appendChild(el('pre', 'empty', 'Command completed without output.'));
-      content.appendChild(section);
-    }
-
-    const notices = [];
-    if (data.stdout_truncated) notices.push('stdout was truncated');
-    if (data.stderr_truncated) notices.push('stderr was truncated');
-    if (timedOut) notices.push('command exceeded its timeout');
-    notice.hidden = notices.length === 0;
-    notice.textContent = notices.join(' · ');
+    const commandText = typeof data.command === 'string' && data.command ? data.command : (typeof toolInput?.command === 'string' ? toolInput.command : 'Command unavailable');
+    const target = data.resolved_target?.target || data.target || 'target'; const exitCode = data.exit_code; const timedOut = data.timed_out === true;
+    const stdoutText = typeof data.stdout === 'string' ? data.stdout : ''; const stderrText = typeof data.stderr === 'string' ? data.stderr : '';
+    title.textContent = 'Command result'; pathEl.textContent = commandPreview(commandText); kindEl.textContent = target;
+    if (timedOut) status('Timed out', 'warn'); else if (exitCode === 0) status('Exit 0', 'ok'); else if (typeof exitCode === 'number') status(`Exit ${exitCode}`, 'error'); else status('Finished');
+    viewer.replaceChildren();
+    const commandBlock = element('div', 'block'); commandBlock.appendChild(element('div', 'block-label', 'Command')); commandBlock.appendChild(element('pre', 'command', commandText)); viewer.appendChild(commandBlock);
+    if (stdoutText) { const longOutput = lineCount(stdoutText) > 30 || stdoutText.length > 4000; viewer.appendChild(outputDetails('stdout', stdoutText, !longOutput || exitCode !== 0 || timedOut, false)); }
+    if (stderrText) viewer.appendChild(outputDetails('stderr', stderrText, true, true));
+    if (!stdoutText && !stderrText) viewer.appendChild(element('div', 'notice', 'Command completed without output.'));
+    meta.innerHTML = metaRow('target', target) + metaRow('exit code', exitCode) + metaRow('timed out', timedOut ? 'yes' : 'no') + metaRow('stdout', data.stdout_truncated ? 'truncated' : 'complete') + metaRow('stderr', data.stderr_truncated ? 'truncated' : 'complete');
+    details.hidden = !meta.innerHTML;
   }
 
   function renderBatchItem(item) {
-    const success = item.success === true;
-    const timedOut = item.timed_out === true;
-    const details = el('details', 'batch-item');
-    details.open = !success;
-
-    const summary = document.createElement('summary');
-    let mark = '✓';
-    let markKind = 'ok';
-    if (timedOut) { mark = '◷'; markKind = 'timeout'; }
-    else if (!success) { mark = '✕'; markKind = 'error'; }
-    summary.appendChild(el('span', `batch-mark ${markKind}`, mark));
-    summary.appendChild(el('code', 'batch-command', commandPreview(item.command)));
-
-    const meta = [];
-    if (typeof item.exit_code === 'number') meta.push(`exit ${item.exit_code}`);
-    else if (timedOut) meta.push('timeout');
-    else if (item.error) meta.push('error');
-    const duration = formatDuration(item.elapsed_ms);
-    if (duration) meta.push(duration);
-    summary.appendChild(el('span', 'batch-meta', meta.join(' · ')));
-    details.appendChild(summary);
-
-    const body = el('div', 'batch-body');
-    if (String(item.command || '').includes('\n')) body.appendChild(el('pre', 'command', item.command));
-    if (item.cwd) body.appendChild(el('div', 'cwd', `cwd · ${item.cwd}`));
-
-    const stdoutText = typeof item.stdout === 'string' ? item.stdout : '';
-    const stderrText = typeof item.stderr === 'string' ? item.stderr : '';
-    if (stdoutText) body.appendChild(makeOutputDetails('stdout', stdoutText, !success && lineCount(stdoutText) <= 30, false));
-    if (stderrText) body.appendChild(makeOutputDetails('stderr', stderrText, !success, true));
-    if (!stdoutText && !stderrText && !item.error) body.appendChild(el('pre', 'empty', 'Command completed without output.'));
-    if (item.error) body.appendChild(el('div', 'inline-error', item.error));
-
-    const notices = [];
-    if (item.stdout_truncated) notices.push('stdout truncated');
-    if (item.stderr_truncated) notices.push('stderr truncated');
-    if (timedOut) notices.push('timeout exceeded');
-    if (notices.length) body.appendChild(el('div', 'item-notice', notices.join(' · ')));
-    details.appendChild(body);
-    return details;
+    const success = item.success === true; const timedOut = item.timed_out === true; const block = element('details', 'batch-item'); block.open = !success;
+    const summary = document.createElement('summary'); summary.appendChild(element('span', 'batch-command', commandPreview(item.command)));
+    const parts = []; if (timedOut) parts.push('timed out'); else if (typeof item.exit_code === 'number') parts.push(`exit ${item.exit_code}`); else if (item.error) parts.push('error'); const duration = formatDuration(item.elapsed_ms); if (duration) parts.push(duration);
+    summary.appendChild(element('span', `batch-state${!success ? timedOut ? ' warn' : ' error' : ''}`, parts.join(' · ') || (success ? 'done' : 'failed'))); block.appendChild(summary);
+    const body = element('div', 'batch-body');
+    if (String(item.command || '').includes('\n')) { const commandBlock = element('div', 'block'); commandBlock.appendChild(element('div', 'block-label', 'Command')); commandBlock.appendChild(element('pre', 'command', item.command)); body.appendChild(commandBlock); }
+    if (item.cwd) body.appendChild(element('div', 'cwd', `cwd · ${item.cwd}`));
+    const stdoutText = typeof item.stdout === 'string' ? item.stdout : ''; const stderrText = typeof item.stderr === 'string' ? item.stderr : '';
+    if (stdoutText) body.appendChild(outputDetails('stdout', stdoutText, !success && lineCount(stdoutText) <= 30, false));
+    if (stderrText) body.appendChild(outputDetails('stderr', stderrText, !success, true));
+    if (!stdoutText && !stderrText && !item.error) body.appendChild(element('div', 'notice', 'Command completed without output.'));
+    if (item.error) body.appendChild(element('div', 'notice error', item.error));
+    const notes = []; if (item.stdout_truncated) notes.push('stdout truncated'); if (item.stderr_truncated) notes.push('stderr truncated'); if (timedOut) notes.push('timeout exceeded'); if (notes.length) body.appendChild(element('div', 'item-note', notes.join(' · ')));
+    block.appendChild(body); return block;
   }
 
   function renderBatch(data) {
-    const results = Array.isArray(data.results) ? data.results : [];
-    const requested = Number.isInteger(data.requested_count) ? data.requested_count : results.length;
-    const executed = Number.isInteger(data.executed_count) ? data.executed_count : results.length;
-    const succeeded = Number.isInteger(data.succeeded) ? data.succeeded : results.filter(item => item.success === true).length;
-    const failed = Number.isInteger(data.failed) ? data.failed : executed - succeeded;
-    const mode = data.mode === 'parallel' ? 'parallel' : 'sequential';
-
-    title.textContent = 'Command batch';
-    subtitle.textContent = `${mode} · ${executed}/${requested} executed`;
-    target.textContent = data.resolved_target?.target || data.target || 'target';
-    setStatus(failed ? `${succeeded} passed · ${failed} failed` : `${succeeded} passed`, failed ? 'error' : 'ok');
-
-    const list = el('div', 'batch-list');
-    for (const item of results) list.appendChild(renderBatchItem(item));
-    if (!results.length) {
-      const section = el('div', 'section');
-      section.appendChild(el('pre', 'empty', 'No command results returned.'));
-      content.replaceChildren(section);
-    } else {
-      content.replaceChildren(list);
-    }
-
-    const notices = [];
-    if (data.stopped_early) notices.push(`stopped early after ${executed} of ${requested} commands`);
-    if (Number(data.timed_out) > 0) notices.push(`${data.timed_out} command${data.timed_out === 1 ? '' : 's'} timed out`);
-    notice.hidden = notices.length === 0;
-    notice.textContent = notices.join(' · ');
+    const results = Array.isArray(data.results) ? data.results : []; const requested = Number.isInteger(data.requested_count) ? data.requested_count : results.length; const executed = Number.isInteger(data.executed_count) ? data.executed_count : results.length; const succeeded = Number.isInteger(data.succeeded) ? data.succeeded : results.filter(item => item.success === true).length; const failed = Number.isInteger(data.failed) ? data.failed : executed - succeeded;
+    const target = data.resolved_target?.target || data.target || 'target'; const mode = data.mode === 'parallel' ? 'parallel' : 'sequential';
+    title.textContent = `${executed} command${executed === 1 ? '' : 's'}`; pathEl.textContent = `${target} · ${mode}${executed !== requested ? ` · ${executed}/${requested} executed` : ''}`; kindEl.textContent = 'Batch';
+    status(failed ? `${succeeded} passed · ${failed} failed` : `${succeeded} passed`, failed ? 'error' : 'ok');
+    viewer.replaceChildren(); if (!results.length) viewer.appendChild(element('div', 'notice', 'No command results returned.')); else results.forEach(item => viewer.appendChild(renderBatchItem(item)));
+    meta.innerHTML = metaRow('target', target) + metaRow('mode', mode) + metaRow('requested', requested) + metaRow('executed', executed) + metaRow('succeeded', succeeded) + metaRow('failed', failed) + metaRow('timed out', data.timed_out) + metaRow('stopped early', data.stopped_early ? 'yes' : 'no');
+    details.hidden = !meta.innerHTML;
   }
 
-  function render(raw, toolInput) {
-    const data = raw && typeof raw === 'object' ? raw : {};
-    if (Array.isArray(data.results) && ('requested_count' in data || 'executed_count' in data)) renderBatch(data);
-    else renderSingle(data, toolInput);
-  }
+  function render(raw, toolInput) { const data = raw && typeof raw === 'object' ? raw : {}; if (Array.isArray(data.results) && ('requested_count' in data || 'executed_count' in data)) renderBatch(data); else renderSingle(data, toolInput); }
 
-  let rpcId = 0;
-  const pendingRequests = new Map();
-  const rpcRequest = (method, params) => new Promise((resolve, reject) => {
-    const id = ++rpcId;
-    pendingRequests.set(id, { resolve, reject });
-    window.parent.postMessage({ jsonrpc: '2.0', id, method, params }, '*');
-  });
-
-  window.addEventListener('message', event => {
-    const msg = event.data;
-    if (msg?.jsonrpc === '2.0' && msg.id !== undefined && pendingRequests.has(msg.id)) {
-      const pending = pendingRequests.get(msg.id);
-      pendingRequests.delete(msg.id);
-      if (msg.error) pending.reject(msg.error);
-      else pending.resolve(msg.result);
-      return;
-    }
-    if (msg?.method === 'ui/notifications/tool-result') {
-      render(
-        msg.params?.structuredContent || msg.params?.content || msg.params,
-        msg.params?.toolInput || msg.params?.arguments
-      );
-    }
-  });
-
-  async function initializeBridge() {
-    await rpcRequest('ui/initialize', {
-      appInfo: { name: 'target-ops-exec-result', version: '1.2.0' },
-      appCapabilities: {},
-      protocolVersion: '2026-01-26',
-    });
-    window.parent.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/initialized', params: {} }, '*');
-  }
-
-  if (window.openai?.toolOutput) render(window.openai.toolOutput, window.openai?.toolInput);
-  else if (window.openai?.toolResponseMetadata?.structuredContent) {
-    render(window.openai.toolResponseMetadata.structuredContent, window.openai?.toolInput);
-  }
+  let rpcId = 0; const pendingRequests = new Map();
+  const rpcRequest = (method, params) => new Promise((resolve, reject) => { const id = ++rpcId; pendingRequests.set(id, {resolve,reject}); window.parent.postMessage({jsonrpc:'2.0',id,method,params}, '*'); });
+  window.addEventListener('message', event => { const msg = event.data; if (msg?.jsonrpc === '2.0' && msg.id !== undefined && pendingRequests.has(msg.id)) { const pending = pendingRequests.get(msg.id); pendingRequests.delete(msg.id); if (msg.error) pending.reject(msg.error); else pending.resolve(msg.result); return; } if (msg?.method === 'ui/notifications/tool-result') render(msg.params?.structuredContent || msg.params?.content || msg.params, msg.params?.toolInput || msg.params?.arguments); });
+  async function initializeBridge() { await rpcRequest('ui/initialize', { appInfo: { name: 'target-ops-exec-result', version: '1.3.0' }, appCapabilities: {}, protocolVersion: '2026-01-26' }); window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/initialized',params:{}}, '*'); }
+  if (window.openai?.toolOutput) render(window.openai.toolOutput, window.openai?.toolInput); else if (window.openai?.toolResponseMetadata?.structuredContent) render(window.openai.toolResponseMetadata.structuredContent, window.openai?.toolInput);
   initializeBridge().catch(error => console.error('Failed to initialize MCP Apps bridge:', error));
 })();
 </script>

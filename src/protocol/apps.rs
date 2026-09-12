@@ -28,7 +28,7 @@ const RESOURCES: [AppResource; 4] = [
         description: "Non-interactive view of Target Ops exec results.",
         widget_description: "Shows the executed command, ANSI-styled stdout and stderr, target, exit status, timeout, and truncation state without implying an interactive terminal.",
         html: EXEC_TERMINAL_UI_HTML,
-        prefers_border: false,
+        prefers_border: true,
     },
     AppResource {
         uri: FILE_CHANGE_UI_URI,
@@ -55,7 +55,7 @@ const RESOURCES: [AppResource; 4] = [
         description: "Compact overview of configured targets or downstream MCP servers.",
         widget_description: "Shows configured local and SSH targets or downstream MCP servers as a compact status card.",
         html: INVENTORY_UI_HTML,
-        prefers_border: false,
+        prefers_border: true,
     },
 ];
 
@@ -130,8 +130,8 @@ mod tests {
             .find(|resource| resource["uri"] == EXEC_TERMINAL_UI_URI)
             .expect("exec result resource");
         assert_eq!(exec_result["mimeType"], MCP_APP_MIME_TYPE);
-        assert_eq!(exec_result["_meta"]["ui"]["prefersBorder"], false);
-        assert_eq!(exec_result["_meta"]["openai/widgetPrefersBorder"], false);
+        assert_eq!(exec_result["_meta"]["ui"]["prefersBorder"], true);
+        assert_eq!(exec_result["_meta"]["openai/widgetPrefersBorder"], true);
         assert_eq!(exec_result["_meta"]["ui"]["domain"], widget_domain);
         assert_eq!(
             exec_result["_meta"]["ui"]["csp"]["connectDomains"],
@@ -165,8 +165,8 @@ mod tests {
             .find(|resource| resource["uri"] == INVENTORY_UI_URI)
             .expect("inventory resource");
         assert_eq!(inventory["mimeType"], MCP_APP_MIME_TYPE);
-        assert_eq!(inventory["_meta"]["ui"]["prefersBorder"], false);
-        assert_eq!(inventory["_meta"]["openai/widgetPrefersBorder"], false);
+        assert_eq!(inventory["_meta"]["ui"]["prefersBorder"], true);
+        assert_eq!(inventory["_meta"]["openai/widgetPrefersBorder"], true);
         assert_eq!(inventory["_meta"]["openai/widgetDomain"], widget_domain);
     }
 

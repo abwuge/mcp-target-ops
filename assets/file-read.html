@@ -9,12 +9,15 @@
   font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --border: color-mix(in srgb, currentColor 16%, transparent);
   --muted: color-mix(in srgb, currentColor 58%, transparent);
-  --read-bg: color-mix(in srgb, #58a6ff 12%, transparent);
+  --accent-bg: color-mix(in srgb, #58a6ff 12%, transparent);
   --ok-bg: color-mix(in srgb, #2ea043 14%, transparent);
   --error-bg: color-mix(in srgb, #f85149 15%, transparent);
+  --warn-bg: color-mix(in srgb, #d29922 15%, transparent);
+  --success: #1a7f37;
   --error: #cf222e;
+  --warning: #9a6700;
 }
-@media (prefers-color-scheme: dark) { :root { --error: #ff7b72; } }
+@media (prefers-color-scheme: dark) { :root { --success: #3fb950; --error: #ff7b72; --warning: #d29922; } }
 * { box-sizing: border-box; }
 body { margin: 0; padding: 10px; background: transparent; color: inherit; }
 .card { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
@@ -23,9 +26,11 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
 .title { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .path { margin-top: 2px; font: 11px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; opacity: .58; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kind, .status { flex: 0 0 auto; border: 1px solid var(--border); border-radius: 999px; padding: 2px 7px; font-size: 11px; }
-.kind { background: var(--read-bg); }
-.status.ok { background: var(--ok-bg); }
+.kind { background: var(--accent-bg); }
+.status { color: var(--muted); }
+.status.ok { background: var(--ok-bg); color: var(--success); }
 .status.error { background: var(--error-bg); color: var(--error); }
+.status.warn { background: var(--warn-bg); color: var(--warning); }
 .viewer { max-height: 480px; overflow: auto; background: color-mix(in srgb, currentColor 2%, transparent); }
 .file-block + .file-block { border-top: 1px solid var(--border); }
 .file-block > summary { cursor: pointer; list-style: none; display: flex; gap: 8px; align-items: center; padding: 7px 10px; font: 11px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; user-select: none; }
@@ -35,6 +40,7 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
 .file-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-state { flex: 0 0 auto; color: var(--muted); }
 .file-state.error { color: var(--error); }
+.file-state.warn { color: var(--warning); }
 .file-body { border-top: 1px solid color-mix(in srgb, currentColor 8%, transparent); }
 .code-line { display: grid; grid-template-columns: 52px minmax(max-content, 1fr); min-height: 20px; font: 12px/20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .gutter { padding: 0 7px; text-align: right; user-select: none; color: var(--muted); border-right: 1px solid color-mix(in srgb, currentColor 8%, transparent); }
@@ -94,7 +100,7 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     pathEl.textContent = path;
     kindEl.textContent = rangeText(data) || 'Read';
     statusEl.textContent = data.truncated ? 'Truncated' : 'Read';
-    statusEl.className = 'status ok';
+    statusEl.className = `status ${data.truncated ? 'warn' : 'ok'}`;
     viewer.innerHTML = lineRows(data.content, data.start_line, data.encoding);
     meta.innerHTML =
       metaRow('target', data.resolved_target?.target) +
@@ -116,7 +122,7 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     name.className = 'file-name';
     name.textContent = item.path || `item ${index + 1}`;
     const state = document.createElement('span');
-    state.className = `file-state${item.success === false ? ' error' : ''}`;
+    state.className = `file-state${item.success === false ? ' error' : item.truncated ? ' warn' : ''}`;
     state.textContent = item.success === false ? 'failed' : ([rangeText(item), item.truncated ? 'truncated' : ''].filter(Boolean).join(' · ') || 'read');
     summary.append(name, state);
     block.appendChild(summary);
@@ -139,8 +145,8 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     title.textContent = `${files.length} file reads`;
     pathEl.textContent = files.map(file => file.path).filter(Boolean).join(' · ');
     kindEl.textContent = 'Batch read';
-    statusEl.textContent = failed ? `${succeeded} read · ${failed} failed` : `${succeeded} read`;
-    statusEl.className = `status ${failed ? 'error' : 'ok'}`;
+    statusEl.textContent = failed ? `${succeeded} read · ${failed} failed` : (data.truncated ? `${succeeded} read · truncated` : `${succeeded} read`);
+    statusEl.className = `status ${failed ? 'error' : data.truncated ? 'warn' : 'ok'}`;
     viewer.replaceChildren();
     if (!files.length) viewer.innerHTML = '<div class="notice">No file results returned.</div>';
     else files.forEach((item, index) => viewer.appendChild(batchBlock(item, index)));

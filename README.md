@@ -444,6 +444,8 @@ The self-contained widget:
 - requests a bordered presentation and declares a closed network/resource CSP;
 - uses `server.public_base_url` as its widget domain when configured.
 
+The command result, file read, file change, and inventory MCP Apps use the same bordered card system: consistent 10 px outer radius, header spacing, monospace secondary text, editor-like content surface, expandable details, and shared success/warning/error pills. The OAuth authorization page keeps its full-page hierarchy while using the same system and monospace font families and related corner treatment.
+
 After changing tool descriptors or App metadata, reconnect or refresh the
 ChatGPT app so the client reloads `tools/list` and MCP resources.
 

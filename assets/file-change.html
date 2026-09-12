@@ -9,12 +9,20 @@
   font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --border: color-mix(in srgb, currentColor 16%, transparent);
   --muted: color-mix(in srgb, currentColor 58%, transparent);
+  --accent-bg: color-mix(in srgb, #58a6ff 12%, transparent);
+  --ok-bg: color-mix(in srgb, #2ea043 14%, transparent);
+  --error-bg: color-mix(in srgb, #f85149 15%, transparent);
+  --warn-bg: color-mix(in srgb, #d29922 15%, transparent);
+  --success: #1a7f37;
+  --error: #cf222e;
+  --warning: #9a6700;
   --add-bg: color-mix(in srgb, #2ea043 18%, transparent);
   --add-strong: color-mix(in srgb, #2ea043 30%, transparent);
   --del-bg: color-mix(in srgb, #f85149 18%, transparent);
   --del-strong: color-mix(in srgb, #f85149 30%, transparent);
-  --hunk-bg: color-mix(in srgb, #58a6ff 12%, transparent);
+  --hunk-bg: var(--accent-bg);
 }
+@media (prefers-color-scheme: dark) { :root { --success: #3fb950; --error: #ff7b72; --warning: #d29922; } }
 * { box-sizing: border-box; }
 body { margin: 0; padding: 10px; background: transparent; color: inherit; }
 .card { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
@@ -26,7 +34,10 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
 .kind.added { background: var(--add-bg); }
 .kind.deleted { background: var(--del-bg); }
 .kind.modified { background: var(--hunk-bg); }
-.status { opacity: .68; }
+.status { color: var(--muted); }
+.status.ok { background: var(--ok-bg); color: var(--success); }
+.status.warn { background: var(--warn-bg); color: var(--warning); }
+.status.error { background: var(--error-bg); color: var(--error); }
 .viewer { max-height: 480px; overflow: auto; background: color-mix(in srgb, currentColor 2%, transparent); }
 .file-block + .file-block { border-top: 1px solid var(--border); }
 .file-label { position: sticky; top: 0; z-index: 2; padding: 6px 10px; border-bottom: 1px solid var(--border); background: Canvas; font: 11px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; opacity: .78; }
@@ -154,6 +165,7 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     kindEl.textContent = label;
     kindEl.className = `kind ${kind === 'renamed' ? 'modified' : kind}`;
     statusEl.textContent = data.written === false ? 'Preview' : (data.changed === false ? 'No change' : 'Applied');
+    statusEl.className = `status ${data.written === false ? 'warn' : data.changed === false ? '' : 'ok'}`.trim();
 
     if ((kind === 'added' || kind === 'deleted') && typeof data.content === 'string') {
       renderFull(data.content, kind, data.encoding);
