@@ -47,12 +47,18 @@ impl AppState {
     pub fn new(config: Config) -> Result<Self> {
         config.ensure_runtime_dir()?;
 
-        let results = ResultStore::new(&config.server.runtime_dir)?;
+        let results = ResultStore::new(
+            &config.server.runtime_dir,
+            config.runtime.result_cache_max_bytes,
+        )?;
+        let terminals =
+            TerminalRegistry::new(config.server.terminal_ring_buffer_bytes, &config.runtime);
+        let jobs = JobRegistry::new(config.runtime.clone());
 
         Ok(Self {
             ssh_sessions: SshSessionRegistry::new(),
-            terminals: TerminalRegistry::new(config.server.terminal_ring_buffer_bytes),
-            jobs: JobRegistry::new(),
+            terminals,
+            jobs,
             results,
             oauth: Mutex::new(OAuthState::load(config.server.oauth_state_file.clone())?),
             config,

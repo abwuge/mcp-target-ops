@@ -194,6 +194,7 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     if (fresh) scheduleLifecycle(true); else scheduleSleepOnly();
   }
 
+  const runtimeConfig = __TARGET_OPS_RUNTIME_CONFIG__;
   let collapseTimer = null; let sleepTimer = null; let sleeping = false;
   function sleepCard() {
     if (card.open) return;
@@ -201,13 +202,13 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
   }
   function scheduleSleepOnly() {
     if (sleepTimer) clearTimeout(sleepTimer);
-    sleepTimer = setTimeout(sleepCard, 30000);
+    sleepTimer = setTimeout(sleepCard, runtimeConfig.sleepAfterMs);
   }
   function scheduleLifecycle(success) {
     if (collapseTimer) clearTimeout(collapseTimer); if (sleepTimer) clearTimeout(sleepTimer);
     sleeping = false; card.open = true;
-    collapseTimer = setTimeout(() => { card.open = false; }, success ? 3000 : 6000);
-    sleepTimer = setTimeout(sleepCard, 30000);
+    collapseTimer = setTimeout(() => { card.open = false; }, success ? runtimeConfig.successCollapseMs : runtimeConfig.failureCollapseMs);
+    sleepTimer = setTimeout(sleepCard, runtimeConfig.sleepAfterMs);
   }
 
   let rpcId = 0;

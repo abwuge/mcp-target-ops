@@ -78,9 +78,9 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
             optional_integer("stderr_since_seq", "Last stderr sequence already consumed. Omit or use 0 for buffered output."),
             optional_integer("max_bytes", "Maximum bytes to return from each stream."),
         ])),
-        tool("job_wait", "Wait for a background job to finish without repeated client polling, then return its status and incremental output. The wait window defaults to 60 seconds and is capped at 120 seconds.", object_schema(vec![
+        tool("job_wait", "Wait for a background job to finish without repeated client polling, then return its status and incremental output. The configured default and maximum wait windows apply.", object_schema(vec![
             required_string("job_id", "Job id returned by exec_start."),
-            optional_integer("wait_timeout_ms", "Maximum time to wait in this call. Defaults to 60000 ms and is capped at 120000 ms."),
+            optional_integer("wait_timeout_ms", "Maximum time to wait in this call. The configured default and cap apply."),
             optional_integer("stdout_since_seq", "Last stdout sequence already consumed. Omit or use 0 for buffered output."),
             optional_integer("stderr_since_seq", "Last stderr sequence already consumed. Omit or use 0 for buffered output."),
             optional_integer("max_bytes", "Maximum bytes to return from each stream."),
@@ -570,7 +570,7 @@ fn file_import_schema() -> Value {
             "overwrite": { "type": "boolean", "description": "Allow replacement without a CAS hash. Defaults to false." },
             "mode": { "type": "string", "description": "Optional octal mode such as 0644 or 0755." },
             "timeout_ms": { "type": "integer", "minimum": 1, "description": "Transfer and target write timeout in milliseconds." },
-            "max_bytes": { "type": "integer", "minimum": 1, "maximum": 104857600, "description": "Maximum accepted source file size. Defaults to 26214400 bytes." }
+            "max_bytes": { "type": "integer", "minimum": 1, "maximum": 104857600, "description": "Maximum accepted source file size. Uses the configured default when omitted." }
         },
         "required": ["path", "file"],
         "additionalProperties": false
@@ -584,7 +584,7 @@ fn file_export_schema() -> Value {
             "target": { "type": "string", "description": "Target id. Omit to use active target." },
             "path": { "type": "string", "description": "Existing file path to export." },
             "mime_type": { "type": "string", "description": "Optional media type override. Otherwise inferred from the filename." },
-            "max_bytes": { "type": "integer", "minimum": 1, "maximum": 104857600, "description": "Maximum exported file size. Defaults to 26214400 bytes." },
+            "max_bytes": { "type": "integer", "minimum": 1, "maximum": 104857600, "description": "Maximum exported file size. Uses the configured default when omitted." },
             "timeout_ms": { "type": "integer", "minimum": 1, "description": "Timeout for remote file access." }
         },
         "required": ["path"],

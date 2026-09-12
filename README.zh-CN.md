@@ -107,7 +107,9 @@ cargo build --locked --release
 
 生成的程序位于 `target/release/mcp-target-ops`。
 
-### 2. 创建配置
+### 2. 配置
+
+不需要额外安装器或 bootstrap 文件。单二进制首次启动时，会根据内置模板自动创建 `~/.config/mcp-target-ops/config.toml`（或由 `MCP_TARGET_OPS_CONFIG` / `--config` 指定的路径）；Unix 上新文件权限为 `0600`。也可以直接从完整注释示例开始：
 
 ```bash
 mkdir -p ~/.config/mcp-target-ops
@@ -190,14 +192,47 @@ mcp-target-ops [--config PATH] [--http ADDR]
 | `-V`、`--version` | 输出程序版本 |
 | `-h`、`--help` | 输出帮助信息 |
 
-未指定 `--config` 时，Target Ops 依次检查 `MCP_TARGET_OPS_CONFIG`、
-`~/.config/mcp-target-ops/config.toml`；若均不存在，则使用默认拒绝配置，其中本机
-目标保持禁用。
+未指定 `--config` 时，若设置了 `MCP_TARGET_OPS_CONFIG` 就使用该路径，否则使用 `~/.config/mcp-target-ops/config.toml`。若选中的配置文件不存在，Target Ops 会先从内置的默认拒绝模板生成配置，再继续启动。
 
 ## 配置
 
-完整且带注释的配置示例位于
-[`examples/config.toml`](examples/config.toml)。
+完整且带注释的配置示例位于 [`examples/config.toml`](examples/config.toml)。
+
+### 配置文件生命周期
+
+每次启动时，Target Ops 都会先解析已有 TOML，把当前二进制新引入而用户文件尚缺失的字段合并进去，验证合并后的配置，然后回写文档。已有值、注释、自定义目标以及未知的兼容字段均会保留；升级后新增的默认参数会立即出现在配置文件中并可编辑。来自环境变量的秘密值不会在这一过程中被复制到 TOML。
+
+如果希望磁盘文件保持原样，可设置：
+
+```toml
+[config]
+rewrite_on_start = false
+```
+
+此时缺失字段仍会在内存中使用当前版本的内置默认值，只是不回写磁盘。
+
+进程级运行参数集中在 `[runtime]`：
+
+| 配置项 | 默认值 | 用途 |
+| --- | ---: | --- |
+| `result_cache_max_bytes` | `104857600` | App 会话结果缓存总预算；超限时优先淘汰最久未活动的完整会话 |
+| `max_retained_jobs` | `128` | 进程内保留的后台任务条目数 |
+| `max_retained_foreground_execs` | `64` | 为 App 附着保留的前台 exec 会话数 |
+| `exec_auto_background_after_ms` | `5000` | 自适应 `exec` 在前台等待多久后自动转后台 |
+| `stream_default_max_bytes` | `65536` | 增量流/读取的默认单次字节上限 |
+| `stream_max_bytes` | `524288` | 增量流/读取允许的最大单次字节上限 |
+| `job_wait_default_timeout_ms` | `60000` | `job_wait` 服务端默认等待窗口 |
+| `job_wait_max_timeout_ms` | `120000` | `job_wait` 服务端最大等待窗口 |
+| `file_transfer_default_max_bytes` | `26214400` | `file_import` / `file_export` 默认传输上限 |
+| `file_download_timeout_ms` | `30000` | HTTPS 连接器文件下载默认超时 |
+| `terminal_default_rows` | `30` | PTY 默认行数 |
+| `terminal_default_cols` | `120` | PTY 默认列数 |
+| `app_success_collapse_ms` | `3000` | App 成功卡片自动折叠延迟 |
+| `app_failure_collapse_ms` | `6000` | App 失败/warning 卡片自动折叠延迟 |
+| `app_sleep_after_ms` | `30000` | 折叠卡片释放重 DOM、转入可恢复 sleep 的延迟 |
+| `app_job_poll_interval_ms` | `180` | App 刷新后台任务输出的间隔 |
+
+100 MiB 文件传输绝对上限等安全/协议硬限制仍编译在程序中，不作为普通可调配置开放。
 
 ### 服务设置
 
@@ -337,11 +372,11 @@ scope。
 管道或控制流等 shell 状态，应继续使用 `exec`；若只是为了减少工具调用而批量进行互不
 依赖的检查，应优先使用 `exec_batch`，而不是用 shell 分隔符强行拼接。
 
-`exec`、`exec_batch` 与 `exec_start` 都绑定到稳定的 `ui://target-ops/exec-terminal/v1.html` MCP App。同步 `exec` 保持为短命令路径并正常等待最终结果；预计运行超过几秒，或实时输出有价值时，应优先使用 `exec_start`。它会立即返回 job id，因此 App 可以在主工具调用结束后约每 180 ms 调用一次 `job_output` 获取 stdout/stderr 增量，不会再被同步父调用阻塞。ANSI SGR 颜色/样式会被安全渲染。
+`exec`、`exec_batch` 与 `exec_start` 都绑定到稳定的 `ui://target-ops/exec-terminal/v1.html` MCP App。同步 `exec` 保持为短命令路径并正常等待最终结果；预计运行超过几秒，或实时输出有价值时，应优先使用 `exec_start`。它会立即返回 job id，因此 App 可以按 `runtime.app_job_poll_interval_ms` 配置的间隔调用 `job_output` 获取 stdout/stderr 增量，不会再被同步父调用阻塞。ANSI SGR 颜色/样式会被安全渲染。
 
-对于模型侧只需要“等后台命令结束后再继续”的工作流，应优先使用 `job_wait`，而不是反复调用 `job_poll` 或 `job_output`。`job_wait` 默认在服务端等待最多 60 秒（单次可配置，最高 120 秒），随后一次返回当前任务状态、stdout/stderr 增量以及 `wait_timed_out`。
+对于模型侧只需要“等后台命令结束后再继续”的工作流，应优先使用 `job_wait`，而不是反复调用 `job_poll` 或 `job_output`。其服务端默认等待窗口与最大等待窗口分别来自 `runtime.job_wait_default_timeout_ms` 和 `runtime.job_wait_max_timeout_ms`，单次调用可以请求更短的等待时间。
 
-所有 Target Ops App 使用统一的结果卡生命周期：成功卡约 3 秒后自动折叠；失败、超时或类似 warning 的卡片也会自动折叠，只是延迟稍长，约 6 秒，因为这类异常通常会被模型自己继续处理。约 30 秒后卡片进入 sleep，清空完整输出、diff、代码行和 ANSI DOM，只保留轻量摘要。静态工具结果缓存在 `runtime_dir/results/` 下，TTL 为 1 小时，总容量上限 100 MiB；用户重新展开时由仅 App 可见的 `result_read` 按每个结果独立生成的不可预测 `result_id` 恢复。长命令卡则从保留的 job output buffer 重新构造。当前不自动请求 iframe teardown，因此历史卡片仍可重新打开。
+所有 Target Ops App 使用统一且可配置的结果卡生命周期。默认情况下成功卡 3 秒后折叠，失败/warning 卡 6 秒后折叠，30 秒后进入释放重 DOM 的 sleep。静态工具结果缓存在 `runtime_dir/results/` 下，不设置 TTL；`runtime.result_cache_max_bytes` 默认 100 MiB，超限时按会话 LRU 从最久未活动的完整会话开始淘汰，新事件会刷新该会话的活动时间。用户重新展开时由仅 App 可见的 `result_read` 使用不可预测的 `result_id` 恢复。长命令卡则从保留的 job output buffer 重新构造。当前不自动请求 iframe teardown，因此历史卡片仍可重新打开。
 
 `exec` 与 `exec_start` 现在共用同一套 `CommandSession`，统一处理进程生命周期、
 stdout/stderr 捕获、超时、取消与增量输出。`exec` 会等待会话结束，并在未显式设置
@@ -398,7 +433,7 @@ MCP 请求参数中；但被启动的命令仍可通过输出环境或主动发�
 `file_import` 接受经运行时重写后的 ChatGPT/连接器文件参数，可以是已挂载本地
 路径或 HTTPS 文件引用，并通过普通原子/CAS 写入策略落盘；HTTPS 重定向被禁用。
 `file_export` 返回标准 MCP embedded resource 与 ChatGPT 兼容输出元数据。两个方向
-默认上限均为 25 MiB，硬上限为 100 MiB。
+默认上限由 `runtime.file_transfer_default_max_bytes` 控制（默认 25 MiB），同时保留编译期 100 MiB 硬上限。
 
 文件变更工具绑定到稳定的 MCP App 资源：
 

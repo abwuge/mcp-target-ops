@@ -1,3 +1,27 @@
+# Target Ops merges newly introduced built-in defaults into this document at
+# startup. Existing values and comments are preserved. Disable disk rewriting
+# while still using in-memory defaults with rewrite_on_start = false.
+[config]
+rewrite_on_start = true
+
+[runtime]
+result_cache_max_bytes = 104857600
+max_retained_jobs = 128
+max_retained_foreground_execs = 64
+exec_auto_background_after_ms = 5000
+stream_default_max_bytes = 65536
+stream_max_bytes = 524288
+job_wait_default_timeout_ms = 60000
+job_wait_max_timeout_ms = 120000
+file_transfer_default_max_bytes = 26214400
+file_download_timeout_ms = 30000
+terminal_default_rows = 30
+terminal_default_cols = 120
+app_success_collapse_ms = 3000
+app_failure_collapse_ms = 6000
+app_sleep_after_ms = 30000
+app_job_poll_interval_ms = 180
+
 [server]
 name = "mcp-target-ops"
 # Fallback used only when a call has no explicit target and no target was selected
@@ -63,6 +87,8 @@ allow_file_write = false
 allow_select_active = false
 require_explicit_target_for_write = true
 allowed_roots = ["/tmp"]
+default_timeout_ms = 30000
+max_output_bytes = 200000
 
 # Every non-local target must use kind = "ssh". This section is exposed as the
 # external target id "ssh:dev".

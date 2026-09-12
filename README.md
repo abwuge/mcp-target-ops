@@ -117,7 +117,9 @@ cargo build --locked --release
 
 The binary is written to `target/release/mcp-target-ops`.
 
-### 2. Create a configuration
+### 2. Configure
+
+A separate installer or bootstrap file is not required. On first startup, the single binary creates `~/.config/mcp-target-ops/config.toml` (or the path selected by `MCP_TARGET_OPS_CONFIG` / `--config`) from its built-in template with mode `0600` on Unix. You can also start from the fully annotated example:
 
 ```bash
 mkdir -p ~/.config/mcp-target-ops
@@ -201,14 +203,45 @@ mcp-target-ops [--config PATH] [--http ADDR]
 | `-V`, `--version` | Print the package version |
 | `-h`, `--help` | Print usage information |
 
-Without `--config`, Target Ops checks `MCP_TARGET_OPS_CONFIG`, then
-`~/.config/mcp-target-ops/config.toml`, and finally uses a deny-by-default
-configuration with the local target disabled.
+Without `--config`, Target Ops uses `MCP_TARGET_OPS_CONFIG` when set, otherwise `~/.config/mcp-target-ops/config.toml`. If that selected file does not exist, Target Ops creates it from the built-in deny-by-default template before starting.
 
 ## Configuration
 
-The complete annotated example is
-[`examples/config.toml`](examples/config.toml).
+The complete annotated example is [`examples/config.toml`](examples/config.toml).
+
+### Configuration lifecycle
+
+At every startup, Target Ops parses the existing TOML, merges any fields newly introduced by the current binary, validates the merged configuration, and then rewrites the document. Existing values, comments, custom targets, and unknown compatibility fields are preserved; newly introduced defaults become visible and editable immediately after an upgrade. Environment-backed secrets are deliberately not materialized into the TOML during this rewrite.
+
+Set the following to keep the file unchanged on disk. Missing fields still receive the current built-in defaults in memory:
+
+```toml
+[config]
+rewrite_on_start = false
+```
+
+Process-wide runtime behavior lives under `[runtime]`:
+
+| Key | Default | Purpose |
+| --- | ---: | --- |
+| `result_cache_max_bytes` | `104857600` | Total session-aware App result cache budget; oldest inactive sessions are evicted first |
+| `max_retained_jobs` | `128` | In-memory background job entries retained by the process |
+| `max_retained_foreground_execs` | `64` | Foreground exec sessions retained for App attachment |
+| `exec_auto_background_after_ms` | `5000` | Promote an adaptive `exec` to a background job after this foreground window |
+| `stream_default_max_bytes` | `65536` | Default incremental stream/read chunk bound |
+| `stream_max_bytes` | `524288` | Maximum incremental stream/read chunk bound |
+| `job_wait_default_timeout_ms` | `60000` | Default server-side `job_wait` window |
+| `job_wait_max_timeout_ms` | `120000` | Maximum server-side `job_wait` window |
+| `file_transfer_default_max_bytes` | `26214400` | Default `file_import` / `file_export` transfer limit |
+| `file_download_timeout_ms` | `30000` | Default HTTPS connector-file download timeout |
+| `terminal_default_rows` | `30` | Default PTY rows |
+| `terminal_default_cols` | `120` | Default PTY columns |
+| `app_success_collapse_ms` | `3000` | App card auto-collapse delay after success |
+| `app_failure_collapse_ms` | `6000` | App card auto-collapse delay after failure/warning |
+| `app_sleep_after_ms` | `30000` | Delay before a collapsed App discards heavy DOM and relies on result restoration |
+| `app_job_poll_interval_ms` | `180` | App-side background job output refresh interval |
+
+Safety/protocol ceilings such as the 100 MiB absolute file-transfer maximum remain compiled hard limits rather than ordinary configuration knobs.
 
 ### Server settings
 
@@ -355,11 +388,11 @@ result per command. Sequential batches may stop on the first failure. Use
 or control flow; use `exec_batch` for unrelated inspections instead of joining
 them with shell separators.
 
-`exec`, `exec_batch`, and `exec_start` bind to the stable `ui://target-ops/exec-terminal/v1.html` MCP App. Synchronous `exec` remains the short-command path and returns its final result normally. For commands likely to run more than a few seconds, or whenever live output matters, prefer `exec_start`: it returns a job ID immediately, allowing the App to poll `job_output` about every 180 ms without being blocked by the parent tool call. ANSI SGR color/style sequences are rendered safely instead of being shown as raw escape codes.
+`exec`, `exec_batch`, and `exec_start` bind to the stable `ui://target-ops/exec-terminal/v1.html` MCP App. Synchronous `exec` remains the short-command path and returns its final result normally. For commands likely to run more than a few seconds, or whenever live output matters, prefer `exec_start`: it returns a job ID immediately, allowing the App to poll `job_output` at the `runtime.app_job_poll_interval_ms` interval without being blocked by the parent tool call. ANSI SGR color/style sequences are rendered safely instead of being shown as raw escape codes.
 
-For model-side workflows that only need to continue after a background command finishes, prefer `job_wait` over repeated `job_poll` or `job_output` calls. `job_wait` waits server-side for up to 60 seconds by default (configurable per call, capped at 120 seconds), then returns the current job status together with incremental stdout/stderr and `wait_timed_out`.
+For model-side workflows that only need to continue after a background command finishes, prefer `job_wait` over repeated `job_poll` or `job_output` calls. Its server-side default and cap come from `runtime.job_wait_default_timeout_ms` and `runtime.job_wait_max_timeout_ms`, and a call may request a shorter window.
 
-All Target Ops Apps use the same result-card lifecycle. Successful cards collapse after about three seconds; failed or warning-like cards also collapse automatically after a slightly longer delay of about six seconds because most such failures are recoverable workflow events. After about 30 seconds, cards enter a sleep state and discard heavy output/diff DOM. Static tool results are cached under `runtime_dir/results/` for one hour with a 100 MiB global cap and can be restored by the App-only `result_read` helper using an opaque per-result `result_id`. Long-running job cards rebuild from the retained job output buffer. The cards remain present and reopenable; Target Ops does not automatically request iframe teardown.
+All Target Ops Apps use the same configurable result-card lifecycle. The default is to collapse successful cards after 3 seconds, failures/warnings after 6 seconds, and enter the DOM-light sleep state after 30 seconds. Static tool results are cached under `runtime_dir/results/` with no TTL; `runtime.result_cache_max_bytes` defaults to 100 MiB and eviction removes the least-recently-active whole session first. Reopening a sleeping card uses the App-only `result_read` helper and an opaque per-result `result_id`; new activity refreshes that session's LRU lifetime. Long-running job cards rebuild from the retained job output buffer. The cards remain present and reopenable; Target Ops does not automatically request iframe teardown.
 
 `exec` and `exec_start` share the same `CommandSession` implementation for
 process lifecycle, stdout/stderr capture, timeout, cancellation, and incremental
@@ -423,7 +456,7 @@ remain process-local.
 rewriting to a mounted local path or HTTPS file reference. It writes through the
 normal atomic/CAS policy. HTTPS redirects are disabled. `file_export` returns a
 standard MCP embedded resource and ChatGPT-compatible output metadata. Both
-directions default to 25 MiB and have a 100 MiB hard maximum.
+directions use `runtime.file_transfer_default_max_bytes` (25 MiB by default) and retain a compiled 100 MiB hard maximum.
 
 File-changing tools bind to the stable MCP App resource:
 

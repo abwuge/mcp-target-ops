@@ -148,6 +148,7 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     const pre = element('pre', 'output'); renderAnsi(pre, text); block.appendChild(pre); return block;
   }
 
+  const runtimeConfig = __TARGET_OPS_RUNTIME_CONFIG__;
   let collapseTimer = null;
   let sleepTimer = null;
   let sleeping = false;
@@ -160,15 +161,15 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
   }
   function scheduleSleepOnly() {
     if (sleepTimer) window.clearTimeout(sleepTimer);
-    sleepTimer = window.setTimeout(sleepCard, 30000);
+    sleepTimer = window.setTimeout(sleepCard, runtimeConfig.sleepAfterMs);
   }
   function scheduleLifecycle(success) {
     if (collapseTimer) window.clearTimeout(collapseTimer);
     if (sleepTimer) window.clearTimeout(sleepTimer);
     sleeping = false;
     execution.open = true;
-    collapseTimer = window.setTimeout(() => { execution.open = false; }, success ? 3000 : 6000);
-    sleepTimer = window.setTimeout(sleepCard, 30000);
+    collapseTimer = window.setTimeout(() => { execution.open = false; }, success ? runtimeConfig.successCollapseMs : runtimeConfig.failureCollapseMs);
+    sleepTimer = window.setTimeout(sleepCard, runtimeConfig.sleepAfterMs);
   }
 
   function renderSingle(data, toolInput, fresh = true) {
@@ -202,7 +203,7 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     if (item.error) body.appendChild(element('div', 'notice error', item.error));
     const notes = []; if (item.stdout_truncated) notes.push('stdout truncated'); if (item.stderr_truncated) notes.push('stderr truncated'); if (timedOut) notes.push('timeout exceeded'); if (notes.length) body.appendChild(element('div', 'item-note', notes.join(' · ')));
     block.appendChild(body);
-    if (fresh) window.setTimeout(() => { block.open = false; }, success ? 3000 : 6000);
+    if (fresh) window.setTimeout(() => { block.open = false; }, success ? runtimeConfig.successCollapseMs : runtimeConfig.failureCollapseMs);
     return block;
   }
 
@@ -258,14 +259,14 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     if (reset) { liveStdout = ''; liveStderr = ''; stdoutSeq = 0; stderrSeq = 0; }
     try {
       while (true) {
-        const result = toolResultData(await rpcRequest('tools/call', { name: 'job_output', arguments: { job_id: startData.job_id, stdout_since_seq: stdoutSeq, stderr_since_seq: stderrSeq, max_bytes: 65536 } }));
+        const result = toolResultData(await rpcRequest('tools/call', { name: 'job_output', arguments: { job_id: startData.job_id, stdout_since_seq: stdoutSeq, stderr_since_seq: stderrSeq } }));
         if (typeof result.stdout === 'string') liveStdout += result.stdout;
         if (typeof result.stderr === 'string') liveStderr += result.stderr;
         if (Number.isInteger(result.stdout_next_seq)) stdoutSeq = result.stdout_next_seq;
         if (Number.isInteger(result.stderr_next_seq)) stderrSeq = result.stderr_next_seq;
         renderLive(result, currentToolInput, fresh);
         if (result.eof) { if (fresh) scheduleLifecycle(result.status === 'completed' && result.exit_code === 0 && !result.timed_out); else scheduleSleepOnly(); break; }
-        await new Promise(resolve => setTimeout(resolve, 180));
+        await new Promise(resolve => setTimeout(resolve, runtimeConfig.jobPollIntervalMs));
       }
     } catch (_) {
       status('Output unavailable', 'warn');

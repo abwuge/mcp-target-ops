@@ -1,5 +1,8 @@
-use crate::tooling::tools::{
-    EXEC_TERMINAL_UI_URI, FILE_CHANGE_UI_URI, FILE_READ_UI_URI, INVENTORY_UI_URI,
+use crate::{
+    core::config::RuntimeConfig,
+    tooling::tools::{
+        EXEC_TERMINAL_UI_URI, FILE_CHANGE_UI_URI, FILE_READ_UI_URI, INVENTORY_UI_URI,
+    },
 };
 use serde_json::{json, Value};
 
@@ -104,16 +107,30 @@ pub fn list_resources(widget_domain: Option<&str>) -> Value {
     json!({ "resources": resources })
 }
 
-pub fn read_resource(uri: &str, widget_domain: Option<&str>) -> Option<Value> {
+pub fn read_resource(
+    uri: &str,
+    widget_domain: Option<&str>,
+    runtime: &RuntimeConfig,
+) -> Option<Value> {
     let resource = RESOURCES.iter().find(|resource| resource.uri == uri)?;
     Some(json!({
         "contents": [{
             "uri": resource.uri,
             "mimeType": MCP_APP_MIME_TYPE,
-            "text": resource.html,
+            "text": render_app_html(resource.html, runtime),
             "_meta": resource_meta(resource, widget_domain)
         }]
     }))
+}
+
+fn render_app_html(html: &str, runtime: &RuntimeConfig) -> String {
+    let config = json!({
+        "successCollapseMs": runtime.app_success_collapse_ms,
+        "failureCollapseMs": runtime.app_failure_collapse_ms,
+        "sleepAfterMs": runtime.app_sleep_after_ms,
+        "jobPollIntervalMs": runtime.app_job_poll_interval_ms,
+    });
+    html.replace("__TARGET_OPS_RUNTIME_CONFIG__", &config.to_string())
 }
 
 #[cfg(test)]
@@ -174,8 +191,16 @@ mod tests {
 
     #[test]
     fn reads_exec_result_resource() {
-        let read = read_resource(EXEC_TERMINAL_UI_URI, Some("https://mcp.example.com"))
-            .expect("exec result resource exists");
+        let runtime = RuntimeConfig {
+            app_job_poll_interval_ms: 321,
+            ..RuntimeConfig::default()
+        };
+        let read = read_resource(
+            EXEC_TERMINAL_UI_URI,
+            Some("https://mcp.example.com"),
+            &runtime,
+        )
+        .expect("exec result resource exists");
         assert_eq!(read["contents"][0]["mimeType"], MCP_APP_MIME_TYPE);
         let html = read["contents"][0]["text"].as_str().unwrap();
         assert!(html.contains("ui/notifications/tool-result"));
@@ -191,12 +216,18 @@ mod tests {
         assert!(html.contains("stdout_truncated"));
         assert!(html.contains("stderr_truncated"));
         assert!(html.contains("timed_out"));
+        assert!(html.contains("\"jobPollIntervalMs\":321"));
+        assert!(!html.contains("__TARGET_OPS_RUNTIME_CONFIG__"));
     }
 
     #[test]
     fn reads_file_change_resource() {
-        let read = read_resource(FILE_CHANGE_UI_URI, Some("https://mcp.example.com"))
-            .expect("file resource exists");
+        let read = read_resource(
+            FILE_CHANGE_UI_URI,
+            Some("https://mcp.example.com"),
+            &RuntimeConfig::default(),
+        )
+        .expect("file resource exists");
         assert_eq!(read["contents"][0]["mimeType"], MCP_APP_MIME_TYPE);
         let html = read["contents"][0]["text"].as_str().unwrap();
         assert!(html.contains("appInfo: { name: 'target-ops-file-change'"));
@@ -209,8 +240,12 @@ mod tests {
 
     #[test]
     fn reads_file_read_resource() {
-        let read = read_resource(FILE_READ_UI_URI, Some("https://mcp.example.com"))
-            .expect("file read resource exists");
+        let read = read_resource(
+            FILE_READ_UI_URI,
+            Some("https://mcp.example.com"),
+            &RuntimeConfig::default(),
+        )
+        .expect("file read resource exists");
         assert_eq!(read["contents"][0]["mimeType"], MCP_APP_MIME_TYPE);
         let html = read["contents"][0]["text"].as_str().unwrap();
         assert!(html.contains("appInfo: { name: 'target-ops-file-read'"));
@@ -225,8 +260,12 @@ mod tests {
 
     #[test]
     fn reads_inventory_resource() {
-        let read = read_resource(INVENTORY_UI_URI, Some("https://mcp.example.com"))
-            .expect("inventory resource exists");
+        let read = read_resource(
+            INVENTORY_UI_URI,
+            Some("https://mcp.example.com"),
+            &RuntimeConfig::default(),
+        )
+        .expect("inventory resource exists");
         assert_eq!(read["contents"][0]["mimeType"], MCP_APP_MIME_TYPE);
         let html = read["contents"][0]["text"].as_str().unwrap();
         assert!(html.contains("appInfo: { name: 'target-ops-inventory'"));

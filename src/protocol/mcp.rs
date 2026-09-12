@@ -200,8 +200,12 @@ fn resources_read(state: &AppState, params: Value) -> Result<Value> {
     }
 
     let params: ResourceReadParams = serde_json::from_value(params)?;
-    apps::read_resource(&params.uri, state.config.server.public_base_url.as_deref())
-        .ok_or_else(|| Error::Tool(format!("unknown resource: {}", params.uri)))
+    apps::read_resource(
+        &params.uri,
+        state.config.server.public_base_url.as_deref(),
+        &state.config.runtime,
+    )
+    .ok_or_else(|| Error::Tool(format!("unknown resource: {}", params.uri)))
 }
 
 fn initialize(state: &AppState, params: Value) -> Result<Value> {

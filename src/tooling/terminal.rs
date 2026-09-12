@@ -1,6 +1,6 @@
 use crate::{
     core::{
-        config::TargetConfig,
+        config::{RuntimeConfig, TargetConfig},
         error::{Error, Result},
         policy,
         state::AppState,
@@ -31,10 +31,10 @@ pub struct TerminalOpenRequest {
     pub cwd: Option<String>,
     #[serde(default)]
     pub shell: Option<String>,
-    #[serde(default = "default_rows")]
-    pub rows: u16,
-    #[serde(default = "default_cols")]
-    pub cols: u16,
+    #[serde(default)]
+    pub rows: Option<u16>,
+    #[serde(default)]
+    pub cols: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -105,6 +105,10 @@ pub struct TerminalCloseResponse {
 pub struct TerminalRegistry {
     sessions: Mutex<HashMap<String, Arc<TerminalSession>>>,
     default_buffer_bytes: usize,
+    default_rows: u16,
+    default_cols: u16,
+    default_read_max_bytes: usize,
+    max_read_bytes: usize,
 }
 
 pub struct TerminalSession {
@@ -117,10 +121,14 @@ pub struct TerminalSession {
 }
 
 impl TerminalRegistry {
-    pub fn new(default_buffer_bytes: usize) -> Self {
+    pub fn new(default_buffer_bytes: usize, runtime: &RuntimeConfig) -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
             default_buffer_bytes,
+            default_rows: runtime.terminal_default_rows,
+            default_cols: runtime.terminal_default_cols,
+            default_read_max_bytes: runtime.stream_default_max_bytes,
+            max_read_bytes: runtime.stream_max_bytes,
         }
     }
 
@@ -154,11 +162,13 @@ impl TerminalRegistry {
             }
         };
 
+        let rows = req.rows.unwrap_or(self.default_rows);
+        let cols = req.cols.unwrap_or(self.default_cols);
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(PtySize {
-                rows: req.rows,
-                cols: req.cols,
+                rows,
+                cols,
                 pixel_width: 0,
                 pixel_height: 0,
             })
@@ -224,8 +234,8 @@ impl TerminalRegistry {
         Ok(TerminalOpenResponse {
             resolved_target: state.resolved_target_value(target, source),
             terminal_id: id,
-            rows: req.rows,
-            cols: req.cols,
+            rows,
+            cols,
         })
     }
 
@@ -243,9 +253,12 @@ impl TerminalRegistry {
     pub fn read(&self, req: TerminalReadRequest) -> Result<TerminalReadResponse> {
         let session = self.get(&req.terminal_id)?;
         let from_seq = req.since_seq.unwrap_or(0);
-        let (output, next_seq, truncated) = session
-            .buffer
-            .read_since(from_seq, req.max_bytes.unwrap_or(64 * 1024));
+        let (output, next_seq, truncated) = session.buffer.read_since(
+            from_seq,
+            req.max_bytes
+                .unwrap_or(self.default_read_max_bytes)
+                .clamp(1, self.max_read_bytes),
+        );
         let eof = *session.eof.lock().unwrap();
         Ok(TerminalReadResponse {
             terminal_id: req.terminal_id,
@@ -308,14 +321,6 @@ impl TerminalRegistry {
     }
 }
 
-fn default_rows() -> u16 {
-    30
-}
-
-fn default_cols() -> u16 {
-    120
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -346,8 +351,8 @@ mod tests {
                     target: Some("local".to_string()),
                     cwd: Some("/tmp".to_string()),
                     shell: Some("sh".to_string()),
-                    rows: 20,
-                    cols: 80,
+                    rows: Some(20),
+                    cols: Some(80),
                 },
             )
             .unwrap();

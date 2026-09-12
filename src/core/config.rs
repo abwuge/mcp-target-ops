@@ -1,3 +1,4 @@
+mod document;
 mod validation;
 
 use crate::core::{
@@ -14,6 +15,12 @@ use std::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
+    pub config: ConfigManagementConfig,
+
+    #[serde(default)]
+    pub runtime: RuntimeConfig,
+
+    #[serde(default)]
     pub server: ServerConfig,
 
     #[serde(default)]
@@ -21,6 +28,63 @@ pub struct Config {
 
     #[serde(default)]
     pub mcp_servers: BTreeMap<String, McpServerConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConfigManagementConfig {
+    #[serde(default = "default_true")]
+    pub rewrite_on_start: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeConfig {
+    #[serde(default = "default_result_cache_max_bytes")]
+    pub result_cache_max_bytes: u64,
+
+    #[serde(default = "default_max_retained_jobs")]
+    pub max_retained_jobs: usize,
+
+    #[serde(default = "default_max_retained_foreground_execs")]
+    pub max_retained_foreground_execs: usize,
+
+    #[serde(default = "default_exec_auto_background_after_ms")]
+    pub exec_auto_background_after_ms: u64,
+
+    #[serde(default = "default_stream_default_max_bytes")]
+    pub stream_default_max_bytes: usize,
+
+    #[serde(default = "default_stream_max_bytes")]
+    pub stream_max_bytes: usize,
+
+    #[serde(default = "default_job_wait_timeout_ms")]
+    pub job_wait_default_timeout_ms: u64,
+
+    #[serde(default = "default_job_wait_max_timeout_ms")]
+    pub job_wait_max_timeout_ms: u64,
+
+    #[serde(default = "default_file_transfer_max_bytes")]
+    pub file_transfer_default_max_bytes: usize,
+
+    #[serde(default = "default_file_download_timeout_ms")]
+    pub file_download_timeout_ms: u64,
+
+    #[serde(default = "default_terminal_rows")]
+    pub terminal_default_rows: u16,
+
+    #[serde(default = "default_terminal_cols")]
+    pub terminal_default_cols: u16,
+
+    #[serde(default = "default_app_success_collapse_ms")]
+    pub app_success_collapse_ms: u64,
+
+    #[serde(default = "default_app_failure_collapse_ms")]
+    pub app_failure_collapse_ms: u64,
+
+    #[serde(default = "default_app_sleep_after_ms")]
+    pub app_sleep_after_ms: u64,
+
+    #[serde(default = "default_app_job_poll_interval_ms")]
+    pub app_job_poll_interval_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -189,9 +253,42 @@ impl Default for Config {
         );
 
         Self {
+            config: ConfigManagementConfig::default(),
+            runtime: RuntimeConfig::default(),
             server: ServerConfig::default(),
             targets,
             mcp_servers: BTreeMap::new(),
+        }
+    }
+}
+
+impl Default for ConfigManagementConfig {
+    fn default() -> Self {
+        Self {
+            rewrite_on_start: true,
+        }
+    }
+}
+
+impl Default for RuntimeConfig {
+    fn default() -> Self {
+        Self {
+            result_cache_max_bytes: default_result_cache_max_bytes(),
+            max_retained_jobs: default_max_retained_jobs(),
+            max_retained_foreground_execs: default_max_retained_foreground_execs(),
+            exec_auto_background_after_ms: default_exec_auto_background_after_ms(),
+            stream_default_max_bytes: default_stream_default_max_bytes(),
+            stream_max_bytes: default_stream_max_bytes(),
+            job_wait_default_timeout_ms: default_job_wait_timeout_ms(),
+            job_wait_max_timeout_ms: default_job_wait_max_timeout_ms(),
+            file_transfer_default_max_bytes: default_file_transfer_max_bytes(),
+            file_download_timeout_ms: default_file_download_timeout_ms(),
+            terminal_default_rows: default_terminal_rows(),
+            terminal_default_cols: default_terminal_cols(),
+            app_success_collapse_ms: default_app_success_collapse_ms(),
+            app_failure_collapse_ms: default_app_failure_collapse_ms(),
+            app_sleep_after_ms: default_app_sleep_after_ms(),
+            app_job_poll_interval_ms: default_app_job_poll_interval_ms(),
         }
     }
 }
@@ -237,28 +334,12 @@ impl Default for PolicyConfig {
 
 impl Config {
     pub fn load(path: Option<PathBuf>) -> Result<Self> {
-        if let Some(path) = path {
-            return Self::load_from_path(&path);
-        }
-
-        let default_path = default_config_path();
-        if default_path.exists() {
-            return Self::load_from_path(&default_path);
-        }
-
-        let config = Config::default();
-        config.validate()?;
-        Ok(config)
+        let path = path.unwrap_or_else(default_config_path);
+        Self::load_from_path(&path)
     }
 
     pub fn load_from_path(path: &Path) -> Result<Self> {
-        let text = fs::read_to_string(path).map_err(|err| {
-            Error::Config(format!("failed to read config {}: {err}", path.display()))
-        })?;
-        let mut config: Config = toml::from_str(&text)?;
-        config.ensure_local_target();
-        config.validate()?;
-        Ok(config)
+        document::load(path)
     }
 
     pub fn ensure_runtime_dir(&self) -> Result<()> {
@@ -395,6 +476,72 @@ fn default_mcp_max_response_bytes() -> usize {
 fn default_max_output_bytes() -> usize {
     200_000
 }
+
+fn default_result_cache_max_bytes() -> u64 {
+    100 * 1024 * 1024
+}
+
+fn default_max_retained_jobs() -> usize {
+    128
+}
+
+fn default_max_retained_foreground_execs() -> usize {
+    64
+}
+
+fn default_exec_auto_background_after_ms() -> u64 {
+    5_000
+}
+
+fn default_stream_default_max_bytes() -> usize {
+    64 * 1024
+}
+
+fn default_stream_max_bytes() -> usize {
+    512 * 1024
+}
+
+fn default_job_wait_timeout_ms() -> u64 {
+    60_000
+}
+
+fn default_job_wait_max_timeout_ms() -> u64 {
+    120_000
+}
+
+fn default_file_transfer_max_bytes() -> usize {
+    25 * 1024 * 1024
+}
+
+fn default_file_download_timeout_ms() -> u64 {
+    30_000
+}
+
+fn default_terminal_rows() -> u16 {
+    30
+}
+
+fn default_terminal_cols() -> u16 {
+    120
+}
+
+fn default_app_success_collapse_ms() -> u64 {
+    3_000
+}
+
+fn default_app_failure_collapse_ms() -> u64 {
+    6_000
+}
+
+fn default_app_sleep_after_ms() -> u64 {
+    30_000
+}
+
+fn default_app_job_poll_interval_ms() -> u64 {
+    180
+}
+
+pub const FILE_TRANSFER_HARD_MAX_BYTES: usize = 100 * 1024 * 1024;
 
 pub fn default_config_path() -> PathBuf {
     if let Ok(path) = std::env::var("MCP_TARGET_OPS_CONFIG") {

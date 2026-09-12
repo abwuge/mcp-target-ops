@@ -11,7 +11,6 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-const RESULT_MAX_BYTES: u64 = 100 * 1024 * 1024;
 const SESSIONS_DIR: &str = "sessions";
 const ACTIVITY_FILE: &str = ".activity";
 // COMPAT(COMPAT-002): Flat result files from the pre-session cache layout remain
@@ -46,11 +45,7 @@ pub struct ResultStore {
 }
 
 impl ResultStore {
-    pub fn new(runtime_dir: &Path) -> Result<Self> {
-        Self::new_with_limit(runtime_dir, RESULT_MAX_BYTES)
-    }
-
-    fn new_with_limit(runtime_dir: &Path, max_bytes: u64) -> Result<Self> {
+    pub fn new(runtime_dir: &Path, max_bytes: u64) -> Result<Self> {
         let dir = runtime_dir.join("results");
         let sessions_dir = dir.join(SESSIONS_DIR);
         fs::create_dir_all(&sessions_dir).map_err(|err| {
@@ -342,7 +337,7 @@ mod tests {
     #[test]
     fn stores_and_reads_by_result_id() {
         let temp = tempdir().unwrap();
-        let store = ResultStore::new(temp.path()).unwrap();
+        let store = ResultStore::new(temp.path(), 100 * 1024 * 1024).unwrap();
         let result_id = store
             .store("session:a", &json!({"stdout":"hello"}))
             .unwrap();
@@ -355,14 +350,14 @@ mod tests {
     #[test]
     fn invalid_result_ids_are_rejected() {
         let temp = tempdir().unwrap();
-        let store = ResultStore::new(temp.path()).unwrap();
+        let store = ResultStore::new(temp.path(), 100 * 1024 * 1024).unwrap();
         assert!(!store.read("../other-result").unwrap().found);
     }
 
     #[test]
     fn evicts_whole_oldest_session_when_size_limit_is_exceeded() {
         let temp = tempdir().unwrap();
-        let store = ResultStore::new_with_limit(temp.path(), 220).unwrap();
+        let store = ResultStore::new(temp.path(), 220).unwrap();
         let a1 = store
             .store("session:a", &json!({"payload":"a".repeat(70)}))
             .unwrap();
@@ -382,7 +377,7 @@ mod tests {
     #[test]
     fn touching_session_refreshes_lru_activity() {
         let temp = tempdir().unwrap();
-        let store = ResultStore::new_with_limit(temp.path(), 200).unwrap();
+        let store = ResultStore::new(temp.path(), 200).unwrap();
         let a = store
             .store("session:a", &json!({"payload":"a".repeat(70)}))
             .unwrap();
@@ -414,7 +409,7 @@ mod tests {
         )
         .unwrap();
 
-        let store = ResultStore::new(temp.path()).unwrap();
+        let store = ResultStore::new(temp.path(), 100 * 1024 * 1024).unwrap();
         let result = store.read_for_caller("session:new", result_id).unwrap();
         assert!(result.found);
         assert_eq!(result.data, Some(json!({"legacy":true})));

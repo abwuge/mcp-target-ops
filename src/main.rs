@@ -15,7 +15,7 @@ Options:
   -h, --help           Print this help
 
 Long options also accept --config=PATH, --http=ADDR, and --http-addr=ADDR.
-Without --config, MCP_TARGET_OPS_CONFIG or ~/.config/mcp-target-ops/config.toml is used when present."#;
+Without --config, MCP_TARGET_OPS_CONFIG or ~/.config/mcp-target-ops/config.toml is used. If the selected file does not exist, it is generated from the built-in template."#;
 
 struct Args {
     config_path: Option<PathBuf>,

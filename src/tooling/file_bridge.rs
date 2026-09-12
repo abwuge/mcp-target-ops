@@ -1,5 +1,6 @@
 use crate::{
     core::{
+        config::FILE_TRANSFER_HARD_MAX_BYTES,
         error::{Error, Result},
         policy::{self, FileAccess},
         state::AppState,
@@ -13,9 +14,6 @@ use reqwest::{blocking::Client, redirect::Policy, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{io::Read, path::Path, time::Duration};
-
-const DEFAULT_TRANSFER_LIMIT: usize = 25 * 1024 * 1024;
-const HARD_TRANSFER_LIMIT: usize = 100 * 1024 * 1024;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct FileImportRequest {
@@ -96,9 +94,14 @@ struct ImportDescriptor {
 }
 
 pub fn import(state: &AppState, req: FileImportRequest) -> Result<FileImportResponse> {
-    let limit = transfer_limit(req.max_bytes)?;
+    let limit = transfer_limit(
+        req.max_bytes,
+        state.config.runtime.file_transfer_default_max_bytes,
+    )?;
     let descriptor = import_descriptor(&req.file)?;
-    let timeout_ms = req.timeout_ms.unwrap_or(30_000);
+    let timeout_ms = req
+        .timeout_ms
+        .unwrap_or(state.config.runtime.file_download_timeout_ms);
     let bytes = match &descriptor.location {
         ImportLocation::Url(url) => download_bytes(url, limit, timeout_ms)?,
         ImportLocation::LocalPath(path) => read_local_connector_file(state, path, limit)?,
@@ -135,7 +138,10 @@ pub fn import(state: &AppState, req: FileImportRequest) -> Result<FileImportResp
 }
 
 pub fn export(state: &AppState, req: FileExportRequest) -> Result<FileExportResponse> {
-    let limit = transfer_limit(req.max_bytes)?;
+    let limit = transfer_limit(
+        req.max_bytes,
+        state.config.runtime.file_transfer_default_max_bytes,
+    )?;
     let (target, source) = state.resolve_target(req.target.as_deref())?;
     let config = state.get_target_config(&target)?;
     policy::check_file(&target, config, &req.path, FileAccess::Read, source)?;
@@ -179,11 +185,11 @@ pub fn export(state: &AppState, req: FileExportRequest) -> Result<FileExportResp
     })
 }
 
-fn transfer_limit(requested: Option<usize>) -> Result<usize> {
-    let limit = requested.unwrap_or(DEFAULT_TRANSFER_LIMIT);
-    if limit == 0 || limit > HARD_TRANSFER_LIMIT {
+fn transfer_limit(requested: Option<usize>, default_limit: usize) -> Result<usize> {
+    let limit = requested.unwrap_or(default_limit);
+    if limit == 0 || limit > FILE_TRANSFER_HARD_MAX_BYTES {
         return Err(Error::Tool(format!(
-            "max_bytes must be between 1 and {HARD_TRANSFER_LIMIT}"
+            "max_bytes must be between 1 and {FILE_TRANSFER_HARD_MAX_BYTES}"
         )));
     }
     Ok(limit)
@@ -351,9 +357,10 @@ mod tests {
 
     #[test]
     fn transfer_limit_is_bounded() {
-        assert_eq!(transfer_limit(None).unwrap(), DEFAULT_TRANSFER_LIMIT);
-        assert!(transfer_limit(Some(0)).is_err());
-        assert!(transfer_limit(Some(HARD_TRANSFER_LIMIT + 1)).is_err());
+        let default_limit = 25 * 1024 * 1024;
+        assert_eq!(transfer_limit(None, default_limit).unwrap(), default_limit);
+        assert!(transfer_limit(Some(0), default_limit).is_err());
+        assert!(transfer_limit(Some(FILE_TRANSFER_HARD_MAX_BYTES + 1), default_limit).is_err());
     }
 
     #[test]

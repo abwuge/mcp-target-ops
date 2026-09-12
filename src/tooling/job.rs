@@ -1,6 +1,6 @@
 use crate::{
     core::{
-        config::TargetConfig,
+        config::{RuntimeConfig, TargetConfig},
         error::{Error, Result},
         policy,
         secret::SecretRef,
@@ -24,10 +24,6 @@ use std::{
 
 static JOB_COUNTER: AtomicU64 = AtomicU64::new(1);
 static EXEC_COUNTER: AtomicU64 = AtomicU64::new(1);
-const MAX_RETAINED_JOBS: usize = 128;
-const MAX_RETAINED_FOREGROUND: usize = 64;
-const AUTO_BACKGROUND_AFTER: Duration = Duration::from_secs(5);
-
 #[derive(Debug, Clone, Copy)]
 enum SessionTimeoutPolicy {
     ForegroundDefault,
@@ -245,13 +241,15 @@ struct ForegroundSession {
 pub struct JobRegistry {
     sessions: Mutex<HashMap<String, JobEntry>>,
     foreground: Mutex<HashMap<String, ForegroundSession>>,
+    runtime: RuntimeConfig,
 }
 
 impl JobRegistry {
-    pub fn new() -> Self {
+    pub fn new(runtime: RuntimeConfig) -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
             foreground: Mutex::new(HashMap::new()),
+            runtime,
         }
     }
 
@@ -296,7 +294,13 @@ impl JobRegistry {
         request_id: Option<&Value>,
         caller_key: &str,
     ) -> Result<AdaptiveExecOutput> {
-        self.run_adaptive_with_threshold(state, req, request_id, caller_key, AUTO_BACKGROUND_AFTER)
+        self.run_adaptive_with_threshold(
+            state,
+            req,
+            request_id,
+            caller_key,
+            Duration::from_millis(self.runtime.exec_auto_background_after_ms),
+        )
     }
 
     fn run_adaptive_with_threshold(
@@ -476,7 +480,9 @@ impl JobRegistry {
         let delta = session.output_since(
             stdout_from_seq,
             stderr_from_seq,
-            req.max_bytes.unwrap_or(64 * 1024).clamp(1, 512 * 1024),
+            req.max_bytes
+                .unwrap_or(self.runtime.stream_default_max_bytes)
+                .clamp(1, self.runtime.stream_max_bytes),
         );
         let status = session.status_snapshot();
         Ok(JobOutputResponse {
@@ -509,8 +515,11 @@ impl JobRegistry {
         caller_key: &str,
     ) -> Result<JobWaitResponse> {
         let session = self.get_for_caller(&req.job_id, caller_key)?;
-        let wait_timeout =
-            Duration::from_millis(req.wait_timeout_ms.unwrap_or(60_000).min(120_000));
+        let wait_timeout = Duration::from_millis(
+            req.wait_timeout_ms
+                .unwrap_or(self.runtime.job_wait_default_timeout_ms)
+                .min(self.runtime.job_wait_max_timeout_ms),
+        );
         let completed = session.wait_for_eof(Some(wait_timeout));
         let output = self.output_for_caller(
             JobOutputRequest {
@@ -547,7 +556,10 @@ impl JobRegistry {
     pub fn stream(&self, req: ExecStreamRequest) -> Result<ExecStreamResponse> {
         let stdout_from_seq = req.stdout_since_seq.unwrap_or(0);
         let stderr_from_seq = req.stderr_since_seq.unwrap_or(0);
-        let max_bytes = req.max_bytes.unwrap_or(64 * 1024).clamp(1, 512 * 1024);
+        let max_bytes = req
+            .max_bytes
+            .unwrap_or(self.runtime.stream_default_max_bytes)
+            .clamp(1, self.runtime.stream_max_bytes);
         let mut foreground = self.foreground.lock().unwrap();
         let session_id = if let Some(session_id) = req.session_id.as_deref() {
             foreground
@@ -697,11 +709,11 @@ impl JobRegistry {
 
     fn insert(&self, id: String, entry: JobEntry) {
         let mut sessions = self.sessions.lock().unwrap();
-        if sessions.len() >= MAX_RETAINED_JOBS {
+        if sessions.len() >= self.runtime.max_retained_jobs {
             sessions
                 .retain(|_, entry| !entry.session.status_snapshot().finished || !entry.delivered);
         }
-        if sessions.len() >= MAX_RETAINED_JOBS {
+        if sessions.len() >= self.runtime.max_retained_jobs {
             if let Some(id) = sessions
                 .iter()
                 .filter(|(_, entry)| entry.session.status_snapshot().finished)
@@ -716,10 +728,10 @@ impl JobRegistry {
 
     fn insert_foreground(&self, id: String, entry: ForegroundSession) {
         let mut foreground = self.foreground.lock().unwrap();
-        if foreground.len() >= MAX_RETAINED_FOREGROUND {
+        if foreground.len() >= self.runtime.max_retained_foreground_execs {
             foreground.retain(|_, entry| !entry.session.status_snapshot().finished);
         }
-        if foreground.len() >= MAX_RETAINED_FOREGROUND {
+        if foreground.len() >= self.runtime.max_retained_foreground_execs {
             if let Some(oldest) = foreground
                 .iter()
                 .filter(|(_, entry)| entry.session.status_snapshot().finished)
