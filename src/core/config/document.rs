@@ -13,57 +13,104 @@ use toml_edit::{value, Array, DocumentMut, Item, Table};
 const BUILTIN_TEMPLATE: &str = r#"# Target Ops configuration.
 #
 # On startup, Target Ops fills in newly introduced managed defaults and rewrites
-# this file so upgrades remain self-documenting. Set rewrite_on_start = false to
-# keep the file byte-for-byte unchanged after it is read.
+# this file so upgrades remain self-documenting. Existing values and comments are
+# preserved. Environment-backed secrets are never copied here automatically.
 
 [config]
+# Rewrite this TOML after loading it so defaults introduced by a newer binary
+# become visible and editable. Set to false to keep the file byte-for-byte
+# unchanged; missing options still use built-in defaults in memory.
 rewrite_on_start = true
 
-# Process-wide operational defaults. Safety/protocol hard limits remain compiled
-# into the binary; these values control normal runtime behavior below those caps.
+# Process-wide operational defaults. Values ending in _ms are milliseconds;
+# values ending in _bytes are raw bytes. Safety/protocol hard limits remain
+# compiled into the binary and cannot be raised here.
 [runtime]
+# Total on-disk budget for cached MCP App results. There is no TTL; when this
+# budget is exceeded, the least-recently-active whole session is evicted.
 result_cache_max_bytes = 104857600
+# Maximum number of background job entries retained in memory.
 max_retained_jobs = 128
+# Maximum number of foreground exec sessions retained for MCP App attachment and
+# incremental-output compatibility.
 max_retained_foreground_execs = 64
+# Foreground wait before an ordinary exec is promoted to the same running command
+# as a background job. Explicit per-call timeout_ms remains authoritative.
 exec_auto_background_after_ms = 5000
+# Default bytes returned by one incremental job/terminal output read when the
+# caller omits max_bytes.
 stream_default_max_bytes = 65536
+# Maximum bytes allowed for one incremental job/terminal output read. The default
+# above must not exceed this value.
 stream_max_bytes = 524288
+# Default server-side wait window for job_wait when wait_timeout_ms is omitted.
 job_wait_default_timeout_ms = 60000
+# Maximum job_wait window; larger per-call requests are clamped to this value.
 job_wait_max_timeout_ms = 120000
+# Default file_import/file_export transfer limit. The compiled absolute transfer
+# ceiling is 100 MiB and cannot be raised through configuration.
 file_transfer_default_max_bytes = 26214400
+# Default timeout for downloading HTTPS connector/file references in file_import.
 file_download_timeout_ms = 30000
+# Default terminal_open PTY size when rows/cols are omitted.
 terminal_default_rows = 30
 terminal_default_cols = 120
+# Auto-collapse delay for successful MCP App result cards.
 app_success_collapse_ms = 3000
+# Auto-collapse delay for failed, timed-out, or warning-like App result cards.
 app_failure_collapse_ms = 6000
+# Delay before a collapsed App releases heavy DOM and relies on cached restore.
 app_sleep_after_ms = 30000
+# Refresh interval used by the command App when reading exec_start job output.
 app_job_poll_interval_ms = 180
 
 [server]
+# Server name advertised during MCP initialize.
 name = "mcp-target-ops"
+# Allow OAuth Dynamic Client Registration at /oauth/register.
 oauth_allow_dynamic_client_registration = true
+# Lifetime of one-time OAuth authorization codes, in seconds.
 oauth_authorization_code_ttl_secs = 600
+# Lifetime of OAuth access tokens, in seconds.
 oauth_access_token_ttl_secs = 3600
+# Lifetime of OAuth refresh tokens, in seconds.
 oauth_refresh_token_ttl_secs = 2592000
+# Per-terminal retained output capacity. Older terminal output rolls out of this
+# ring buffer when a session exceeds the configured size.
 terminal_ring_buffer_bytes = 524288
-# runtime_dir is populated with this machine's platform-specific default.
+# runtime_dir is populated with this machine's platform-specific default and is
+# used for runtime state such as App result cache files.
 # Environment-backed or secret-bearing options are intentionally not materialized
 # here unless you configure them yourself, so environment secrets are never
 # copied into this file by the startup rewrite.
 
 [targets.local]
+# The reserved local target must use kind = "local".
 kind = "local"
+# Local access is disabled in the generated configuration for deny-by-default
+# single-binary startup. Enable it only for a trusted host.
 enabled = false
 
 [targets.local.policy]
+# Permit non-interactive commands such as exec, exec_batch, and exec_start.
 allow_exec = false
+# Permit persistent interactive PTY sessions.
 allow_terminal = false
+# Permit structured file/directory reads inside allowed_roots.
 allow_file_read = false
+# Permit file mutations inside allowed_roots.
 allow_file_write = false
+# Permit target_select to make local the session-scoped active target.
 allow_select_active = false
+# Require write tools to name their target explicitly instead of inheriting
+# active/default target state.
 require_explicit_target_for_write = true
+# Absolute roots visible to file tools. Empty means all file access is refused,
+# even if allow_file_read or allow_file_write is enabled.
 allowed_roots = []
+# Default command/remote/file-operation timeout when a request omits timeout_ms.
 default_timeout_ms = 30000
+# Per-target command output cap; per-call max_output_bytes cannot exceed it.
 max_output_bytes = 200000
 "#;
 

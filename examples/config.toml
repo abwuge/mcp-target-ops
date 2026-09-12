@@ -1,34 +1,77 @@
-# Target Ops merges newly introduced built-in defaults into this document at
-# startup. Existing values and comments are preserved. Disable disk rewriting
-# while still using in-memory defaults with rewrite_on_start = false.
+# Target Ops configuration example.
+#
+# On startup, Target Ops merges newly introduced built-in defaults into this
+# document. Existing values, comments, custom targets, and unknown compatibility
+# fields are preserved. Environment-backed secrets are never copied into this
+# file automatically.
+
 [config]
+# Rewrite the TOML after loading it so newly introduced defaults become visible
+# after an upgrade. Set to false to keep the file byte-for-byte unchanged;
+# missing options still use the current binary's built-in defaults in memory.
 rewrite_on_start = true
 
+# Process-wide operational defaults. Values ending in _ms are milliseconds;
+# values ending in _bytes are raw bytes. Safety/protocol hard limits remain
+# compiled into the binary and cannot be raised through this section.
 [runtime]
+# Total on-disk budget for cached MCP App results. The cache has no TTL; once
+# this budget is exceeded, the least-recently-active whole session is evicted.
 result_cache_max_bytes = 104857600
+# Maximum number of background job entries retained in memory. Finished entries
+# are preferentially discarded when the registry reaches this size.
 max_retained_jobs = 128
+# Maximum number of foreground exec sessions kept for MCP App attachment and
+# incremental-output compatibility.
 max_retained_foreground_execs = 64
+# How long ordinary exec waits in the foreground before the same running command
+# is promoted to a background job. Explicit per-call timeout_ms remains authoritative.
 exec_auto_background_after_ms = 5000
+# Default number of bytes returned by one incremental job/terminal stream read
+# when the caller does not provide max_bytes.
 stream_default_max_bytes = 65536
+# Maximum number of bytes one incremental job/terminal stream read may request.
+# stream_default_max_bytes must not exceed this value.
 stream_max_bytes = 524288
+# Default server-side wait window for job_wait when wait_timeout_ms is omitted.
 job_wait_default_timeout_ms = 60000
+# Maximum server-side wait window accepted by job_wait. A larger requested value
+# is clamped to this limit; the default above must not exceed it.
 job_wait_max_timeout_ms = 120000
+# Default maximum size accepted by file_import/file_export. The compiled absolute
+# file-transfer ceiling is 100 MiB, so this configurable default cannot exceed it.
 file_transfer_default_max_bytes = 26214400
+# Timeout used when file_import downloads an HTTPS connector/file reference and
+# the request does not supply its own timeout_ms.
 file_download_timeout_ms = 30000
+# Default PTY dimensions used by terminal_open when rows/cols are omitted.
 terminal_default_rows = 30
 terminal_default_cols = 120
+# Delay before a successful MCP App result card automatically collapses.
 app_success_collapse_ms = 3000
+# Delay before a failed, timed-out, or warning-like MCP App card collapses.
 app_failure_collapse_ms = 6000
+# Delay before a collapsed App card releases heavy DOM such as output, diffs,
+# line rows, and ANSI spans. The card can later restore data from result cache.
 app_sleep_after_ms = 30000
+# Refresh interval used by the command App while reading output from exec_start
+# background jobs through job_output.
 app_job_poll_interval_ms = 180
 
 [server]
+# Server name advertised in the MCP initialize response.
 name = "mcp-target-ops"
-# Fallback used only when a call has no explicit target and no target was selected
-# with target_select. It is not treated as the active target.
+# Fallback target used only when a call has neither an explicit target argument
+# nor a session-scoped target selected with target_select. It is not itself the
+# active target.
 default_target = "ssh:dev"
+# Per-terminal ring-buffer capacity. Older terminal output is discarded when a
+# session produces more than this amount.
 terminal_ring_buffer_bytes = 524288
+# Directory for runtime state such as App result cache files. The directory is
+# created automatically during startup.
 runtime_dir = "/tmp/mcp-target-ops"
+
 # Optional static HTTP bearer authentication. Prefer MCP_TARGET_OPS_HTTP_TOKEN
 # instead of storing the token here. This is the simplest mode for a private
 # GPT Action or another single-service client.
@@ -39,16 +82,24 @@ runtime_dir = "/tmp/mcp-target-ops"
 # trailing slash. You may also use MCP_TARGET_OPS_PUBLIC_BASE_URL.
 # public_base_url = "https://mcp.example.com"
 #
-# Optional OAuth support for remote HTTP MCP / ChatGPT Apps.
+# Enable the embedded OAuth authorization server for remote MCP / ChatGPT Apps.
 # oauth_enabled = true
+# OAuth scopes advertised to clients and enforced on issued access tokens.
 # oauth_scopes = ["mcp:tools"]
+# Optional password gate shown on the OAuth authorization page. Prefer the
+# MCP_TARGET_OPS_OAUTH_PASSWORD environment variable for secrets.
 # oauth_authorization_password = "change-me"
+# Allow OAuth Dynamic Client Registration at /oauth/register.
 # oauth_allow_dynamic_client_registration = true
+# Lifetime of a one-time OAuth authorization code, in seconds.
 # oauth_authorization_code_ttl_secs = 600
+# Lifetime of an OAuth access token, in seconds.
 # oauth_access_token_ttl_secs = 3600
+# Lifetime of an OAuth refresh token, in seconds.
 # oauth_refresh_token_ttl_secs = 2592000
-# OAuth clients and tokens persist across restarts. Defaults to the path below;
-# MCP_TARGET_OPS_OAUTH_STATE_FILE can override it. On Unix the file must be 0600.
+# OAuth clients and tokens persist across restarts in this file. The default is
+# ~/.config/mcp-target-ops/oauth-state.json; MCP_TARGET_OPS_OAUTH_STATE_FILE can
+# override it. On Unix the state file must be mode 0600.
 # oauth_state_file = "/home/me/.config/mcp-target-ops/oauth-state.json"
 
 # Optional downstream Streamable HTTP MCP server. Prefer a dedicated mode-0600
@@ -58,51 +109,87 @@ runtime_dir = "/tmp/mcp-target-ops"
 #   Authorization = "Bearer replace-me"
 #
 # [mcp_servers.memory]
+# Enable or disable this downstream server without deleting its configuration.
 # enabled = true
+# Load downstream URL/headers from a dedicated Target Ops-owned TOML file.
+# Exactly one of config_file, url, or url_secret must be configured.
 # config_file = "/home/me/.config/mcp-target-ops/mcp/memory.toml"
+# Network timeout for downstream MCP initialize/tools requests, in milliseconds.
 # timeout_ms = 20000
+# Maximum accepted downstream HTTP response body size, in bytes.
 # max_response_bytes = 1048576
 #
 # Advanced alternative: keep an endpoint or headers in another file-backed
 # secret source. Exactly one of config_file, url, or url_secret is required.
 # [mcp_servers.other]
 # enabled = true
+# Target whose file policy is used when resolving url_secret/secret_headers.
 # secret_target = "local"
+# Read the downstream URL from a scalar in a file instead of storing it here.
 # url_secret = { path = "/home/me/secrets.toml", format = "toml", key = "mcp.url" }
 # [mcp_servers.other.secret_headers]
+# Resolve individual HTTP header values from file-backed secret references.
 # Authorization = { path = "/home/me/secrets.toml", format = "toml", key = "mcp.Authorization" }
 
 # "local" is the reserved key for the single local target. Local access is
 # intentionally disabled by default; enable it only for trusted setups.
 [targets.local]
+# Target transport type. The reserved local target must use kind = "local".
 kind = "local"
+# Make this target available to tools. Keeping it false is the deny-by-default
+# single-binary startup behavior.
 enabled = false
+# Shell program used for local commands/terminals when applicable.
 shell = "bash"
 
 [targets.local.policy]
+# Permit non-interactive exec / exec_batch / exec_start operations.
 allow_exec = false
+# Permit persistent interactive PTY sessions.
 allow_terminal = false
+# Permit structured file and directory reads inside allowed_roots.
 allow_file_read = false
+# Permit file mutation tools inside allowed_roots.
 allow_file_write = false
+# Permit target_select to make this target session-scoped active state.
 allow_select_active = false
+# Require write tools to name target explicitly instead of inheriting the
+# active/default target. Keeping this true reduces accidental writes.
 require_explicit_target_for_write = true
+# Absolute filesystem roots visible to Target Ops file tools. An empty list
+# refuses all file access even if allow_file_read/write is true.
 allowed_roots = ["/tmp"]
+# Default timeout for commands and remote/file operations on this target when a
+# tool call omits timeout_ms, in milliseconds.
 default_timeout_ms = 30000
+# Maximum retained/returned command output for this target, in bytes. Per-call
+# max_output_bytes requests are capped by this policy value.
 max_output_bytes = 200000
 
 # Every non-local target must use kind = "ssh". This section is exposed as the
 # external target id "ssh:dev".
 [targets.dev]
+# Target transport type. Every named non-local profile must use "ssh".
 kind = "ssh"
+# Make this SSH profile available to Target Ops tools.
 enabled = true
+# SSH hostname or address passed to OpenSSH.
 host = "dev.example.com"
+# SSH TCP port.
 port = 22
+# Optional SSH username. Omit it to let normal OpenSSH configuration decide.
 user = "ubuntu"
+# Optional private key passed to OpenSSH. Prefer normal ssh-agent/config where
+# practical so key handling remains centralized.
 # identity_file = "/Users/you/.ssh/id_ed25519"
+# Additional OpenSSH command-line arguments. Host keys, ProxyJump, Kerberos,
+# agents, and other advanced behavior can also live in ~/.ssh/config.
 extra_args = ["-o", "BatchMode=yes"]
+# Optional shell used for remote command construction / terminals.
 shell = "bash"
 
 [targets.dev.policy]
+# Same policy semantics as targets.local.policy, applied independently to dev.
 allow_exec = true
 allow_terminal = true
 allow_file_read = true
@@ -113,22 +200,36 @@ allowed_roots = ["/home/ubuntu/app", "/tmp"]
 default_timeout_ms = 30000
 max_output_bytes = 200000
 
-# Example prod target with safer defaults.
+# Example production target with a deliberately safer policy.
 [targets.prod]
+# Named production profile, exposed externally as ssh:prod.
 kind = "ssh"
+# Make this profile available.
 enabled = true
+# Production SSH endpoint.
 host = "prod.example.com"
+# Production SSH TCP port.
 port = 22
+# Remote login user.
 user = "ubuntu"
+# Non-interactive OpenSSH option suitable for automation.
 extra_args = ["-o", "BatchMode=yes"]
 
 [targets.prod.policy]
+# Commands are allowed, but interactive terminals and mutations are disabled in
+# this safer example.
 allow_exec = true
 allow_terminal = false
+# Permit read-only inspection under allowed_roots.
 allow_file_read = true
 allow_file_write = false
+# Do not allow this production target to become implicit active state.
 allow_select_active = false
+# Retain explicit-target protection even though writes are disabled here.
 require_explicit_target_for_write = true
+# Production paths exposed to read tools.
 allowed_roots = ["/srv/app", "/var/log"]
+# Default production operation timeout, in milliseconds.
 default_timeout_ms = 30000
+# Maximum retained/returned command output, in bytes.
 max_output_bytes = 200000
