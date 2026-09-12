@@ -1,3 +1,4 @@
+mod command_session;
 mod edit;
 mod stream;
 

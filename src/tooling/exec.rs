@@ -1,27 +1,15 @@
 use crate::{
     core::{
-        config::TargetConfig,
         error::{Error, Result},
         policy,
         secret::SecretRef,
         state::AppState,
-        target::{ResolvedTarget, TargetId},
-        util::truncate_bytes,
+        target::ResolvedTarget,
     },
-    tooling::secret,
-    transport::ssh,
+    tooling::job::ExecStartRequest,
 };
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::BTreeMap,
-    io::Read,
-    process::{Child, Command, Stdio},
-    thread,
-    time::{Duration, Instant},
-};
-
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
+use std::{collections::BTreeMap, thread, time::Instant};
 
 const MAX_BATCH_COMMANDS: usize = 32;
 
@@ -136,52 +124,28 @@ pub struct RawExecOutput {
 }
 
 pub fn run(state: &AppState, req: ExecRequest) -> Result<ExecResponse> {
-    let (target, source) = state.resolve_target(req.target.as_deref())?;
-    let config = state.get_target_config(&target)?;
-    policy::check_exec(&target, config)?;
-
-    let policy = policy::target_policy(config);
-    let timeout_ms = req.timeout_ms.unwrap_or(policy.default_timeout_ms);
-    let timeout = Duration::from_millis(timeout_ms);
-    let max_output = Some(
-        req.max_output_bytes
-            .unwrap_or(policy.max_output_bytes)
-            .min(policy.max_output_bytes),
-    );
-    let secret_env = secret::resolve_env(state, &target, config, source, &req.secret_env, timeout)?;
-
-    let raw = match (target.clone(), config) {
-        (TargetId::Local, TargetConfig::Local(_)) => {
-            run_local_shell_with_env(&req.command, req.cwd.as_deref(), &secret_env, timeout)?
-        }
-        (TargetId::Ssh(name), TargetConfig::Ssh(ssh_config)) => ssh::exec_with_env(
-            &state.ssh_sessions,
-            &name,
-            ssh_config,
-            &req.command,
-            req.cwd.as_deref(),
-            &secret_env,
-            timeout,
-        )?,
-        _ => {
-            return Err(Error::Target(format!(
-                "target {target} has mismatched config"
-            )))
-        }
-    };
-
-    let (stdout, stdout_truncated) = truncate_bytes(raw.stdout, max_output);
-    let (stderr, stderr_truncated) = truncate_bytes(raw.stderr, max_output);
+    let command = req.command.clone();
+    let output = state.jobs.run_foreground(
+        state,
+        ExecStartRequest {
+            target: req.target,
+            command: req.command,
+            cwd: req.cwd,
+            timeout_ms: req.timeout_ms,
+            max_output_bytes: req.max_output_bytes,
+            secret_env: req.secret_env,
+        },
+    )?;
 
     Ok(ExecResponse {
-        command: req.command,
-        resolved_target: state.resolved_target_value(target, source),
-        exit_code: raw.exit_code,
-        stdout: String::from_utf8_lossy(&stdout).to_string(),
-        stderr: String::from_utf8_lossy(&stderr).to_string(),
-        stdout_truncated,
-        stderr_truncated,
-        timed_out: raw.timed_out,
+        command,
+        resolved_target: output.resolved_target,
+        exit_code: output.exit_code,
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        stdout_truncated: output.stdout_truncated,
+        stderr_truncated: output.stderr_truncated,
+        timed_out: output.timed_out,
     })
 }
 
@@ -321,139 +285,6 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-pub fn run_local_shell_with_env(
-    command: &str,
-    cwd: Option<&str>,
-    env: &BTreeMap<String, String>,
-    timeout: Duration,
-) -> Result<RawExecOutput> {
-    run_command_collect(local_shell_command(command, cwd, env), timeout)
-}
-
-pub(crate) fn local_shell_command(
-    command: &str,
-    cwd: Option<&str>,
-    env: &BTreeMap<String, String>,
-) -> Command {
-    #[cfg(windows)]
-    let mut cmd = {
-        let mut cmd = Command::new("cmd.exe");
-        cmd.arg("/C").arg(command);
-        cmd
-    };
-
-    #[cfg(not(windows))]
-    let mut cmd = {
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string());
-        let mut cmd = Command::new(shell);
-        cmd.arg("-lc").arg(command);
-        cmd
-    };
-
-    if let Some(cwd) = cwd {
-        cmd.current_dir(cwd);
-    }
-    cmd.envs(env);
-    cmd
-}
-
-pub(crate) fn configure_command_process_group(cmd: &mut Command) {
-    #[cfg(unix)]
-    {
-        cmd.process_group(0);
-    }
-}
-
-pub(crate) fn terminate_child_process_group(child: &mut Child) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        let pgid = libc::pid_t::try_from(child.id()).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "child pid does not fit pid_t",
-            )
-        })?;
-        // SAFETY: commands are placed in a fresh process group whose id is the child pid.
-        let result = unsafe { libc::kill(-pgid, libc::SIGKILL) };
-        if result == 0 {
-            return Ok(());
-        }
-        let error = std::io::Error::last_os_error();
-        if error.raw_os_error() == Some(libc::ESRCH) {
-            return Ok(());
-        }
-        if child.kill().is_ok() {
-            return Ok(());
-        }
-        Err(error)
-    }
-
-    #[cfg(not(unix))]
-    {
-        child.kill()
-    }
-}
-
-pub fn run_command_collect(mut cmd: Command, timeout: Duration) -> Result<RawExecOutput> {
-    configure_command_process_group(&mut cmd);
-    let mut child = cmd
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| Error::Tool("failed to open command stdout".to_string()))?;
-    let mut stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| Error::Tool("failed to open command stderr".to_string()))?;
-
-    let stdout_thread = thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stdout.read_to_end(&mut buf);
-        buf
-    });
-    let stderr_thread = thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stderr.read_to_end(&mut buf);
-        buf
-    });
-
-    let started = Instant::now();
-    let mut timed_out = false;
-    let exit_code = loop {
-        if let Some(status) = child.try_wait()? {
-            break status.code();
-        }
-
-        if started.elapsed() >= timeout {
-            timed_out = true;
-            let _ = terminate_child_process_group(&mut child);
-            let status = child.wait()?;
-            break status.code();
-        }
-
-        thread::sleep(Duration::from_millis(20));
-    };
-
-    let stdout = stdout_thread
-        .join()
-        .map_err(|_| Error::Tool("stdout reader panicked".to_string()))?;
-    let stderr = stderr_thread
-        .join()
-        .map_err(|_| Error::Tool("stderr reader panicked".to_string()))?;
-
-    Ok(RawExecOutput {
-        exit_code,
-        stdout,
-        stderr,
-        timed_out,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -480,36 +311,6 @@ mod tests {
                 "resolved_target": { "target": "local", "source": "explicit" },
                 "exit_code": 0
             })
-        );
-    }
-
-    #[test]
-    fn injects_secret_environment_without_echoing_it() {
-        let mut env = BTreeMap::new();
-        env.insert("MCP_TEST_SECRET".to_string(), "hidden-value".to_string());
-        let output = run_local_shell_with_env(
-            "printf '%s' \"$MCP_TEST_SECRET\"",
-            None,
-            &env,
-            Duration::from_secs(10),
-        )
-        .unwrap();
-        assert_eq!(output.stdout, b"hidden-value");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn timeout_kills_external_child_processes_promptly() {
-        let started = Instant::now();
-        let output =
-            run_local_shell_with_env("sleep 1", None, &BTreeMap::new(), Duration::from_millis(50))
-                .unwrap();
-
-        assert!(output.timed_out);
-        assert!(
-            started.elapsed() < Duration::from_millis(700),
-            "timeout waited for an inherited pipe holder: {:?}",
-            started.elapsed()
         );
     }
 }

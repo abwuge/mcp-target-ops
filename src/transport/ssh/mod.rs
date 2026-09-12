@@ -30,19 +30,6 @@ pub fn disconnect(
     sessions.disconnect(target_name, timeout)
 }
 
-pub fn exec_with_env(
-    sessions: &SshSessionRegistry,
-    target_name: &str,
-    ssh: &SshTargetConfig,
-    command: &str,
-    cwd: Option<&str>,
-    env: &BTreeMap<String, String>,
-    timeout: Duration,
-) -> Result<RawExecOutput> {
-    let remote_command = with_cwd_and_env(command, cwd, env);
-    sessions.run_script(target_name, ssh, &remote_command, &[], timeout)
-}
-
 pub fn exec_program_and_args(
     ssh: &SshTargetConfig,
     command: &str,
