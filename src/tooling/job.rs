@@ -516,7 +516,7 @@ pub(crate) fn local_shell_command(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{core::config::Config, core::state::AppState};
+    use crate::core::{config::Config, state::AppState, util::shell_quote};
     use tempfile::tempdir;
 
     fn test_state() -> AppState {
@@ -536,12 +536,17 @@ mod tests {
     #[test]
     fn foreground_stream_can_attach_and_read_incremental_output() {
         let state = Arc::new(test_state());
-        let command = "printf first; sleep 0.12; printf second".to_string();
+        let control = tempdir().unwrap();
+        let release = control.path().join("release");
+        let command = format!(
+            "printf first; while [ ! -f {} ]; do sleep 0.01; done; printf second",
+            shell_quote(&release.to_string_lossy())
+        );
         let request = ExecStartRequest {
             target: Some("local".into()),
             command: command.clone(),
             cwd: None,
-            timeout_ms: Some(1000),
+            timeout_ms: Some(5000),
             max_output_bytes: None,
             secret_env: BTreeMap::new(),
         };
@@ -557,8 +562,8 @@ mod tests {
                 .unwrap()
         });
 
-        let mut attached = None;
-        for _ in 0..30 {
+        let mut first = None;
+        for _ in 0..200 {
             let response = state
                 .jobs
                 .stream(ExecStreamRequest {
@@ -572,32 +577,44 @@ mod tests {
                     max_bytes: None,
                 })
                 .unwrap();
-            if response.attached {
-                attached = Some(response);
+            if response.attached && response.stdout.contains("first") {
+                first = Some(response);
                 break;
             }
             std::thread::sleep(Duration::from_millis(10));
         }
-        let first = attached.expect("foreground stream attaches");
+        let first = first.expect("foreground stream attaches and exposes first chunk");
         let session_id = first.session_id.clone().expect("stream session id");
-        assert!(first.stdout.contains("first") || !first.eof);
+        assert!(!first.eof, "command must still be waiting for release");
 
-        std::thread::sleep(Duration::from_millis(160));
-        let second = state
-            .jobs
-            .stream(ExecStreamRequest {
-                session_id: Some(session_id),
-                request_id: None,
-                target: None,
-                command: None,
-                cwd: None,
-                stdout_since_seq: Some(first.stdout_next_seq),
-                stderr_since_seq: Some(first.stderr_next_seq),
-                max_bytes: None,
-            })
-            .unwrap();
-        assert!(second.attached);
-        assert!(second.stdout.contains("second") || second.eof);
+        std::fs::write(&release, b"go").unwrap();
+        let mut stdout_seq = first.stdout_next_seq;
+        let mut stderr_seq = first.stderr_next_seq;
+        let mut saw_second = false;
+        for _ in 0..200 {
+            let response = state
+                .jobs
+                .stream(ExecStreamRequest {
+                    session_id: Some(session_id.clone()),
+                    request_id: None,
+                    target: None,
+                    command: None,
+                    cwd: None,
+                    stdout_since_seq: Some(stdout_seq),
+                    stderr_since_seq: Some(stderr_seq),
+                    max_bytes: None,
+                })
+                .unwrap();
+            assert!(response.attached);
+            saw_second |= response.stdout.contains("second");
+            stdout_seq = response.stdout_next_seq;
+            stderr_seq = response.stderr_next_seq;
+            if saw_second || response.eof {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(saw_second, "incremental stream exposes second chunk");
 
         let foreground = worker.join().unwrap();
         assert_eq!(foreground.stdout, b"firstsecond");
