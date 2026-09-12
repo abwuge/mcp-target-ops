@@ -173,9 +173,16 @@ pub(super) fn output_schema(name: &str) -> Value {
                 "bytes": { "type": "integer", "minimum": 0 },
                 "truncated": { "type": "boolean" },
                 "start_line": { "type": "integer", "minimum": 1 },
-                "end_line": { "type": "integer", "minimum": 0 }
+                "end_line": { "type": "integer", "minimum": 0 },
+                "requested_count": { "type": "integer", "minimum": 1 },
+                "succeeded": { "type": "integer", "minimum": 0 },
+                "failed": { "type": "integer", "minimum": 0 },
+                "files": {
+                    "type": "array",
+                    "items": file_read_batch_item_schema()
+                }
             },
-            "required": ["resolved_target", "path", "encoding", "content", "sha256", "bytes", "truncated"],
+            "required": ["resolved_target", "truncated"],
             "additionalProperties": false
         }),
         "file_list" => json!({
@@ -417,6 +424,27 @@ pub(super) fn output_schema(name: &str) -> Value {
         }),
         _ => unreachable!("output schema missing for tool {name}"),
     }
+}
+
+fn file_read_batch_item_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "index": { "type": "integer", "minimum": 0 },
+            "path": { "type": "string" },
+            "success": { "type": "boolean" },
+            "encoding": { "type": "string", "enum": ["utf-8", "base64"] },
+            "content": { "type": "string" },
+            "sha256": { "type": "string" },
+            "bytes": { "type": "integer", "minimum": 0 },
+            "truncated": { "type": "boolean" },
+            "start_line": { "type": "integer", "minimum": 1 },
+            "end_line": { "type": "integer", "minimum": 0 },
+            "error": { "type": "string" }
+        },
+        "required": ["index", "path", "success"],
+        "additionalProperties": false
+    })
 }
 
 fn exec_batch_item_schema() -> Value {

@@ -1,4 +1,7 @@
-use super::{schema::output_schema, EXEC_TERMINAL_UI_URI, FILE_CHANGE_UI_URI, INVENTORY_UI_URI};
+use super::{
+    schema::output_schema, EXEC_TERMINAL_UI_URI, FILE_CHANGE_UI_URI, FILE_READ_UI_URI,
+    INVENTORY_UI_URI,
+};
 use serde_json::{json, Value};
 
 pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
@@ -34,7 +37,7 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
             required_string("tool", "Downstream MCP tool name."),
             optional_value("arguments", "JSON object passed as downstream tool arguments. Defaults to an empty object.", json!({"type":"object","additionalProperties":true})),
         ])),
-        tool("exec", "Run one non-interactive shell command or script on the explicit target or current active target. Use exec_batch instead when you need several logically independent command results.", object_schema(vec![
+        tool("exec", "Run one non-interactive shell command or script on the explicit target or current active target. Use exec_batch instead when you need several logically independent command results. Prefer file_read/file_find over cat, sed, or grep when the task is purely reading known files.", object_schema(vec![
             optional_string("target", "Target id: local or ssh:<profile>. Omit to use active target."),
             required_string("command", "Shell command or script to execute as one shell unit."),
             optional_string("cwd", "Working directory."),
@@ -42,7 +45,7 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
             optional_integer("max_output_bytes", "Maximum bytes to return for stdout and stderr."),
             optional_value("secret_env", "Map environment variable names to secret references. Secret values are resolved inside Target Ops and are not included in the tool request or tool metadata; commands can still expose them if they print their environment.", secret_env_schema()),
         ])),
-        tool("exec_batch", "Run multiple logically independent non-interactive commands in one tool call and return a separate result for each. Prefer this over combining unrelated inspections with shell separators; use exec for commands that must share shell state such as cd, variables, pipelines, or control flow.", exec_batch_schema()),
+        tool("exec_batch", "Run multiple logically independent non-interactive commands in one tool call and return a separate result for each. Prefer this over combining unrelated inspections with shell separators; use exec for commands that must share shell state such as cd, variables, pipelines, or control flow. Prefer batch file_read for reading several known files.", exec_batch_schema()),
         tool("exec_start", "Start a non-interactive command as a background job. Jobs use dedicated processes, support incremental output and cancellation, and do not block later tool calls.", object_schema(vec![
             optional_string("target", "Target id: local or ssh:<profile>. Omit to use active target."),
             required_string("command", "Shell command to execute."),
@@ -63,14 +66,7 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
         tool("job_cancel", "Request cancellation of a running background job.", object_schema(vec![
             required_string("job_id", "Job id returned by exec_start."),
         ])),
-        tool("file_read", "Read a UTF-8 or binary file from the explicit target or active target.", object_schema(vec![
-            optional_string("target", "Target id. Omit to use active target."),
-            required_string("path", "File path."),
-            optional_integer("max_bytes", "Maximum bytes to return."),
-            optional_integer("start_line", "Optional 1-based first line to return for UTF-8 files."),
-            optional_integer("end_line", "Optional 1-based inclusive last line to return for UTF-8 files."),
-            optional_integer("timeout_ms", "Timeout in milliseconds for remote file access."),
-        ])),
+        tool("file_read", "Read one known file or batch several independent file/range reads in one call. Prefer this over exec with cat/sed when file paths are known. Single-file path mode remains compatible; batch mode uses files[] and keeps per-file failures independent.", file_read_schema()),
         tool("file_list", "List one directory on the explicit target or active target.", object_schema(vec![
             optional_string("target", "Target id. Omit to use active target."),
             required_string("path", "Directory path."),
@@ -180,6 +176,22 @@ fn tool(
         meta.insert(
             "openai/toolInvocation/invoked".to_string(),
             Value::String(invoked.to_string()),
+        );
+    }
+
+    if name == "file_read" {
+        meta.insert("ui".to_string(), json!({ "resourceUri": FILE_READ_UI_URI }));
+        meta.insert(
+            "openai/outputTemplate".to_string(),
+            Value::String(FILE_READ_UI_URI.to_string()),
+        );
+        meta.insert(
+            "openai/toolInvocation/invoking".to_string(),
+            Value::String("Reading file…".to_string()),
+        );
+        meta.insert(
+            "openai/toolInvocation/invoked".to_string(),
+            Value::String("File read".to_string()),
         );
     }
 
@@ -375,6 +387,43 @@ fn exec_batch_schema() -> Value {
             "secret_env": { "description": "Shared secret environment map for all commands. Secret values are resolved inside Target Ops and omitted from tool metadata.", "type": "object", "additionalProperties": secret_ref_schema() }
         },
         "required": ["commands"],
+        "additionalProperties": false
+    })
+}
+
+fn file_read_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "target": { "type": "string", "description": "Target id. Omit to use active target." },
+            "path": { "type": "string", "description": "Single file path. Use either path or files, not both." },
+            "files": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 32,
+                "description": "Independent file reads. Repeat a path with different line ranges when several ranges from one file are needed.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "File path." },
+                        "max_bytes": { "type": "integer", "minimum": 0, "description": "Maximum raw bytes returned for this item." },
+                        "start_line": { "type": "integer", "minimum": 1, "description": "Optional 1-based first line for UTF-8 text." },
+                        "end_line": { "type": "integer", "minimum": 1, "description": "Optional 1-based inclusive last line for UTF-8 text." }
+                    },
+                    "required": ["path"],
+                    "additionalProperties": false
+                }
+            },
+            "max_bytes": { "type": "integer", "minimum": 0, "description": "Single mode: maximum returned raw bytes. Batch mode: total raw-byte budget shared across all successful reads." },
+            "start_line": { "type": "integer", "minimum": 1, "description": "Single path mode only: optional 1-based first line for UTF-8 text." },
+            "end_line": { "type": "integer", "minimum": 1, "description": "Single path mode only: optional 1-based inclusive last line for UTF-8 text." },
+            "timeout_ms": { "type": "integer", "description": "Timeout in milliseconds for remote file access." }
+        },
+        "required": [],
+        "anyOf": [
+            { "required": ["path"] },
+            { "required": ["files"] }
+        ],
         "additionalProperties": false
     })
 }
@@ -616,6 +665,31 @@ mod tests {
             assert_eq!(tool["_meta"]["openai/toolInvocation/invoking"], invoking);
             assert_eq!(tool["_meta"]["openai/toolInvocation/invoked"], invoked);
         }
+    }
+
+    #[test]
+    fn file_read_binds_read_app_resource() {
+        let tools = list_tools(None);
+        let file_read = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "file_read")
+            .expect("file_read tool");
+
+        assert_eq!(file_read["_meta"]["ui"]["resourceUri"], FILE_READ_UI_URI);
+        assert_eq!(
+            file_read["_meta"]["openai/outputTemplate"],
+            FILE_READ_UI_URI
+        );
+        assert_eq!(
+            file_read["_meta"]["openai/toolInvocation/invoking"],
+            "Reading file…"
+        );
+        assert_eq!(
+            file_read["_meta"]["openai/toolInvocation/invoked"],
+            "File read"
+        );
     }
 
     #[test]

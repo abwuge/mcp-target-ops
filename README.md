@@ -396,7 +396,7 @@ command can still reveal it by printing or transmitting its environment.
 
 ### File safety and patching
 
-- `file_read` returns a SHA-256 hash and supports 1-based UTF-8 line ranges.
+- `file_read` returns SHA-256 metadata and supports 1-based UTF-8 line ranges. It accepts either legacy single `path` mode or up to 32 independent `files[]` reads in one call; repeating a path with different ranges reads multiple ranges efficiently. Batch failures are isolated per item and the batch shares one bounded output budget.
 - `file_find` performs bounded literal matching with optional context.
 - `file_write` is atomic. Replacing an existing file requires
   `expected_sha256` or `overwrite = true`.
@@ -420,6 +420,8 @@ target. `terminal_read` is incremental, `terminal_send` writes input, and
 remain process-local.
 
 ### ChatGPT file integration and review UI
+
+`file_read` binds to `ui://target-ops/file-read/v1.html`, which presents text with line numbers, range and hash metadata, and compact expandable batch results. This makes structured file reads easier to inspect than shell-based `cat`/`sed` output.
 
 `file_import` accepts a ChatGPT or connector file parameter after runtime
 rewriting to a mounted local path or HTTPS file reference. It writes through the
@@ -594,6 +596,7 @@ Source layout:
 assets/
   exec-terminal.html     MCP App non-interactive exec result interface
   file-change.html       MCP App file review interface
+  file-read.html         MCP App single/batch file reader
   inventory-card.html    MCP App target and MCP server inventory card
   oauth-authorize.html   OAuth authorization page
 

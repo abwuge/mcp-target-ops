@@ -6,7 +6,10 @@ use serde::{Deserialize, Serialize};
 pub struct FileReadRequest {
     #[serde(default)]
     pub target: Option<String>,
-    pub path: String,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub files: Vec<FileReadSpec>,
     #[serde(default)]
     pub max_bytes: Option<usize>,
     #[serde(default)]
@@ -17,9 +20,33 @@ pub struct FileReadRequest {
     pub timeout_ms: Option<u64>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct FileReadSpec {
+    pub path: String,
+    #[serde(default)]
+    pub max_bytes: Option<usize>,
+    #[serde(default)]
+    pub start_line: Option<usize>,
+    #[serde(default)]
+    pub end_line: Option<usize>,
+}
+
 #[derive(Debug, Clone, Serialize)]
-pub struct FileReadResponse {
+#[serde(untagged)]
+pub enum FileReadResponse {
+    Single(FileReadSingleResponse),
+    Batch(FileReadBatchResponse),
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FileReadSingleResponse {
     pub resolved_target: ResolvedTarget,
+    #[serde(flatten)]
+    pub file: FileReadItemResponse,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FileReadItemResponse {
     pub path: String,
     pub encoding: String,
     pub content: String,
@@ -30,6 +57,43 @@ pub struct FileReadResponse {
     pub start_line: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub end_line: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FileReadBatchResponse {
+    pub resolved_target: ResolvedTarget,
+    pub requested_count: usize,
+    pub succeeded: usize,
+    pub failed: usize,
+    pub truncated: bool,
+    pub files: Vec<FileReadBatchItemResponse>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FileReadBatchItemResponse {
+    pub index: usize,
+    pub path: String,
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<usize>,
+    #[serde(skip_serializing_if = "is_false")]
+    pub truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_line: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_line: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, Deserialize)]

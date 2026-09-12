@@ -14,13 +14,15 @@ use crate::{
         error::{Error, Result},
         policy::{self, FileAccess},
         state::AppState,
-        target::TargetId,
+        target::{TargetId, TargetSource},
         util::{sha256_hex, truncate_bytes},
     },
     transport::ssh,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use std::{collections::HashSet, fs, time::Duration};
+
+const MAX_BATCH_FILE_READS: usize = 32;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -36,44 +38,146 @@ struct PreparedFilePatch {
 }
 
 pub fn read(state: &AppState, req: FileReadRequest) -> Result<FileReadResponse> {
+    if req.path.is_some() && !req.files.is_empty() {
+        return Err(Error::Tool(
+            "file_read accepts either path or files, not both".to_string(),
+        ));
+    }
+    if req.path.is_none() && req.files.is_empty() {
+        return Err(Error::Tool(
+            "file_read requires path or at least one files entry".to_string(),
+        ));
+    }
+    if req.files.len() > MAX_BATCH_FILE_READS {
+        return Err(Error::Tool(format!(
+            "file_read accepts at most {MAX_BATCH_FILE_READS} files per batch"
+        )));
+    }
+    if !req.files.is_empty() && (req.start_line.is_some() || req.end_line.is_some()) {
+        return Err(Error::Tool(
+            "top-level start_line/end_line are only valid with path; put line ranges on each files entry"
+                .to_string(),
+        ));
+    }
+
     let (target, source) = state.resolve_target(req.target.as_deref())?;
     let config = state.get_target_config(&target)?;
-    policy::check_file(&target, config, &req.path, FileAccess::Read, source)?;
-
     let target_policy = policy::target_policy(config);
-    let timeout_ms = req.timeout_ms.unwrap_or(target_policy.default_timeout_ms);
-    let bytes = read_bytes(
-        state,
-        &target,
-        config,
-        &req.path,
-        Duration::from_millis(timeout_ms),
-    )?;
-    let sha256 = sha256_hex(&bytes);
-    let original_len = bytes.len();
-    let max_bytes = req
+    let timeout = Duration::from_millis(req.timeout_ms.unwrap_or(target_policy.default_timeout_ms));
+    let resolved_target = state.resolved_target_value(target.clone(), source);
+
+    if let Some(path) = req.path {
+        let spec = FileReadSpec {
+            path,
+            max_bytes: req.max_bytes,
+            start_line: req.start_line,
+            end_line: req.end_line,
+        };
+        let max_bytes = spec
+            .max_bytes
+            .unwrap_or(target_policy.max_output_bytes)
+            .min(target_policy.max_output_bytes);
+        let (file, _) = read_file_item(state, &target, config, source, spec, timeout, max_bytes)?;
+        return Ok(FileReadResponse::Single(FileReadSingleResponse {
+            resolved_target,
+            file,
+        }));
+    }
+
+    let requested_count = req.files.len();
+    let mut remaining = req
         .max_bytes
         .unwrap_or(target_policy.max_output_bytes)
         .min(target_policy.max_output_bytes);
+    let mut files = Vec::with_capacity(requested_count);
 
-    let (selected, start_line, end_line) = select_line_range(bytes, req.start_line, req.end_line)?;
+    for (index, spec) in req.files.into_iter().enumerate() {
+        let path = spec.path.clone();
+        let max_bytes = spec
+            .max_bytes
+            .unwrap_or(target_policy.max_output_bytes)
+            .min(target_policy.max_output_bytes)
+            .min(remaining);
+        match read_file_item(state, &target, config, source, spec, timeout, max_bytes) {
+            Ok((file, returned_bytes)) => {
+                remaining = remaining.saturating_sub(returned_bytes);
+                files.push(FileReadBatchItemResponse {
+                    index,
+                    path: file.path,
+                    success: true,
+                    encoding: Some(file.encoding),
+                    content: Some(file.content),
+                    sha256: Some(file.sha256),
+                    bytes: Some(file.bytes),
+                    truncated: file.truncated,
+                    start_line: file.start_line,
+                    end_line: file.end_line,
+                    error: None,
+                });
+            }
+            Err(error) => files.push(FileReadBatchItemResponse {
+                index,
+                path,
+                success: false,
+                encoding: None,
+                content: None,
+                sha256: None,
+                bytes: None,
+                truncated: false,
+                start_line: None,
+                end_line: None,
+                error: Some(error.to_string()),
+            }),
+        }
+    }
+
+    let succeeded = files.iter().filter(|file| file.success).count();
+    let truncated = files.iter().any(|file| file.truncated);
+    Ok(FileReadResponse::Batch(FileReadBatchResponse {
+        resolved_target,
+        requested_count,
+        succeeded,
+        failed: requested_count.saturating_sub(succeeded),
+        truncated,
+        files,
+    }))
+}
+
+fn read_file_item(
+    state: &AppState,
+    target: &TargetId,
+    config: &TargetConfig,
+    source: TargetSource,
+    spec: FileReadSpec,
+    timeout: Duration,
+    max_bytes: usize,
+) -> Result<(FileReadItemResponse, usize)> {
+    policy::check_file(target, config, &spec.path, FileAccess::Read, source)?;
+    let bytes = read_bytes(state, target, config, &spec.path, timeout)?;
+    let sha256 = sha256_hex(&bytes);
+    let original_len = bytes.len();
+    let (selected, start_line, end_line) =
+        select_line_range(bytes, spec.start_line, spec.end_line)?;
     let (selected, truncated) = truncate_bytes(selected, Some(max_bytes));
+    let returned_bytes = selected.len();
     let (encoding, content) = match String::from_utf8(selected.clone()) {
         Ok(text) => ("utf-8".to_string(), text),
         Err(_) => ("base64".to_string(), BASE64.encode(&selected)),
     };
 
-    Ok(FileReadResponse {
-        resolved_target: state.resolved_target_value(target, source),
-        path: req.path,
-        encoding,
-        content,
-        sha256,
-        bytes: original_len,
-        truncated,
-        start_line,
-        end_line,
-    })
+    Ok((
+        FileReadItemResponse {
+            path: spec.path,
+            encoding,
+            content,
+            sha256,
+            bytes: original_len,
+            truncated,
+            start_line,
+            end_line,
+        },
+        returned_bytes,
+    ))
 }
 
 pub fn list(state: &AppState, req: FileListRequest) -> Result<FileListResponse> {

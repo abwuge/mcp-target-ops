@@ -1,10 +1,13 @@
-use crate::tooling::tools::{EXEC_TERMINAL_UI_URI, FILE_CHANGE_UI_URI, INVENTORY_UI_URI};
+use crate::tooling::tools::{
+    EXEC_TERMINAL_UI_URI, FILE_CHANGE_UI_URI, FILE_READ_UI_URI, INVENTORY_UI_URI,
+};
 use serde_json::{json, Value};
 
 pub const MCP_APP_MIME_TYPE: &str = "text/html;profile=mcp-app";
 
 const EXEC_TERMINAL_UI_HTML: &str = include_str!("../../assets/exec-terminal.html");
 const FILE_CHANGE_UI_HTML: &str = include_str!("../../assets/file-change.html");
+const FILE_READ_UI_HTML: &str = include_str!("../../assets/file-read.html");
 const INVENTORY_UI_HTML: &str = include_str!("../../assets/inventory-card.html");
 
 struct AppResource {
@@ -17,7 +20,7 @@ struct AppResource {
     prefers_border: bool,
 }
 
-const RESOURCES: [AppResource; 3] = [
+const RESOURCES: [AppResource; 4] = [
     AppResource {
         uri: EXEC_TERMINAL_UI_URI,
         name: "target-ops-exec-result",
@@ -34,6 +37,15 @@ const RESOURCES: [AppResource; 3] = [
         description: "Human-readable review of Target Ops file mutations.",
         widget_description: "Reviews file changes like an editor: full content for added/deleted files and color-highlighted diffs for modified files.",
         html: FILE_CHANGE_UI_HTML,
+        prefers_border: true,
+    },
+    AppResource {
+        uri: FILE_READ_UI_URI,
+        name: "target-ops-file-read",
+        title: "Target Ops file read",
+        description: "Readable view of one or more Target Ops file reads.",
+        widget_description: "Shows file contents with line numbers, line ranges, metadata, truncation state, and compact batch results.",
+        html: FILE_READ_UI_HTML,
         prefers_border: true,
     },
     AppResource {
@@ -111,7 +123,7 @@ mod tests {
         let widget_domain = "https://mcp.example.com";
         let listed = list_resources(Some(widget_domain));
         let resources = listed["resources"].as_array().expect("resources array");
-        assert_eq!(resources.len(), 3);
+        assert_eq!(resources.len(), 4);
 
         let exec_result = resources
             .iter()
@@ -138,6 +150,15 @@ mod tests {
         assert_eq!(file_change["_meta"]["ui"]["prefersBorder"], true);
         assert_eq!(file_change["_meta"]["openai/widgetPrefersBorder"], true);
         assert_eq!(file_change["_meta"]["openai/widgetDomain"], widget_domain);
+
+        let file_read = resources
+            .iter()
+            .find(|resource| resource["uri"] == FILE_READ_UI_URI)
+            .expect("file read resource");
+        assert_eq!(file_read["mimeType"], MCP_APP_MIME_TYPE);
+        assert_eq!(file_read["_meta"]["ui"]["prefersBorder"], true);
+        assert_eq!(file_read["_meta"]["openai/widgetPrefersBorder"], true);
+        assert_eq!(file_read["_meta"]["openai/widgetDomain"], widget_domain);
 
         let inventory = resources
             .iter()
@@ -178,6 +199,19 @@ mod tests {
         assert!(html.contains("renderDiff"));
         assert!(html.contains("lineRow(kind === 'deleted'"));
         assert!(html.contains("Binary file content shown as base64"));
+    }
+
+    #[test]
+    fn reads_file_read_resource() {
+        let read = read_resource(FILE_READ_UI_URI, Some("https://mcp.example.com"))
+            .expect("file read resource exists");
+        assert_eq!(read["contents"][0]["mimeType"], MCP_APP_MIME_TYPE);
+        let html = read["contents"][0]["text"].as_str().unwrap();
+        assert!(html.contains("appInfo: { name: 'target-ops-file-read'"));
+        assert!(html.contains("renderSingle"));
+        assert!(html.contains("renderBatch"));
+        assert!(html.contains("lineRows"));
+        assert!(html.contains("requested_count"));
     }
 
     #[test]

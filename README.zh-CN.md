@@ -372,7 +372,7 @@ MCP 请求参数中；但被启动的命令仍可通过输出环境或主动发�
 
 ### 文件安全与补丁
 
-- `file_read` 返回 SHA-256，并支持以 1 为起点的 UTF-8 行范围。
+- `file_read` 返回 SHA-256 元数据，并支持以 1 为起点的 UTF-8 行范围。它既兼容原有单 `path` 模式，也支持一次最多 32 个独立 `files[]` 读取；同一路径可用不同范围重复出现，从而一次读取多个区间。批量模式中的单项失败彼此隔离，整批共享一个有界输出预算。
 - `file_find` 执行有界字面量搜索，可返回上下文。
 - `file_write` 原子写入；覆盖已有文件时必须提供 `expected_sha256` 或
   `overwrite = true`。
@@ -393,6 +393,8 @@ MCP 请求参数中；但被启动的命令仍可通过输出环境或主动发�
 输出使用有界环形缓冲区，所有会话均为进程内状态。
 
 ### ChatGPT 文件集成与审阅界面
+
+`file_read` 绑定 `ui://target-ops/file-read/v1.html`，以带行号的代码阅读界面展示文本、范围与哈希元数据，并以可展开的紧凑列表展示批量结果。相比通过 `exec` 调用 `cat`/`sed`，结构化读取更容易审阅。
 
 `file_import` 接受经运行时重写后的 ChatGPT/连接器文件参数，可以是已挂载本地
 路径或 HTTPS 文件引用，并通过普通原子/CAS 写入策略落盘；HTTPS 重定向被禁用。
@@ -554,6 +556,7 @@ cargo clippy --locked --all-targets -- -D warnings
 assets/
   exec-terminal.html     MCP App 非交互式 exec 结果界面
   file-change.html       MCP App 文件审阅界面
+  file-read.html         MCP App 单文件/批量文件读取界面
   inventory-card.html    MCP App 目标与 MCP 服务器列表卡片
   oauth-authorize.html   OAuth 授权页
 
