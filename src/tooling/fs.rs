@@ -66,6 +66,8 @@ pub fn read(state: &AppState, req: FileReadRequest) -> Result<FileReadResponse> 
     let timeout = Duration::from_millis(req.timeout_ms.unwrap_or(target_policy.default_timeout_ms));
     let resolved_target = state.resolved_target_value(target.clone(), source);
 
+    // COMPAT(COMPAT-006): Preserve the original single-path file_read shape
+    // while newer callers migrate to files[] batch requests.
     if let Some(path) = req.path {
         let spec = FileReadSpec {
             path,

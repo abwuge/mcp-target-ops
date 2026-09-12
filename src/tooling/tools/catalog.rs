@@ -45,6 +45,8 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
             optional_integer("max_output_bytes", "Maximum bytes to return for stdout and stderr."),
             optional_value("secret_env", "Map environment variable names to server-side secret references.", secret_env_schema()),
         ])),
+        // COMPAT(COMPAT-005): target/command/cwd remain in exec_stream only for
+        // hosts that cannot expose the original tools/call request id to the App.
         tool("exec_stream", "Read incremental output from the foreground exec session associated with this App view.", object_schema(vec![
             optional_string("session_id", "Foreground exec session id returned by a previous exec_stream call."),
             optional_value("request_id", "Original MCP tools/call JSON-RPC id used to attach this App to its exact exec session.", json!({"type":["string","number"]})),
@@ -86,6 +88,8 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
         tool("job_cancel", "Request cancellation of a running background job.", object_schema(vec![
             required_string("job_id", "Job id returned by exec_start."),
         ])),
+        // COMPAT(COMPAT-006): Keep the original top-level path/range request shape
+        // while newer callers migrate to the files[] batch form.
         tool("file_read", "Read one known file or batch several independent file/range reads in one call. Prefer this over exec with cat/sed when file paths are known. Single-file path mode remains compatible; batch mode uses files[] and keeps per-file failures independent.", file_read_schema()),
         tool("file_list", "List one directory on the explicit target or active target.", object_schema(vec![
             optional_string("target", "Target id. Omit to use active target."),
@@ -149,6 +153,8 @@ fn tool(
         .expect("tool descriptor is an object");
     let mut meta = serde_json::Map::new();
 
+    // COMPAT(COMPAT-004): Several blocks below intentionally emit OpenAI-prefixed
+    // aliases alongside newer MCP Apps/file-rewrite metadata. See COMPATIBILITY.md.
     if let Some(schemes) = security_schemes {
         object.insert("securitySchemes".to_string(), schemes.clone());
         meta.insert("securitySchemes".to_string(), schemes.clone());

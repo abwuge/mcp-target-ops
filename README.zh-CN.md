@@ -2,7 +2,7 @@
 
 **面向本机与 SSH 主机、由策略严格约束的 MCP 控制平面。**
 
-[English](README.md) · **简体中文**
+[English](README.md) · **简体中文** · [兼容性债务](COMPATIBILITY.md)
 
 Target Ops 是一个自包含的 Rust 服务，使 MCP 客户端能够在本机或已配置的
 SSH 主机上执行命令、管理文件、持续读取后台任务输出，以及打开持久终端。
@@ -186,7 +186,7 @@ mcp-target-ops [--config PATH] [--http ADDR]
 | 参数 | 含义 |
 | --- | --- |
 | `-c`、`--config PATH`、`--config=PATH` | TOML 配置路径 |
-| `--http ADDR`、`--http-addr ADDR` | 使用 HTTP 而非 stdio |
+| `--http ADDR`、`--http-addr ADDR` | 使用 HTTP 而非 stdio（`--http-addr` 为兼容别名，见 `COMPAT-007`） |
 | `-V`、`--version` | 输出程序版本 |
 | `-h`、`--help` | 输出帮助信息 |
 

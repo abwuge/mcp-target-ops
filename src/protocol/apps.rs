@@ -60,6 +60,8 @@ const RESOURCES: [AppResource; 4] = [
 ];
 
 fn resource_meta(resource: &AppResource, widget_domain: Option<&str>) -> Value {
+    // COMPAT(COMPAT-004): Emit current MCP Apps `ui.*` metadata together with
+    // older OpenAI-prefixed aliases until all supported ChatGPT hosts converge.
     let mut meta = json!({
         "ui": {
             "prefersBorder": resource.prefers_border,

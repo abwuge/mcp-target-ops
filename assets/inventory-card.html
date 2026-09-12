@@ -135,6 +135,8 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
 
   let rpcId = 0; const pendingRequests = new Map(); let resultId = null;
   const rpcRequest = (method, params) => new Promise((resolve, reject) => { const id = ++rpcId; pendingRequests.set(id, {resolve,reject}); window.parent.postMessage({jsonrpc:'2.0',id,method,params}, '*'); });
+  // COMPAT(COMPAT-003): Normalize historical tool-result envelope shapes used by
+  // older ChatGPT hosts in addition to structuredContent.
   const toolResultData = result => result?.structuredContent || result?.content?.find?.(item => item?.type === 'json')?.json || result?.content || result || {};
   async function restoreSleepingCard() {
     if (!sleeping || !resultId) return;
@@ -148,8 +150,17 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
       if (sleeping) restoreSleepingCard();
     } else scheduleSleepOnly();
   });
+  // COMPAT(COMPAT-003): Accept content/plain-param result notifications from
+  // older hosts until structuredContent is universal.
   window.addEventListener('message', event => { const msg = event.data; if (msg?.jsonrpc === '2.0' && msg.id !== undefined && pendingRequests.has(msg.id)) { const pending = pendingRequests.get(msg.id); pendingRequests.delete(msg.id); if (msg.error) pending.reject(msg.error); else pending.resolve(msg.result); return; } if (msg?.method === 'ui/notifications/tool-result') render(msg.params?.structuredContent || msg.params?.content || msg.params, true); });
-  async function initializeBridge() { await rpcRequest('ui/initialize', { appInfo: { name: 'target-ops-inventory', version: '1.2.0' }, appCapabilities: { tools: {} }, protocolVersion: '2026-01-26' }); window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/initialized',params:{}}, '*'); if (window.openai?.toolOutput) render(window.openai.toolOutput, false); else if (window.openai?.toolResponseMetadata?.structuredContent) render(window.openai.toolResponseMetadata.structuredContent, false); }
+  async function initializeBridge() {
+    await rpcRequest('ui/initialize', { appInfo: { name: 'target-ops-inventory', version: '1.2.0' }, appCapabilities: { tools: {} }, protocolVersion: '2026-01-26' });
+    window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/initialized',params:{}}, '*');
+    // COMPAT(COMPAT-003): Older ChatGPT hosts hydrate initial App output through
+    // window.openai instead of replaying the normal MCP Apps result notification.
+    if (window.openai?.toolOutput) render(window.openai.toolOutput, false);
+    else if (window.openai?.toolResponseMetadata?.structuredContent) render(window.openai.toolResponseMetadata.structuredContent, false);
+  }
   initializeBridge().catch(error => console.error('Failed to initialize MCP Apps bridge:', error));
 })();
 </script>

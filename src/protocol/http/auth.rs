@@ -30,6 +30,8 @@ pub(super) fn caller_key(request: &Request) -> String {
     if let Some(session_id) = mcp_session_id(request) {
         return format!("session:{session_id}");
     }
+    // COMPAT(COMPAT-001): Sessionless HTTP MCP clients are grouped by bearer
+    // fingerprint until all supported clients reliably echo Mcp-Session-Id.
     if let Some(token) = bearer_token(request) {
         let digest = Sha256::digest(token.as_bytes());
         return format!("bearer:{}", hex_bytes(&digest));

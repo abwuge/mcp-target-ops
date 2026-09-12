@@ -544,6 +544,8 @@ impl JobRegistry {
                 .max_by_key(|(_, entry)| entry.order)
                 .map(|(id, _)| id.clone())
         } else {
+            // COMPAT(COMPAT-005): Older hosts may omit the original tools/call
+            // request id, so fall back to a one-time target/command/cwd match.
             let command = req.command.as_deref().ok_or_else(|| {
                 Error::Tool("exec_stream requires session_id, request_id, or command".to_string())
             })?;

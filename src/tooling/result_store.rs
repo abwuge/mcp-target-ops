@@ -14,6 +14,8 @@ use std::{
 const RESULT_MAX_BYTES: u64 = 100 * 1024 * 1024;
 const SESSIONS_DIR: &str = "sessions";
 const ACTIVITY_FILE: &str = ".activity";
+// COMPAT(COMPAT-002): Flat result files from the pre-session cache layout remain
+// readable and share one synthetic activity marker until that migration path is removed.
 const LEGACY_ACTIVITY_FILE: &str = ".legacy-activity";
 
 #[derive(Debug, Serialize)]
@@ -241,6 +243,8 @@ impl ResultStore {
 
 fn scan_index(dir: &Path, sessions_dir: &Path) -> Result<HashMap<String, ResultLocation>> {
     let mut index = HashMap::new();
+    // COMPAT(COMPAT-002): Index legacy runtime/results/*.json files written before
+    // the session-scoped layout so old conversation cards can still restore them.
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();

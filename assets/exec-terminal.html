@@ -222,10 +222,14 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
   function render(raw, toolInput, fresh = true) { const data = raw && typeof raw === 'object' ? raw : {}; if (Array.isArray(data.results) && ('requested_count' in data || 'executed_count' in data)) renderBatch(data, fresh); else renderSingle(data, toolInput, fresh); }
 
   let rpcId = 0; const pendingRequests = new Map();
+  // COMPAT(COMPAT-003): Normalize older window.openai bootstrap/input shapes
+  // alongside the current MCP Apps notification envelope.
   let currentToolInput = window.openai?.toolInput || null;
   let resultId = null;
   let liveStdout = ''; let liveStderr = ''; let stdoutSeq = 0; let stderrSeq = 0; let jobPolling = false;
   const rpcRequest = (method, params) => new Promise((resolve, reject) => { const id = ++rpcId; pendingRequests.set(id, {resolve,reject}); window.parent.postMessage({jsonrpc:'2.0',id,method,params}, '*'); });
+  // COMPAT(COMPAT-003): Normalize historical tools/call result envelopes used by
+  // older ChatGPT hosts in addition to structuredContent.
   const toolResultData = result => result?.structuredContent || result?.content?.find?.(item => item?.type === 'json')?.json || result?.content || result || {};
 
   function renderLive(data, toolInput, fresh = true) {
@@ -293,6 +297,8 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
       if (sleeping) restoreSleepingCard();
     } else scheduleSleepOnly();
   });
+  // COMPAT(COMPAT-003): Accept both current structuredContent notifications and
+  // older toolInput/arguments/content/plain-param host envelopes.
   window.addEventListener('message', event => {
     const msg = event.data;
     if (msg?.jsonrpc === '2.0' && msg.id !== undefined && pendingRequests.has(msg.id)) { const pending = pendingRequests.get(msg.id); pendingRequests.delete(msg.id); if (msg.error) pending.reject(msg.error); else pending.resolve(msg.result); return; }
@@ -302,6 +308,8 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
   async function initializeBridge() {
     await rpcRequest('ui/initialize', { appInfo: { name: 'target-ops-exec-result', version: '1.5.0' }, appCapabilities: { tools: {} }, protocolVersion: '2026-01-26' });
     window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/initialized',params:{}}, '*');
+    // COMPAT(COMPAT-003): Older ChatGPT hosts hydrate initial App output through
+    // window.openai instead of replaying the normal MCP Apps result notification.
     if (window.openai?.toolOutput) handleResult(window.openai.toolOutput, false);
     else if (window.openai?.toolResponseMetadata?.structuredContent) handleResult(window.openai.toolResponseMetadata.structuredContent, false);
   }

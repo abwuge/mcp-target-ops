@@ -2,7 +2,7 @@
 
 **A policy-gated MCP control plane for local and SSH hosts.**
 
-**English** · [简体中文](README.zh-CN.md)
+**English** · [简体中文](README.zh-CN.md) · [Compatibility debt](COMPATIBILITY.md)
 
 Target Ops is a self-contained Rust server that lets MCP clients run commands,
 manage files, stream background jobs, and open persistent terminals on the
@@ -197,7 +197,7 @@ mcp-target-ops [--config PATH] [--http ADDR]
 | Option | Meaning |
 | --- | --- |
 | `-c`, `--config PATH`, `--config=PATH` | TOML configuration path |
-| `--http ADDR`, `--http-addr ADDR` | Listen over HTTP instead of stdio |
+| `--http ADDR`, `--http-addr ADDR` | Listen over HTTP instead of stdio (`--http-addr` is a compatibility alias; see `COMPAT-007`) |
 | `-V`, `--version` | Print the package version |
 | `-h`, `--help` | Print usage information |
 

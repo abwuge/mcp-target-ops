@@ -53,6 +53,8 @@ fn parse_args() -> Args {
             parsed.config_path = Some(PathBuf::from(value));
             continue;
         }
+        // COMPAT(COMPAT-007): --http-addr is the older spelling retained for
+        // existing service files and scripts; --http is the canonical flag.
         if let Some(value) = arg
             .strip_prefix("--http=")
             .or_else(|| arg.strip_prefix("--http-addr="))
@@ -66,6 +68,8 @@ fn parse_args() -> Args {
                 parsed.config_path = Some(PathBuf::from(next_arg(&mut args, &arg)));
             }
             "--http" | "--http-addr" => {
+                // COMPAT(COMPAT-007): Keep the spaced --http-addr form in sync
+                // with the =value alias above until the old CLI spelling is retired.
                 parsed.http_addr = Some(next_arg(&mut args, &arg));
             }
             "--help" | "-h" => {

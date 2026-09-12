@@ -195,6 +195,8 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     window.parent.postMessage({ jsonrpc: '2.0', id, method, params }, '*');
   });
 
+  // COMPAT(COMPAT-003): Normalize historical tool-result envelope shapes used by
+  // older ChatGPT hosts in addition to structuredContent.
   const toolResultData = result => result?.structuredContent || result?.content?.find?.(item => item?.type === 'json')?.json || result?.content || result || {};
   async function restoreSleepingCard() {
     if (!sleeping || !resultId) return;
@@ -208,6 +210,8 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
       if (sleeping) restoreSleepingCard();
     } else scheduleSleepOnly();
   });
+  // COMPAT(COMPAT-003): Accept content/plain-param result notifications from
+  // older hosts until structuredContent is universal.
   window.addEventListener('message', event => {
     const msg = event.data;
     if (msg?.jsonrpc === '2.0' && msg.id !== undefined && pendingRequests.has(msg.id)) {
@@ -229,6 +233,8 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
       protocolVersion: '2026-01-26',
     });
     window.parent.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/initialized', params: {} }, '*');
+    // COMPAT(COMPAT-003): Older ChatGPT hosts hydrate initial App output through
+    // window.openai instead of replaying the normal MCP Apps result notification.
     if (window.openai?.toolOutput) render(window.openai.toolOutput, false);
     else if (window.openai?.toolResponseMetadata?.structuredContent) render(window.openai.toolResponseMetadata.structuredContent, false);
   }
