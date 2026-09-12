@@ -338,8 +338,9 @@ scope。
 依赖的检查，应优先使用 `exec_batch`，而不是用 shell 分隔符强行拼接。
 
 两者都绑定到稳定的 `ui://target-ops/exec-terminal/v1.html` MCP App。前台 `exec`
-运行时，App 会通过仅 App 可见的 `exec_stream` 附着到对应会话，并使用相互独立的
-stdout/stderr 序号游标轮询增量输出。输出在运行期间默认展开；成功结束后约 3 秒自动
+运行时，App 会使用 host context 中原始 MCP `tools/call` request id，通过仅 App 可见的
+`exec_stream` 精确附着到对应会话，再以相互独立的 stdout/stderr 序号游标轮询增量输出；
+旧 Host 若不提供该 id，则兼容回退到原始命令参数匹配。输出在运行期间默认展开；成功结束后约 3 秒自动
 折叠，失败和超时保持展开。批量命令同样先展开，成功项结束后再延迟折叠。ANSI SGR
 颜色/样式会被安全渲染。资源 URI 保持不变以兼容客户端缓存与资源发现。
 

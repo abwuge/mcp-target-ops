@@ -357,8 +357,10 @@ them with shell separators.
 
 Both tools bind to the stable `ui://target-ops/exec-terminal/v1.html` MCP App.
 For a foreground `exec`, the App attaches to the App-only `exec_stream` helper
-and polls independent stdout/stderr sequence cursors while the command is still
-running. Output starts expanded; successful output collapses about three seconds
+using the original MCP `tools/call` request id exposed in App host context, then
+polls independent stdout/stderr sequence cursors while the command is still
+running. Older hosts without that id fall back to matching the original command
+arguments. Output starts expanded; successful output collapses about three seconds
 after completion, while failures and timeouts stay expanded. Batch rows follow
 the same expand-first behavior and collapse successful items after completion.
 ANSI SGR color/style sequences are rendered safely instead of being shown as raw
