@@ -100,53 +100,33 @@ pre { margin: 0; padding: 10px 12px 12px; max-height: 360px; overflow: auto; whi
   }
   let rpcId = 0;
   const pendingRequests = new Map();
-  const rpcNotify = (method, params) => {
-    window.parent.postMessage({ jsonrpc: '2.0', method, params }, '*');
-  };
   const rpcRequest = (method, params) => new Promise((resolve, reject) => {
     const id = ++rpcId;
     pendingRequests.set(id, { resolve, reject });
     window.parent.postMessage({ jsonrpc: '2.0', id, method, params }, '*');
   });
-  const renderCompatResult = () => {
-    const openai = window.openai;
-    const metadata = openai?.toolResponseMetadata;
-    const result = openai?.toolOutput
-      || metadata?.mcp_tool_result?.structuredContent
-      || metadata?.call_tool_result?.structuredContent
-      || metadata?.structuredContent;
-    if (result) render(result);
-  };
   window.addEventListener('message', event => {
-    if (event.source !== window.parent) return;
     const msg = event.data;
-    if (!msg || msg.jsonrpc !== '2.0') return;
-    if (msg.id !== undefined && pendingRequests.has(msg.id)) {
+    if (msg?.jsonrpc === '2.0' && msg.id !== undefined && pendingRequests.has(msg.id)) {
       const pending = pendingRequests.get(msg.id);
       pendingRequests.delete(msg.id);
       if (msg.error) pending.reject(msg.error);
       else pending.resolve(msg.result);
       return;
     }
-    if (msg.method === 'ui/notifications/tool-result') {
-      render(msg.params?.structuredContent || msg.params?.content || msg.params);
-    }
-  }, { passive: true });
-  const initializeBridge = async () => {
+    if (msg?.method === 'ui/notifications/tool-result') render(msg.params?.structuredContent || msg.params?.content || msg.params);
+  });
+  async function initializeBridge() {
     await rpcRequest('ui/initialize', {
       appInfo: { name: 'target-ops-file-change', version: '1.0.0' },
       appCapabilities: {},
       protocolVersion: '2026-01-26',
     });
-    rpcNotify('ui/notifications/initialized', {});
-  };
-  renderCompatResult();
-  initializeBridge()
-    .then(renderCompatResult)
-    .catch(error => {
-      console.error('Failed to initialize the MCP Apps bridge:', error);
-      if (!window.openai?.toolOutput) badge.textContent = 'bridge error';
-    });
+    window.parent.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/initialized', params: {} }, '*');
+  }
+  if (window.openai?.toolOutput) render(window.openai.toolOutput);
+  else if (window.openai?.toolResponseMetadata?.structuredContent) render(window.openai.toolResponseMetadata.structuredContent);
+  initializeBridge().catch(error => console.error('Failed to initialize MCP Apps bridge:', error));
 })();
 </script>
 </body>
