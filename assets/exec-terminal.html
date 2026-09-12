@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root {
+  color-scheme: dark;
+  font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  --bg: #0d1117;
+  --panel: #161b22;
+  --panel-2: #0d1117;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --green: #3fb950;
+  --red: #f85149;
+  --yellow: #d29922;
+  --blue: #58a6ff;
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 10px; background: transparent; color: var(--text); }
+.terminal { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--bg); box-shadow: 0 8px 24px rgb(0 0 0 / .12); }
+.titlebar { min-height: 38px; display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; padding: 0 12px; border-bottom: 1px solid var(--border); background: var(--panel); }
+.lights { display: flex; gap: 6px; }
+.light { width: 10px; height: 10px; border-radius: 50%; background: #484f58; }
+.light.red { background: #ff5f56; }
+.light.yellow { background: #ffbd2e; }
+.light.green { background: #27c93f; }
+.title { min-width: 0; text-align: center; color: var(--muted); font: 11px/1.2 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.badge { justify-self: end; border: 1px solid var(--border); border-radius: 999px; padding: 2px 7px; color: var(--muted); font: 10px/1.4 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.badge.ok { color: var(--green); border-color: color-mix(in srgb, var(--green) 45%, var(--border)); }
+.badge.error { color: var(--red); border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
+.badge.timeout { color: var(--yellow); border-color: color-mix(in srgb, var(--yellow) 45%, var(--border)); }
+.screen { min-height: 70px; max-height: 520px; overflow: auto; padding: 12px 14px; scrollbar-color: #484f58 transparent; }
+.prompt { display: flex; gap: 7px; align-items: baseline; margin-bottom: 8px; color: var(--muted); user-select: none; }
+.prompt .symbol { color: var(--green); font-weight: 700; }
+.prompt .target { color: var(--blue); }
+.stream { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
+.stream.stdout { color: var(--text); }
+.stream.stderr { color: #ff7b72; }
+.stream + .stream { margin-top: 8px; }
+.empty { color: var(--muted); font-style: italic; }
+.notice { margin-top: 9px; padding-top: 9px; border-top: 1px dashed var(--border); color: var(--yellow); }
+.footer { display: flex; flex-wrap: wrap; gap: 8px 14px; padding: 7px 12px; border-top: 1px solid var(--border); background: var(--panel); color: var(--muted); font: 10px/1.4 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.footer span { white-space: nowrap; }
+@media (max-width: 520px) {
+  body { padding: 6px; }
+  .titlebar { grid-template-columns: auto 1fr; }
+  .badge { grid-column: 1 / -1; justify-self: start; margin-bottom: 7px; }
+  .title { text-align: right; }
+  .screen { max-height: 420px; padding: 11px 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { scroll-behavior: auto !important; }
+}
+</style>
+</head>
+<body>
+<div class="terminal">
+  <div class="titlebar">
+    <div class="lights" aria-hidden="true"><span class="light red"></span><span class="light yellow"></span><span class="light green"></span></div>
+    <div class="title" id="title">Target Ops · exec</div>
+    <div class="badge" id="status">waiting</div>
+  </div>
+  <div class="screen" id="screen">
+    <div class="prompt"><span class="symbol">$</span><span class="target" id="target">target</span><span id="command">exec</span></div>
+    <pre class="stream empty" id="empty">Waiting for command output…</pre>
+    <pre class="stream stdout" id="stdout"></pre>
+    <pre class="stream stderr" id="stderr"></pre>
+    <div class="notice" id="notice" hidden></div>
+  </div>
+  <div class="footer" id="footer"></div>
+</div>
+<script>
+(() => {
+  const title = document.getElementById('title');
+  const status = document.getElementById('status');
+  const target = document.getElementById('target');
+  const command = document.getElementById('command');
+  const stdout = document.getElementById('stdout');
+  const stderr = document.getElementById('stderr');
+  const empty = document.getElementById('empty');
+  const notice = document.getElementById('notice');
+  const footer = document.getElementById('footer');
+  const screen = document.getElementById('screen');
+
+  function render(raw, toolInput) {
+    const data = raw && typeof raw === 'object' ? raw : {};
+    const resolvedTarget = data.resolved_target?.target || data.target || 'target';
+    const source = data.resolved_target?.source;
+    const exitCode = data.exit_code;
+    const timedOut = data.timed_out === true;
+    const stdoutText = typeof data.stdout === 'string' ? data.stdout : '';
+    const stderrText = typeof data.stderr === 'string' ? data.stderr : '';
+
+    target.textContent = resolvedTarget;
+    command.textContent = typeof toolInput?.command === 'string' && toolInput.command ? toolInput.command : 'exec';
+    title.textContent = `Target Ops · ${resolvedTarget}`;
+    stdout.textContent = stdoutText;
+    stderr.textContent = stderrText;
+    empty.hidden = Boolean(stdoutText || stderrText);
+    if (!stdoutText && !stderrText) empty.textContent = 'Command completed without output.';
+
+    status.className = 'badge';
+    if (timedOut) {
+      status.textContent = 'timed out';
+      status.classList.add('timeout');
+    } else if (exitCode === 0) {
+      status.textContent = 'exit 0';
+      status.classList.add('ok');
+    } else if (typeof exitCode === 'number') {
+      status.textContent = `exit ${exitCode}`;
+      status.classList.add('error');
+    } else {
+      status.textContent = 'finished';
+    }
+
+    const notices = [];
+    if (data.stdout_truncated) notices.push('stdout was truncated');
+    if (data.stderr_truncated) notices.push('stderr was truncated');
+    if (timedOut) notices.push('command exceeded its timeout');
+    notice.hidden = notices.length === 0;
+    notice.textContent = notices.join(' · ');
+
+    const meta = [];
+    meta.push(`<span>target: ${escapeHtml(resolvedTarget)}</span>`);
+    if (source) meta.push(`<span>source: ${escapeHtml(source)}</span>`);
+    if (typeof exitCode === 'number') meta.push(`<span>exit: ${exitCode}</span>`);
+    if (data.stdout_truncated) meta.push('<span>stdout: truncated</span>');
+    if (data.stderr_truncated) meta.push('<span>stderr: truncated</span>');
+    footer.innerHTML = meta.join('');
+    screen.scrollTop = screen.scrollHeight;
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  }
+
+  let rpcId = 0;
+  const pendingRequests = new Map();
+  const rpcRequest = (method, params) => new Promise((resolve, reject) => {
+    const id = ++rpcId;
+    pendingRequests.set(id, { resolve, reject });
+    window.parent.postMessage({ jsonrpc: '2.0', id, method, params }, '*');
+  });
+
+  window.addEventListener('message', event => {
+    const msg = event.data;
+    if (msg?.jsonrpc === '2.0' && msg.id !== undefined && pendingRequests.has(msg.id)) {
+      const pending = pendingRequests.get(msg.id);
+      pendingRequests.delete(msg.id);
+      if (msg.error) pending.reject(msg.error);
+      else pending.resolve(msg.result);
+      return;
+    }
+    if (msg?.method === 'ui/notifications/tool-result') {
+      render(
+        msg.params?.structuredContent || msg.params?.content || msg.params,
+        msg.params?.toolInput || msg.params?.arguments
+      );
+    }
+  });
+
+  async function initializeBridge() {
+    await rpcRequest('ui/initialize', {
+      appInfo: { name: 'target-ops-exec-terminal', version: '1.0.0' },
+      appCapabilities: {},
+      protocolVersion: '2026-01-26',
+    });
+    window.parent.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/initialized', params: {} }, '*');
+  }
+
+  if (window.openai?.toolOutput) render(window.openai.toolOutput, window.openai?.toolInput);
+  else if (window.openai?.toolResponseMetadata?.structuredContent) {
+    render(window.openai.toolResponseMetadata.structuredContent, window.openai?.toolInput);
+  }
+  initializeBridge().catch(error => console.error('Failed to initialize MCP Apps bridge:', error));
+})();
+</script>
+</body>
+</html>

@@ -11,8 +11,8 @@ filesystem roots, timeouts, and output limits.
 
 It can run over stdio for local clients or HTTP for remote MCP clients and
 ChatGPT. HTTP mode also includes OAuth, a bounded GPT Actions REST facade,
-ChatGPT file import/export metadata, and a human-readable MCP App for reviewing
-file changes.
+ChatGPT file import/export metadata, a terminal-style MCP App for `exec`, and a
+human-readable MCP App for reviewing file changes.
 
 > [!CAUTION]
 > Target Ops can execute commands and modify files. Keep the local target
@@ -30,8 +30,8 @@ file changes.
   and validated multi-file patches with rollback
 - File-backed secret injection without placing secret values in MCP arguments
 - ChatGPT and connector file import/export with bounded transfer sizes
-- Self-contained MCP App showing full added/deleted content and editor-style
-  diffs for modified files
+- Self-contained MCP Apps for terminal-style `exec` output and file review;
+  file changes show full added/deleted content and editor-style diffs
 - Allowlisted downstream Streamable HTTP MCP gateway
 - Stdio and HTTP transports, static bearer authentication, OAuth 2.0 with PKCE,
   and persistent rotating refresh tokens
@@ -338,12 +338,18 @@ enabled, tool descriptors also advertise the configured OAuth scopes.
 
 ### Commands and background jobs
 
-`exec` runs a bounded non-interactive shell command. Child stdin is disconnected
-from the MCP control stream. `exec_start` starts a dedicated process and returns
-a job ID immediately; use independent stdout/stderr sequence cursors with
-`job_output`, inspect completion through `job_poll`, and request termination
-with `job_cancel`. SSH jobs do not occupy the persistent SSH worker used by
-ordinary operations.
+`exec` runs a bounded non-interactive shell command. In ChatGPT it binds to the
+stable `ui://target-ops/exec-terminal/v1.html` MCP App, which presents stdout,
+stderr, target, exit status, timeout, and truncation state in a compact
+terminal-style view. The widget does not change the compact `ExecResponse`
+payload; when the client exposes tool input to the App, it also shows the
+command on the prompt line.
+
+Child stdin is disconnected from the MCP control stream. `exec_start` starts a
+dedicated process and returns a job ID immediately; use independent
+stdout/stderr sequence cursors with `job_output`, inspect completion through
+`job_poll`, and request termination with `job_cancel`. SSH jobs do not occupy
+the persistent SSH worker used by ordinary operations.
 
 Both command tools accept `secret_env`. A value may come from a text file or a
 dot-selected scalar in TOML or JSON:
@@ -564,6 +570,7 @@ Source layout:
 
 ```text
 assets/
+  exec-terminal.html     MCP App terminal-style exec result interface
   file-change.html       MCP App file review interface
   oauth-authorize.html   OAuth authorization page
 

@@ -1,4 +1,4 @@
-use super::{schema::output_schema, FILE_CHANGE_UI_URI};
+use super::{schema::output_schema, EXEC_TERMINAL_UI_URI, FILE_CHANGE_UI_URI};
 use serde_json::{json, Value};
 
 pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
@@ -135,6 +135,25 @@ fn tool(
     if let Some(schemes) = security_schemes {
         object.insert("securitySchemes".to_string(), schemes.clone());
         meta.insert("securitySchemes".to_string(), schemes.clone());
+    }
+
+    if name == "exec" {
+        meta.insert(
+            "ui".to_string(),
+            json!({ "resourceUri": EXEC_TERMINAL_UI_URI }),
+        );
+        meta.insert(
+            "openai/outputTemplate".to_string(),
+            Value::String(EXEC_TERMINAL_UI_URI.to_string()),
+        );
+        meta.insert(
+            "openai/toolInvocation/invoking".to_string(),
+            Value::String("Running command…".to_string()),
+        );
+        meta.insert(
+            "openai/toolInvocation/invoked".to_string(),
+            Value::String("Command finished".to_string()),
+        );
     }
 
     if matches!(
@@ -514,5 +533,27 @@ mod tests {
                 "tool {name} must declare an object output schema"
             );
         }
+    }
+
+    #[test]
+    fn exec_binds_terminal_style_app_resource() {
+        let tools = list_tools(None);
+        let exec = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "exec")
+            .expect("exec tool");
+
+        assert_eq!(exec["_meta"]["ui"]["resourceUri"], EXEC_TERMINAL_UI_URI);
+        assert_eq!(exec["_meta"]["openai/outputTemplate"], EXEC_TERMINAL_UI_URI);
+        assert_eq!(
+            exec["_meta"]["openai/toolInvocation/invoking"],
+            "Running command…"
+        );
+        assert_eq!(
+            exec["_meta"]["openai/toolInvocation/invoked"],
+            "Command finished"
+        );
     }
 }

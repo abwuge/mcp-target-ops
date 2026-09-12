@@ -10,7 +10,8 @@ SSH 主机上执行命令、管理文件、持续读取后台任务输出，以�
 
 它既可以通过 stdio 服务本地 MCP 客户端，也可以通过 HTTP 服务远程 MCP
 客户端与 ChatGPT。HTTP 模式还内置 OAuth、受严格限制的 GPT Actions REST
-接口、ChatGPT 文件导入/导出元数据，以及用于直观审阅文件变更的 MCP App。
+接口、ChatGPT 文件导入/导出元数据、用于 `exec` 的仿终端 MCP App，以及用于直观
+审阅文件变更的 MCP App。
 
 > [!CAUTION]
 > Target Ops 能够执行命令和修改文件。除非确有需要，否则应保持本机目标禁用；
@@ -27,7 +28,8 @@ SSH 主机上执行命令、管理文件、持续读取后台任务输出，以�
   多文件补丁
 - 从文件解析秘密并注入环境变量，秘密值不会出现在 MCP 参数中
 - 支持 ChatGPT/连接器文件导入导出，并限制传输大小
-- 自包含 MCP App：新增/删除文件显示完整内容，修改文件显示编辑器式差异
+- 自包含 MCP App：`exec` 使用仿终端输出界面；文件变更对新增/删除显示完整内容，
+  对修改显示编辑器式差异
 - 仅允许访问预先配置服务器的下游 Streamable HTTP MCP 网关
 - 同时支持 stdio、HTTP、静态 Bearer Token、PKCE OAuth 2.0，以及持久化的
   轮换刷新令牌
@@ -321,10 +323,15 @@ scope。
 
 ### 命令与后台任务
 
-`exec` 执行受限的非交互式 shell 命令，子进程 stdin 与 MCP 控制流隔离。
-`exec_start` 使用独立进程启动任务并立即返回任务 ID；`job_output` 通过相互独立的
-stdout/stderr 序号游标增量读取输出，`job_poll` 查询状态，`job_cancel` 请求终止。
-SSH 后台任务不会占用普通操作使用的持久 SSH worker。
+`exec` 执行受限的非交互式 shell 命令。在 ChatGPT 中，它会绑定稳定的
+`ui://target-ops/exec-terminal/v1.html` MCP App，以仿终端界面展示 stdout、stderr、
+目标、退出码、超时和截断状态。该组件不会改变原本精简的 `ExecResponse` 载荷；若
+客户端向 App 暴露工具输入，还会在提示符行显示实际命令。
+
+子进程 stdin 与 MCP 控制流隔离。`exec_start` 使用独立进程启动任务并立即返回任务
+ID；`job_output` 通过相互独立的 stdout/stderr 序号游标增量读取输出，`job_poll`
+查询状态，`job_cancel` 请求终止。SSH 后台任务不会占用普通操作使用的持久 SSH
+worker。
 
 两个命令工具都支持 `secret_env`。值可以来自纯文本文件，也可以来自 TOML/JSON
 中以点号路径选中的标量：
@@ -528,6 +535,7 @@ cargo clippy --locked --all-targets -- -D warnings
 
 ```text
 assets/
+  exec-terminal.html     MCP App 仿终端 exec 结果界面
   file-change.html       MCP App 文件审阅界面
   oauth-authorize.html   OAuth 授权页
 
