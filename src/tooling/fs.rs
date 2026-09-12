@@ -1,217 +1,29 @@
-use super::edit::{apply_text_edits, unified_diff, EditOutcome, TextEdit};
+mod backend;
+mod patch_format;
+mod types;
+
+pub(crate) use self::backend::read_bytes;
+pub use self::types::*;
+
+use self::backend::{file_exists, list_entries, write_bytes};
+
+use super::edit::{apply_text_edits, unified_diff, EditOutcome};
 use crate::{
     core::{
         config::TargetConfig,
         error::{Error, Result},
         policy::{self, FileAccess},
         state::AppState,
-        target::{ResolvedTarget, TargetId},
+        target::TargetId,
         util::{sha256_hex, truncate_bytes},
     },
     transport::ssh,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use serde::{Deserialize, Serialize};
-use serde_json::json;
-use std::{
-    collections::HashSet,
-    fs,
-    io::Write,
-    path::Path,
-    time::{Duration, UNIX_EPOCH},
-};
+use std::{collections::HashSet, fs, time::Duration};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct FileReadRequest {
-    #[serde(default)]
-    pub target: Option<String>,
-    pub path: String,
-    #[serde(default)]
-    pub max_bytes: Option<usize>,
-    #[serde(default)]
-    pub start_line: Option<usize>,
-    #[serde(default)]
-    pub end_line: Option<usize>,
-    #[serde(default)]
-    pub timeout_ms: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct FileReadResponse {
-    pub resolved_target: ResolvedTarget,
-    pub path: String,
-    pub encoding: String,
-    pub content: String,
-    pub sha256: String,
-    pub bytes: usize,
-    pub truncated: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub start_line: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub end_line: Option<usize>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct FileListRequest {
-    #[serde(default)]
-    pub target: Option<String>,
-    pub path: String,
-    #[serde(default)]
-    pub timeout_ms: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct FileListResponse {
-    pub resolved_target: ResolvedTarget,
-    pub path: String,
-    pub entries: Vec<FileEntry>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileEntry {
-    pub name: String,
-    pub path: String,
-    pub kind: String,
-    pub size: u64,
-    pub modified_unix: Option<u64>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct FileEditRequest {
-    #[serde(default)]
-    pub target: Option<String>,
-    pub path: String,
-    #[serde(default)]
-    pub expected_sha256: Option<String>,
-    pub edits: Vec<TextEdit>,
-    #[serde(default)]
-    pub dry_run: bool,
-    #[serde(default)]
-    pub timeout_ms: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct FileEditResponse {
-    pub resolved_target: ResolvedTarget,
-    pub path: String,
-    pub changed: bool,
-    pub written: bool,
-    pub old_sha256: String,
-    pub new_sha256: String,
-    pub diff: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct FileWriteRequest {
-    #[serde(default)]
-    pub target: Option<String>,
-    pub path: String,
-    pub content: String,
-    #[serde(default)]
-    pub encoding: FileContentEncoding,
-    #[serde(default)]
-    pub expected_sha256: Option<String>,
-    #[serde(default)]
-    pub overwrite: bool,
-    #[serde(default)]
-    pub mode: Option<String>,
-    #[serde(default)]
-    pub timeout_ms: Option<u64>,
-}
-
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FileContentEncoding {
-    #[default]
-    Utf8,
-    Base64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct FileWriteResponse {
-    pub resolved_target: ResolvedTarget,
-    pub path: String,
-    pub created: bool,
-    pub written: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub old_sha256: Option<String>,
-    pub new_sha256: String,
-    pub bytes: usize,
-    pub encoding: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
-    pub diff: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct FileDeleteRequest {
-    #[serde(default)]
-    pub target: Option<String>,
-    pub path: String,
-    #[serde(default)]
-    pub expected_sha256: Option<String>,
-    #[serde(default)]
-    pub dry_run: bool,
-    #[serde(default)]
-    pub timeout_ms: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct FileDeleteResponse {
-    pub resolved_target: ResolvedTarget,
-    pub path: String,
-    pub deleted: bool,
-    pub written: bool,
-    pub old_sha256: String,
-    pub bytes: usize,
-    pub encoding: String,
-    pub content: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct FilePatchRequest {
-    #[serde(default)]
-    pub target: Option<String>,
-    pub path: String,
-    pub patch: String,
-    #[serde(default)]
-    pub expected_sha256: Option<String>,
-    #[serde(default)]
-    pub dry_run: bool,
-    #[serde(default)]
-    pub timeout_ms: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct FilePatchResponse {
-    pub resolved_target: ResolvedTarget,
-    pub path: String,
-    pub changed: bool,
-    pub written: bool,
-    pub old_sha256: Option<String>,
-    pub new_sha256: Option<String>,
-    pub diff: String,
-    pub files: Vec<FilePatchFileResponse>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct FilePatchFileResponse {
-    pub path: String,
-    pub changed: bool,
-    pub written: bool,
-    pub old_sha256: String,
-    pub new_sha256: String,
-}
-
-#[derive(Debug, Clone)]
-struct UnifiedFilePatch {
-    old_path: String,
-    new_path: String,
-    patch: String,
-}
 
 #[derive(Debug)]
 struct PreparedFilePatch {
@@ -221,96 +33,6 @@ struct PreparedFilePatch {
     old_sha256: String,
     new_sha256: String,
     changed: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct FileFindRequest {
-    #[serde(default)]
-    pub target: Option<String>,
-    pub path: String,
-    pub pattern: String,
-    #[serde(default = "default_true")]
-    pub case_sensitive: bool,
-    #[serde(default = "default_context_lines")]
-    pub context_lines: usize,
-    #[serde(default = "default_max_matches")]
-    pub max_matches: usize,
-    #[serde(default)]
-    pub timeout_ms: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct FileFindResponse {
-    pub resolved_target: ResolvedTarget,
-    pub path: String,
-    pub sha256: String,
-    pub matches: Vec<FileFindMatch>,
-    pub truncated: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct FileFindMatch {
-    pub line: usize,
-    pub text: String,
-    pub before: Vec<String>,
-    pub after: Vec<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct FileMoveRequest {
-    #[serde(default)]
-    pub target: Option<String>,
-    pub source: String,
-    pub destination: String,
-    #[serde(default)]
-    pub overwrite: bool,
-    #[serde(default)]
-    pub timeout_ms: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct FileMoveResponse {
-    pub resolved_target: ResolvedTarget,
-    pub source: String,
-    pub destination: String,
-    pub moved: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct FileChmodRequest {
-    #[serde(default)]
-    pub target: Option<String>,
-    pub path: String,
-    pub mode: String,
-    #[serde(default)]
-    pub timeout_ms: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct FileChmodResponse {
-    pub resolved_target: ResolvedTarget,
-    pub path: String,
-    pub mode: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct DirectoryCreateRequest {
-    #[serde(default)]
-    pub target: Option<String>,
-    pub path: String,
-    #[serde(default = "default_true")]
-    pub recursive: bool,
-    #[serde(default)]
-    pub mode: Option<String>,
-    #[serde(default)]
-    pub timeout_ms: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct DirectoryCreateResponse {
-    pub resolved_target: ResolvedTarget,
-    pub path: String,
-    pub created: bool,
 }
 
 pub fn read(state: &AppState, req: FileReadRequest) -> Result<FileReadResponse> {
@@ -359,21 +81,11 @@ pub fn list(state: &AppState, req: FileListRequest) -> Result<FileListResponse> 
     let config = state.get_target_config(&target)?;
     policy::check_file(&target, config, &req.path, FileAccess::Read, source)?;
 
-    let entries = match (target.clone(), config) {
-        (TargetId::Local, TargetConfig::Local(_)) => list_local(&req.path)?,
-        (TargetId::Ssh(name), TargetConfig::Ssh(ssh_config)) => {
-            let timeout = Duration::from_millis(
-                req.timeout_ms
-                    .unwrap_or_else(|| policy::target_policy(config).default_timeout_ms),
-            );
-            list_remote(state, &name, ssh_config, &req.path, timeout)?
-        }
-        _ => {
-            return Err(Error::Target(format!(
-                "target {target} has mismatched config"
-            )))
-        }
-    };
+    let timeout = Duration::from_millis(
+        req.timeout_ms
+            .unwrap_or_else(|| policy::target_policy(config).default_timeout_ms),
+    );
+    let entries = list_entries(state, &target, config, &req.path, timeout)?;
 
     Ok(FileListResponse {
         resolved_target: state.resolved_target_value(target, source),
@@ -562,7 +274,7 @@ pub fn patch(state: &AppState, req: FilePatchRequest) -> Result<FilePatchRespons
             .unwrap_or_else(|| policy::target_policy(config).default_timeout_ms),
     );
 
-    let sections = split_unified_file_patches(&req.patch)?;
+    let sections = patch_format::split(&req.patch)?;
     if sections.len() <= 1 {
         policy::check_file(&target, config, &req.path, FileAccess::Write, source)?;
         let patch_text = sections
@@ -614,7 +326,7 @@ pub fn patch(state: &AppState, req: FilePatchRequest) -> Result<FilePatchRespons
     let mut prepared_files = Vec::with_capacity(sections.len());
     let mut seen = HashSet::new();
     for section in &sections {
-        let patch_path = resolve_multi_patch_path(&req.path, section)?;
+        let patch_path = patch_format::resolve_path(&req.path, section)?;
         if !seen.insert(patch_path.clone()) {
             return Err(Error::Tool(format!(
                 "multi-file patch contains duplicate target path {patch_path:?}"
@@ -745,101 +457,6 @@ fn patch_file_response(
         old_sha256: prepared.old_sha256.clone(),
         new_sha256: prepared.new_sha256.clone(),
     }
-}
-
-fn split_unified_file_patches(patch: &str) -> Result<Vec<UnifiedFilePatch>> {
-    let lines: Vec<&str> = patch.split_inclusive('\n').collect();
-    let mut sections = Vec::new();
-    let mut index = 0;
-
-    while index < lines.len() {
-        let is_header = lines[index].starts_with("--- ")
-            && index + 1 < lines.len()
-            && lines[index + 1].starts_with("+++ ");
-        if !is_header {
-            index += 1;
-            continue;
-        }
-
-        let old_path = parse_patch_header_path(lines[index], "--- ")?;
-        let new_path = parse_patch_header_path(lines[index + 1], "+++ ")?;
-        let start = index;
-        index += 2;
-        while index < lines.len() {
-            if lines[index].starts_with("diff --git ")
-                || (lines[index].starts_with("--- ")
-                    && index + 1 < lines.len()
-                    && lines[index + 1].starts_with("+++ "))
-            {
-                break;
-            }
-            index += 1;
-        }
-        sections.push(UnifiedFilePatch {
-            old_path,
-            new_path,
-            patch: lines[start..index].concat(),
-        });
-    }
-
-    Ok(sections)
-}
-
-fn parse_patch_header_path(line: &str, prefix: &str) -> Result<String> {
-    let value = line
-        .strip_prefix(prefix)
-        .ok_or_else(|| Error::Tool(format!("invalid unified patch header: {line:?}")))?
-        .trim_end_matches(['\r', '\n'])
-        .split('\t')
-        .next()
-        .unwrap_or("")
-        .trim();
-    if value.is_empty() {
-        return Err(Error::Tool(
-            "unified patch header has an empty path".to_string(),
-        ));
-    }
-    Ok(value.to_string())
-}
-
-fn resolve_multi_patch_path(base_dir: &str, section: &UnifiedFilePatch) -> Result<String> {
-    if section.old_path == "/dev/null" || section.new_path == "/dev/null" {
-        return Err(Error::Tool(
-            "multi-file file_patch does not yet support creating or deleting files".to_string(),
-        ));
-    }
-    let old_path = strip_git_patch_prefix(&section.old_path);
-    let candidate = strip_git_patch_prefix(&section.new_path);
-    if old_path != candidate {
-        return Err(Error::Tool(
-            "multi-file file_patch does not yet support file renames".to_string(),
-        ));
-    }
-    if candidate.is_empty() {
-        return Err(Error::Tool(
-            "multi-file patch contains an empty target path".to_string(),
-        ));
-    }
-    if candidate.starts_with('/')
-        || candidate
-            .split('/')
-            .any(|segment| segment == ".." || segment.is_empty())
-    {
-        return Err(Error::Tool(format!(
-            "multi-file patch path {candidate:?} must be a relative path contained under the base directory"
-        )));
-    }
-    Ok(format!(
-        "{}/{}",
-        base_dir.trim_end_matches('/'),
-        candidate.trim_start_matches("./")
-    ))
-}
-
-fn strip_git_patch_prefix(path: &str) -> &str {
-    path.strip_prefix("a/")
-        .or_else(|| path.strip_prefix("b/"))
-        .unwrap_or(path)
 }
 
 pub fn find(state: &AppState, req: FileFindRequest) -> Result<FileFindResponse> {
@@ -1057,96 +674,6 @@ pub fn create_directory(
     })
 }
 
-pub(crate) fn read_bytes(
-    state: &AppState,
-    target: &TargetId,
-    config: &TargetConfig,
-    path: &str,
-    timeout: Duration,
-) -> Result<Vec<u8>> {
-    match (target, config) {
-        (TargetId::Local, TargetConfig::Local(_)) => Ok(fs::read(path)?),
-        (TargetId::Ssh(name), TargetConfig::Ssh(ssh_config)) => {
-            ssh::read_file(&state.ssh_sessions, name, ssh_config, path, timeout)
-        }
-        _ => Err(Error::Target(format!(
-            "target {target} has mismatched config"
-        ))),
-    }
-}
-
-fn write_bytes(
-    state: &AppState,
-    target: &TargetId,
-    config: &TargetConfig,
-    path: &str,
-    bytes: &[u8],
-    mode: Option<u32>,
-    timeout: Duration,
-) -> Result<()> {
-    match (target, config) {
-        (TargetId::Local, TargetConfig::Local(_)) => write_local_atomic(path, bytes, mode),
-        (TargetId::Ssh(name), TargetConfig::Ssh(ssh_config)) => ssh::write_file(
-            &state.ssh_sessions,
-            name,
-            ssh_config,
-            path,
-            bytes,
-            mode,
-            timeout,
-        ),
-        _ => Err(Error::Target(format!(
-            "target {target} has mismatched config"
-        ))),
-    }
-}
-
-fn file_exists(
-    state: &AppState,
-    target: &TargetId,
-    config: &TargetConfig,
-    path: &str,
-    timeout: Duration,
-) -> Result<bool> {
-    match (target, config) {
-        (TargetId::Local, TargetConfig::Local(_)) => Ok(Path::new(path).exists()),
-        (TargetId::Ssh(name), TargetConfig::Ssh(ssh_config)) => {
-            ssh::file_exists(&state.ssh_sessions, name, ssh_config, path, timeout)
-        }
-        _ => Err(Error::Target(format!(
-            "target {target} has mismatched config"
-        ))),
-    }
-}
-
-fn write_local_atomic(path: &str, bytes: &[u8], mode: Option<u32>) -> Result<()> {
-    let path = Path::new(path);
-    let parent = path
-        .parent()
-        .ok_or_else(|| Error::Tool(format!("path {} has no parent", path.display())))?;
-    fs::create_dir_all(parent)?;
-    let existing_permissions = fs::metadata(path).ok().map(|meta| meta.permissions());
-    let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
-    tmp.write_all(bytes)?;
-    tmp.flush()?;
-
-    #[cfg(unix)]
-    {
-        let selected_mode =
-            mode.or_else(|| existing_permissions.as_ref().map(PermissionsExt::mode));
-        let selected_mode = selected_mode.unwrap_or(0o644);
-        tmp.as_file()
-            .set_permissions(fs::Permissions::from_mode(selected_mode))?;
-    }
-    #[cfg(not(unix))]
-    if let Some(permissions) = existing_permissions {
-        tmp.as_file().set_permissions(permissions)?;
-    }
-
-    tmp.persist(path).map_err(|err| Error::Io(err.error))?;
-    Ok(())
-}
-
 fn select_line_range(
     bytes: Vec<u8>,
     start_line: Option<usize>,
@@ -1201,65 +728,9 @@ fn parse_mode(value: &str) -> Result<u32> {
         .map_err(|err| Error::Tool(format!("invalid file mode {value:?}: {err}")))
 }
 
-fn list_local(path: &str) -> Result<Vec<FileEntry>> {
-    let mut entries = Vec::new();
-    for entry in fs::read_dir(path)? {
-        let entry = entry?;
-        let meta = fs::symlink_metadata(entry.path())?;
-        let kind = if meta.is_dir() {
-            "dir"
-        } else if meta.is_file() {
-            "file"
-        } else if meta.file_type().is_symlink() {
-            "symlink"
-        } else {
-            "other"
-        };
-        let modified_unix = meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map(|d| d.as_secs());
-        entries.push(FileEntry {
-            name: entry.file_name().to_string_lossy().to_string(),
-            path: entry.path().display().to_string(),
-            kind: kind.to_string(),
-            size: meta.len(),
-            modified_unix,
-        });
-    }
-    entries.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(entries)
-}
-
-fn list_remote(
-    state: &AppState,
-    target_name: &str,
-    ssh_config: &crate::core::config::SshTargetConfig,
-    path: &str,
-    timeout: Duration,
-) -> Result<Vec<FileEntry>> {
-    let value = ssh::list_dir(&state.ssh_sessions, target_name, ssh_config, path, timeout)?;
-    let entries = value.get("entries").cloned().unwrap_or_else(|| json!([]));
-    serde_json::from_value::<Vec<FileEntry>>(entries).map_err(Error::Json)
-}
-
-fn default_true() -> bool {
-    true
-}
-
-fn default_context_lines() -> usize {
-    2
-}
-
-fn default_max_matches() -> usize {
-    20
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
 
     #[test]
     fn line_range_is_one_based_and_preserves_newlines() {
@@ -1275,57 +746,5 @@ mod tests {
         assert_eq!(parse_mode("0755").unwrap(), 0o755);
         assert_eq!(parse_mode("644").unwrap(), 0o644);
         assert!(parse_mode("0899").is_err());
-    }
-
-    #[test]
-    fn splits_multi_file_unified_diff_and_strips_git_metadata() {
-        let patch = "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1 +1 @@\n-old a\n+new a\ndiff --git a/src/b.rs b/src/b.rs\n--- a/src/b.rs\n+++ b/src/b.rs\n@@ -1 +1 @@\n-old b\n+new b\n";
-        let sections = split_unified_file_patches(patch).unwrap();
-        assert_eq!(sections.len(), 2);
-        assert_eq!(sections[0].new_path, "b/src/a.rs");
-        assert!(!sections[0].patch.contains("diff --git"));
-        assert_eq!(
-            resolve_multi_patch_path("/repo", &sections[1]).unwrap(),
-            "/repo/src/b.rs"
-        );
-    }
-
-    #[test]
-    fn multi_file_patch_rejects_create_delete_sections() {
-        let section = UnifiedFilePatch {
-            old_path: "/dev/null".to_string(),
-            new_path: "b/new.txt".to_string(),
-            patch: String::new(),
-        };
-        assert!(resolve_multi_patch_path("/repo", &section).is_err());
-    }
-
-    #[test]
-    fn multi_file_patch_rejects_escape_and_rename_paths() {
-        let escape = UnifiedFilePatch {
-            old_path: "a/../outside.txt".to_string(),
-            new_path: "b/../outside.txt".to_string(),
-            patch: String::new(),
-        };
-        assert!(resolve_multi_patch_path("/repo", &escape).is_err());
-
-        let rename = UnifiedFilePatch {
-            old_path: "a/old.txt".to_string(),
-            new_path: "b/new.txt".to_string(),
-            patch: String::new(),
-        };
-        assert!(resolve_multi_patch_path("/repo", &rename).is_err());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn atomic_write_preserves_existing_mode() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("script.sh");
-        fs::write(&path, b"old\n").unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-        write_local_atomic(path.to_str().unwrap(), b"new\n", None).unwrap();
-        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o755);
     }
 }

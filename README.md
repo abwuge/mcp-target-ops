@@ -68,6 +68,30 @@ A default target is only a fallback; it is not reported as the active target.
 When `require_explicit_target_for_write = true`, active and default targets are
 not sufficient for a file mutation—the caller must pass `target` explicitly.
 
+### Architectural boundaries
+
+The refactor deliberately keeps four top-level boundaries because they match
+the system's security and dependency model:
+
+- `core` owns configuration invariants, target identity, policy, OAuth state,
+  and process-scoped registries. It does not know HTTP routes or remote shell
+  syntax.
+- `protocol` translates MCP, HTTP, OAuth, and GPT Actions requests into the
+  existing operation layer. Routing, authorization-page rendering, form
+  decoding, response generation, and OpenAPI generation are separate modules.
+- `tooling` owns operation semantics and performs target/policy checks before
+  reaching a backend. Request/response types and multi-file patch parsing are
+  separated from the file-operation implementation.
+- `transport` owns OpenSSH process behavior. Persistent worker lifecycle and
+  the POSIX remote-file protocol are isolated behind the SSH facade.
+
+The server intentionally remains a small blocking Rust service backed by the
+system OpenSSH client. Its workload is bounded operator actions rather than
+high-volume web traffic; introducing an async runtime, a generic backend trait
+hierarchy, or remote language runtimes would add complexity without improving
+the current trust boundary. A future native SSH/SFTP implementation can replace
+`transport/ssh` without changing MCP tools or policy semantics.
+
 ## Requirements
 
 - Rust stable, including `rustfmt` and `clippy`, when building from source
@@ -436,8 +460,8 @@ The embedded server supports:
 - Public dynamic client registration
 - Authorization code flow with mandatory PKCE S256
 - HTTPS redirect URIs and HTTP loopback redirect URIs
-- Optional password-gated, responsive authorization page with client details,
-  light/dark mode, and explicit approval or denial
+- Optional password-gated, responsive authorization page with light/dark mode,
+  registered-client details, explicit approval, and cancellation
 - Opaque access tokens
 - Refresh-token rotation bound to client, resource, and scope
 
@@ -532,8 +556,8 @@ GitHub Actions includes:
 
 ```bash
 cargo fmt --all -- --check
-cargo test --all-targets
-cargo clippy --all-targets -- -D warnings
+cargo test --locked --all-targets
+cargo clippy --locked --all-targets -- -D warnings
 ```
 
 Source layout:
@@ -544,17 +568,23 @@ assets/
   oauth-authorize.html   OAuth authorization page
 
 src/core/
-  config.rs              configuration and validation
+  config.rs              configuration types, defaults, and loading
+  config/validation.rs   configuration invariants and target validation
   oauth.rs               persistent OAuth state and token rotation
   policy.rs              target permission and path enforcement
   state.rs               process-scoped registries and target resolution
 
 src/protocol/
-  actions.rs             bounded GPT Actions facade and OpenAPI generation
+  actions/mod.rs         bounded GPT Actions routing and response limits
+  actions/openapi.rs     OpenAPI generation derived from the MCP catalog
   apps.rs                MCP App resource metadata
-  http.rs                HTTP routing, authentication, and OAuth endpoints
   html.rs                shared HTML escaping
-  oauth_page.rs          OAuth authorization page renderer
+  http/mod.rs            HTTP routing and public endpoint discovery
+  http/auth.rs           bearer-token authorization
+  http/form.rs           URL-encoded form/query codec
+  http/oauth.rs          OAuth metadata, registration, authorization, tokens
+  http/response.rs       HTTP responses, redirects, CORS, and security headers
+  oauth_page.rs          authorization-page rendering
   mcp.rs                 MCP JSON-RPC over stdio and HTTP
 
 src/tooling/
@@ -562,13 +592,19 @@ src/tooling/
   tools/dispatch.rs      tool dispatch and target connection operations
   tools/schema.rs        output schemas
   exec.rs, job.rs        foreground and background commands
-  fs.rs, file_bridge.rs  file operations and ChatGPT transfer bridge
+  fs.rs                  policy-aware file-operation semantics
+  fs/backend.rs          local/SSH byte I/O and atomic local writes
+  fs/types.rs            file request and response types
+  fs/patch_format.rs     multi-file unified-diff parsing and path checks
+  file_bridge.rs         ChatGPT and connector transfer bridge
   terminal.rs            persistent PTY sessions
   mcp_client.rs          allowlisted downstream MCP client
   secret.rs              file-backed secret resolution
 
 src/transport/
-  ssh.rs                 persistent OpenSSH transport
+  ssh/mod.rs             SSH facade and command/PTY construction
+  ssh/session.rs         persistent OpenSSH worker lifecycle
+  ssh/files.rs           POSIX remote-file protocol
 ```
 
 ## Known constraints

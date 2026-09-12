@@ -64,6 +64,24 @@ MCP / ChatGPT 客户端
 `require_explicit_target_for_write = true` 时，通过活动目标或默认目标解析仍不足以
 执行文件写操作，调用者必须显式传入 `target`。
 
+### 架构边界
+
+本次重构有意保留四个顶层边界，因为它们与系统的安全模型和依赖边界一致：
+
+- `core` 负责配置不变量、目标身份、策略、OAuth 状态和进程级注册表，不感知 HTTP
+  路由或远程 shell 语法。
+- `protocol` 把 MCP、HTTP、OAuth 和 GPT Actions 请求转换为既有操作；路由、授权
+  页面渲染、表单解码、响应生成与 OpenAPI 生成分别位于独立模块。
+- `tooling` 负责操作语义，并在接触后端前完成目标解析与策略检查；文件请求/响应
+  类型和多文件补丁解析已与文件操作实现分离。
+- `transport` 负责 OpenSSH 进程行为；持久 worker 生命周期与 POSIX 远程文件协议
+  均封装在 SSH facade 后面。
+
+服务仍有意保持为小型阻塞式 Rust 程序，并使用系统 OpenSSH 客户端。当前负载是有
+明确上限的运维操作，而不是高吞吐 Web 流量；现在引入异步运行时、通用后端 trait
+体系或远端语言运行时，只会增加复杂度，并不会改善现有信任边界。未来如改用原生
+SSH/SFTP，只需替换 `transport/ssh`，无需改变 MCP 工具或策略语义。
+
 ## 运行要求
 
 - 从源码编译时需要 Rust stable，以及 `rustfmt`、`clippy`
@@ -416,7 +434,8 @@ oauth_state_file = "/home/me/.config/mcp-target-ops/oauth-state.json"
 - 公共动态客户端注册
 - 强制 PKCE S256 的授权码流程
 - HTTPS 回调地址和 HTTP loopback 回调地址
-- 可选密码门禁、显示客户端详情、支持明暗模式且可明确批准或拒绝的现代授权页
+- 可选密码门禁、响应式布局和明暗模式的现代授权页，并显示已注册客户端信息，
+  支持明确批准或取消
 - 不透明访问令牌
 - 绑定客户端、资源与 scope 的刷新令牌轮换
 
@@ -501,8 +520,8 @@ GitHub Actions 包含：
 
 ```bash
 cargo fmt --all -- --check
-cargo test --all-targets
-cargo clippy --all-targets -- -D warnings
+cargo test --locked --all-targets
+cargo clippy --locked --all-targets -- -D warnings
 ```
 
 源码结构：
@@ -513,17 +532,23 @@ assets/
   oauth-authorize.html   OAuth 授权页
 
 src/core/
-  config.rs              配置与校验
+  config.rs              配置类型、默认值与加载
+  config/validation.rs   配置不变量与目标校验
   oauth.rs               持久 OAuth 状态与令牌轮换
   policy.rs              目标权限与路径约束
   state.rs               进程内注册表与目标解析
 
 src/protocol/
-  actions.rs             受限 GPT Actions 接口与 OpenAPI 生成
+  actions/mod.rs         受限 GPT Actions 路由与响应限额
+  actions/openapi.rs     从 MCP 工具目录派生 OpenAPI 文档
   apps.rs                MCP App 资源元数据
-  http.rs                HTTP 路由、身份验证与 OAuth 端点
-  html.rs                通用 HTML 转义
-  oauth_page.rs          OAuth 授权页渲染
+  html.rs                共用 HTML 转义
+  http/mod.rs            HTTP 路由与公开端点发现
+  http/auth.rs           Bearer Token 授权
+  http/form.rs           URL 编码表单与查询解析
+  http/oauth.rs          OAuth 元数据、注册、授权与令牌交换
+  http/response.rs       HTTP 响应、重定向、CORS 与安全头
+  oauth_page.rs          授权页面渲染
   mcp.rs                 stdio/HTTP 上的 MCP JSON-RPC
 
 src/tooling/
@@ -531,13 +556,19 @@ src/tooling/
   tools/dispatch.rs      工具分发与目标连接操作
   tools/schema.rs        输出 Schema
   exec.rs, job.rs        前台和后台命令
-  fs.rs, file_bridge.rs  文件操作与 ChatGPT 文件桥
+  fs.rs                  带策略校验的文件操作语义
+  fs/backend.rs          本机/SSH 字节 I/O 与本机原子写入
+  fs/types.rs            文件请求与响应类型
+  fs/patch_format.rs     多文件 unified diff 解析与路径校验
+  file_bridge.rs         ChatGPT 与连接器文件桥
   terminal.rs            持久 PTY 终端
   mcp_client.rs          白名单下游 MCP 客户端
   secret.rs              文件秘密解析
 
 src/transport/
-  ssh.rs                 持久 OpenSSH 传输层
+  ssh/mod.rs             SSH facade 与命令/PTY 构造
+  ssh/session.rs         持久 OpenSSH worker 生命周期
+  ssh/files.rs           POSIX 远程文件协议
 ```
 
 ## 已知边界

@@ -1,0 +1,247 @@
+use super::{Config, PolicyConfig, TargetConfig};
+use crate::core::{
+    error::{Error, Result},
+    target::TargetId,
+};
+use std::str::FromStr;
+
+pub(super) fn validate(config: &Config) -> Result<()> {
+    validate_server(config)?;
+    validate_targets(config)?;
+    validate_mcp_servers(config)
+}
+
+fn validate_server(config: &Config) -> Result<()> {
+    let server = &config.server;
+
+    if server.terminal_ring_buffer_bytes == 0 {
+        return Err(Error::Config(
+            "server.terminal_ring_buffer_bytes must be greater than 0".to_string(),
+        ));
+    }
+    if server.runtime_dir.as_os_str().is_empty() {
+        return Err(Error::Config(
+            "server.runtime_dir must not be empty".to_string(),
+        ));
+    }
+
+    validate_optional_secret(
+        "server.http_bearer_token",
+        server.http_bearer_token.as_deref(),
+    )?;
+    validate_optional_secret(
+        "server.oauth_authorization_password",
+        server.oauth_authorization_password.as_deref(),
+    )?;
+
+    if let Some(base_url) = &server.public_base_url {
+        if base_url.trim().is_empty() || base_url.trim() != base_url {
+            return Err(Error::Config(
+                "server.public_base_url must not be empty or padded with whitespace".to_string(),
+            ));
+        }
+        if base_url.ends_with('/') {
+            return Err(Error::Config(
+                "server.public_base_url must not end with /".to_string(),
+            ));
+        }
+    }
+
+    if server.oauth_enabled && server.oauth_scopes.is_empty() {
+        return Err(Error::Config(
+            "server.oauth_scopes must contain at least one scope when OAuth is enabled".to_string(),
+        ));
+    }
+    if let Some(scope) = server
+        .oauth_scopes
+        .iter()
+        .find(|scope| scope.trim().is_empty() || scope.trim() != *scope)
+    {
+        return Err(Error::Config(format!(
+            "server.oauth_scopes contains an empty or padded scope: {scope:?}"
+        )));
+    }
+
+    validate_nonzero(
+        "server.oauth_authorization_code_ttl_secs",
+        server.oauth_authorization_code_ttl_secs,
+    )?;
+    validate_nonzero(
+        "server.oauth_access_token_ttl_secs",
+        server.oauth_access_token_ttl_secs,
+    )?;
+    validate_nonzero(
+        "server.oauth_refresh_token_ttl_secs",
+        server.oauth_refresh_token_ttl_secs,
+    )
+}
+
+fn validate_optional_secret(label: &str, value: Option<&str>) -> Result<()> {
+    if value.is_some_and(|value| value.trim().is_empty() || value.trim() != value) {
+        return Err(Error::Config(format!(
+            "{label} must not be empty or padded with whitespace"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_targets(config: &Config) -> Result<()> {
+    for (name, target) in &config.targets {
+        if name.trim().is_empty() || name.trim() != name {
+            return Err(Error::Config(
+                "target names must not be empty or padded with whitespace".to_string(),
+            ));
+        }
+
+        match (name.as_str(), target) {
+            ("local", TargetConfig::Local(local)) => {
+                validate_target_shell("targets.local.shell", local.shell.as_deref())?;
+                validate_policy("targets.local.policy", &local.policy)?;
+            }
+            ("local", TargetConfig::Ssh(_)) => {
+                return Err(Error::Config(
+                    "targets.local is reserved for kind = \"local\"".to_string(),
+                ));
+            }
+            (_, TargetConfig::Local(_)) => {
+                return Err(Error::Config(format!(
+                    "targets.{name} uses kind = \"local\"; the local target must be configured as targets.local"
+                )));
+            }
+            (_, TargetConfig::Ssh(ssh)) => {
+                if ssh.host.trim().is_empty() || ssh.host.trim() != ssh.host {
+                    return Err(Error::Config(format!(
+                        "targets.{name}.host must not be empty or padded with whitespace"
+                    )));
+                }
+                validate_nonzero(&format!("targets.{name}.port"), ssh.port)?;
+                if ssh
+                    .identity_file
+                    .as_ref()
+                    .is_some_and(|path| path.as_os_str().is_empty())
+                {
+                    return Err(Error::Config(format!(
+                        "targets.{name}.identity_file must not be empty"
+                    )));
+                }
+                validate_target_shell(&format!("targets.{name}.shell"), ssh.shell.as_deref())?;
+                validate_policy(&format!("targets.{name}.policy"), &ssh.policy)?;
+            }
+        }
+    }
+
+    if let Some(default_target) = &config.server.default_target {
+        if default_target.trim() != default_target {
+            return Err(Error::Config(
+                "server.default_target must not be padded with whitespace".to_string(),
+            ));
+        }
+        let target = TargetId::from_str(default_target)
+            .map_err(|err| Error::Config(format!("server.default_target is invalid: {err}")))?;
+        ensure_configured_target(config, &target, "server.default_target")?;
+    }
+
+    Ok(())
+}
+
+fn validate_mcp_servers(config: &Config) -> Result<()> {
+    for (name, mcp) in &config.mcp_servers {
+        if name.trim().is_empty() || name.trim() != name {
+            return Err(Error::Config(
+                "mcp server names must not be empty or padded with whitespace".to_string(),
+            ));
+        }
+
+        let source_count = usize::from(mcp.config_file.is_some())
+            + usize::from(mcp.url.is_some())
+            + usize::from(mcp.url_secret.is_some());
+        if source_count != 1 {
+            return Err(Error::Config(format!(
+                "mcp_servers.{name} must configure exactly one of config_file, url, or url_secret"
+            )));
+        }
+        if mcp
+            .config_file
+            .as_ref()
+            .is_some_and(|path| path.as_os_str().is_empty())
+        {
+            return Err(Error::Config(format!(
+                "mcp_servers.{name}.config_file must not be empty"
+            )));
+        }
+        if mcp
+            .url
+            .as_ref()
+            .is_some_and(|url| url.trim().is_empty() || url.trim() != url)
+        {
+            return Err(Error::Config(format!(
+                "mcp_servers.{name}.url must not be empty or padded with whitespace"
+            )));
+        }
+
+        if let Some(target) = &mcp.secret_target {
+            if target.trim().is_empty() || target.trim() != target {
+                return Err(Error::Config(format!(
+                    "mcp_servers.{name}.secret_target must not be empty or padded with whitespace"
+                )));
+            }
+            let target_id = TargetId::from_str(target).map_err(|err| {
+                Error::Config(format!(
+                    "mcp_servers.{name}.secret_target is invalid: {err}"
+                ))
+            })?;
+            ensure_configured_target(
+                config,
+                &target_id,
+                &format!("mcp_servers.{name}.secret_target"),
+            )?;
+        }
+
+        validate_nonzero(&format!("mcp_servers.{name}.timeout_ms"), mcp.timeout_ms)?;
+        validate_nonzero(
+            &format!("mcp_servers.{name}.max_response_bytes"),
+            mcp.max_response_bytes,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn ensure_configured_target(config: &Config, target: &TargetId, label: &str) -> Result<()> {
+    if config.targets.contains_key(target.config_key()) {
+        return Ok(());
+    }
+    Err(Error::Config(format!(
+        "{label} refers to unconfigured target {target}"
+    )))
+}
+
+fn validate_target_shell(label: &str, shell: Option<&str>) -> Result<()> {
+    if shell.is_some_and(|value| value.trim().is_empty() || value.trim() != value) {
+        return Err(Error::Config(format!(
+            "{label} must not be empty or padded with whitespace"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_policy(label: &str, policy: &PolicyConfig) -> Result<()> {
+    validate_nonzero(
+        &format!("{label}.default_timeout_ms"),
+        policy.default_timeout_ms,
+    )?;
+    validate_nonzero(
+        &format!("{label}.max_output_bytes"),
+        policy.max_output_bytes,
+    )
+}
+
+fn validate_nonzero<T>(label: &str, value: T) -> Result<()>
+where
+    T: Default + PartialEq,
+{
+    if value == T::default() {
+        return Err(Error::Config(format!("{label} must be greater than 0")));
+    }
+    Ok(())
+}

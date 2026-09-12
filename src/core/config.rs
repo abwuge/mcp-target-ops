@@ -1,14 +1,14 @@
+mod validation;
+
 use crate::core::{
     error::{Error, Result},
     secret::SecretRef,
-    target::TargetId,
 };
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
-    str::FromStr,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -281,235 +281,8 @@ impl Config {
     }
 
     fn validate(&self) -> Result<()> {
-        if self.server.terminal_ring_buffer_bytes == 0 {
-            return Err(Error::Config(
-                "server.terminal_ring_buffer_bytes must be greater than 0".to_string(),
-            ));
-        }
-
-        if self.server.runtime_dir.as_os_str().is_empty() {
-            return Err(Error::Config(
-                "server.runtime_dir must not be empty".to_string(),
-            ));
-        }
-
-        if let Some(token) = &self.server.http_bearer_token {
-            if token.trim().is_empty() || token.trim() != token {
-                return Err(Error::Config(
-                    "server.http_bearer_token must not be empty or padded with whitespace"
-                        .to_string(),
-                ));
-            }
-        }
-
-        if let Some(password) = &self.server.oauth_authorization_password {
-            if password.trim().is_empty() || password.trim() != password {
-                return Err(Error::Config(
-                    "server.oauth_authorization_password must not be empty or padded with whitespace"
-                        .to_string(),
-                ));
-            }
-        }
-
-        if let Some(base_url) = &self.server.public_base_url {
-            if base_url.trim().is_empty() || base_url.trim() != base_url {
-                return Err(Error::Config(
-                    "server.public_base_url must not be empty or padded with whitespace"
-                        .to_string(),
-                ));
-            }
-            if base_url.ends_with('/') {
-                return Err(Error::Config(
-                    "server.public_base_url must not end with /".to_string(),
-                ));
-            }
-        }
-
-        if self.server.oauth_enabled && self.server.oauth_scopes.is_empty() {
-            return Err(Error::Config(
-                "server.oauth_scopes must contain at least one scope when OAuth is enabled"
-                    .to_string(),
-            ));
-        }
-
-        if let Some(scope) = self
-            .server
-            .oauth_scopes
-            .iter()
-            .find(|scope| scope.trim().is_empty() || scope.trim() != *scope)
-        {
-            return Err(Error::Config(format!(
-                "server.oauth_scopes contains an empty or padded scope: {scope:?}"
-            )));
-        }
-
-        if self.server.oauth_authorization_code_ttl_secs == 0 {
-            return Err(Error::Config(
-                "server.oauth_authorization_code_ttl_secs must be greater than 0".to_string(),
-            ));
-        }
-
-        if self.server.oauth_access_token_ttl_secs == 0 {
-            return Err(Error::Config(
-                "server.oauth_access_token_ttl_secs must be greater than 0".to_string(),
-            ));
-        }
-
-        if self.server.oauth_refresh_token_ttl_secs == 0 {
-            return Err(Error::Config(
-                "server.oauth_refresh_token_ttl_secs must be greater than 0".to_string(),
-            ));
-        }
-
-        self.validate_targets()?;
-
-        for (name, mcp) in &self.mcp_servers {
-            if name.trim().is_empty() || name.trim() != name {
-                return Err(Error::Config(
-                    "mcp server names must not be empty or padded with whitespace".to_string(),
-                ));
-            }
-            let source_count = usize::from(mcp.config_file.is_some())
-                + usize::from(mcp.url.is_some())
-                + usize::from(mcp.url_secret.is_some());
-            if source_count != 1 {
-                return Err(Error::Config(format!(
-                    "mcp_servers.{name} must configure exactly one of config_file, url, or url_secret"
-                )));
-            }
-            if let Some(path) = &mcp.config_file {
-                if path.as_os_str().is_empty() {
-                    return Err(Error::Config(format!(
-                        "mcp_servers.{name}.config_file must not be empty"
-                    )));
-                }
-            }
-            if let Some(url) = &mcp.url {
-                if url.trim().is_empty() || url.trim() != url {
-                    return Err(Error::Config(format!(
-                        "mcp_servers.{name}.url must not be empty or padded with whitespace"
-                    )));
-                }
-            }
-            if let Some(target) = &mcp.secret_target {
-                if target.trim().is_empty() || target.trim() != target {
-                    return Err(Error::Config(format!(
-                        "mcp_servers.{name}.secret_target must not be empty or padded with whitespace"
-                    )));
-                }
-                let target_id = TargetId::from_str(target).map_err(|err| {
-                    Error::Config(format!(
-                        "mcp_servers.{name}.secret_target is invalid: {err}"
-                    ))
-                })?;
-                if !self.targets.contains_key(target_id.config_key()) {
-                    return Err(Error::Config(format!(
-                        "mcp_servers.{name}.secret_target refers to unconfigured target {target_id}"
-                    )));
-                }
-            }
-            if mcp.timeout_ms == 0 {
-                return Err(Error::Config(format!(
-                    "mcp_servers.{name}.timeout_ms must be greater than 0"
-                )));
-            }
-            if mcp.max_response_bytes == 0 {
-                return Err(Error::Config(format!(
-                    "mcp_servers.{name}.max_response_bytes must be greater than 0"
-                )));
-            }
-        }
-
-        Ok(())
+        validation::validate(self)
     }
-
-    fn validate_targets(&self) -> Result<()> {
-        for (name, target) in &self.targets {
-            if name.trim().is_empty() || name.trim() != name {
-                return Err(Error::Config(
-                    "target names must not be empty or padded with whitespace".to_string(),
-                ));
-            }
-
-            match (name.as_str(), target) {
-                ("local", TargetConfig::Local(local)) => {
-                    validate_target_shell("targets.local.shell", local.shell.as_deref())?;
-                    validate_policy("targets.local.policy", &local.policy)?;
-                }
-                ("local", TargetConfig::Ssh(_)) => {
-                    return Err(Error::Config(
-                        "targets.local is reserved for kind = \"local\"".to_string(),
-                    ));
-                }
-                (_, TargetConfig::Local(_)) => {
-                    return Err(Error::Config(format!(
-                        "targets.{name} uses kind = \"local\"; the local target must be configured as targets.local"
-                    )));
-                }
-                (_, TargetConfig::Ssh(ssh)) => {
-                    if ssh.host.trim().is_empty() || ssh.host.trim() != ssh.host {
-                        return Err(Error::Config(format!(
-                            "targets.{name}.host must not be empty or padded with whitespace"
-                        )));
-                    }
-                    if ssh.port == 0 {
-                        return Err(Error::Config(format!(
-                            "targets.{name}.port must be greater than 0"
-                        )));
-                    }
-                    if let Some(path) = &ssh.identity_file {
-                        if path.as_os_str().is_empty() {
-                            return Err(Error::Config(format!(
-                                "targets.{name}.identity_file must not be empty"
-                            )));
-                        }
-                    }
-                    validate_target_shell(&format!("targets.{name}.shell"), ssh.shell.as_deref())?;
-                    validate_policy(&format!("targets.{name}.policy"), &ssh.policy)?;
-                }
-            }
-        }
-
-        if let Some(default_target) = &self.server.default_target {
-            if default_target.trim() != default_target {
-                return Err(Error::Config(
-                    "server.default_target must not be padded with whitespace".to_string(),
-                ));
-            }
-            let target = TargetId::from_str(default_target)
-                .map_err(|err| Error::Config(format!("server.default_target is invalid: {err}")))?;
-            if !self.targets.contains_key(target.config_key()) {
-                return Err(Error::Config(format!(
-                    "server.default_target refers to unconfigured target {target}"
-                )));
-            }
-        }
-
-        Ok(())
-    }
-}
-
-fn validate_target_shell(label: &str, shell: Option<&str>) -> Result<()> {
-    if shell.is_some_and(|value| value.trim().is_empty() || value.trim() != value) {
-        return Err(Error::Config(format!(
-            "{label} must not be empty or padded with whitespace"
-        )));
-    }
-    Ok(())
-}
-
-fn validate_policy(label: &str, policy: &PolicyConfig) -> Result<()> {
-    if policy.default_timeout_ms == 0 {
-        return Err(Error::Config(format!(
-            "{label}.default_timeout_ms must be greater than 0"
-        )));
-    }
-    if policy.max_output_bytes == 0 {
-        return Err(Error::Config(format!(
-            "{label}.max_output_bytes must be greater than 0"
-        )));
-    }
-    Ok(())
 }
 
 fn default_name() -> String {
@@ -707,5 +480,46 @@ mod tests {
             .validate()
             .expect_err("default target must be configured");
         assert!(err.to_string().contains("unconfigured target ssh:missing"));
+    }
+
+    #[test]
+    fn rejects_unconfigured_secret_target() {
+        let config = parse_config(
+            r#"
+            [mcp_servers.memory]
+            url = "https://memory.example.com/mcp"
+            secret_target = "ssh:missing"
+            "#,
+        );
+
+        let err = config
+            .validate()
+            .expect_err("secret target must be configured");
+        assert!(err.to_string().contains(
+            "mcp_servers.memory.secret_target refers to unconfigured target ssh:missing"
+        ));
+    }
+
+    #[test]
+    fn rejects_zero_limits() {
+        let server = parse_config(
+            r#"
+            [server]
+            terminal_ring_buffer_bytes = 0
+            "#,
+        );
+        assert!(server.validate().is_err());
+
+        let target = parse_config(
+            r#"
+            [targets.dev]
+            kind = "ssh"
+            host = "dev.example.com"
+
+            [targets.dev.policy]
+            default_timeout_ms = 0
+            "#,
+        );
+        assert!(target.validate().is_err());
     }
 }
