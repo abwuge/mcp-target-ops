@@ -80,12 +80,6 @@ struct AuthorizationCode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AccessToken {
     expires_at: SystemTime,
-    #[allow(dead_code)]
-    client_id: String,
-    #[allow(dead_code)]
-    scopes: Vec<String>,
-    #[allow(dead_code)]
-    resource: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -382,9 +376,6 @@ impl OAuthState {
             access_token.clone(),
             AccessToken {
                 expires_at: now + Duration::from_secs(lifetimes.access_token_secs),
-                client_id: client_id.clone(),
-                scopes: scopes.clone(),
-                resource: resource.clone(),
             },
         );
         self.refresh_tokens.insert(
