@@ -727,6 +727,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "diffy",
+ "libc",
  "portable-pty",
  "rand 0.8.6",
  "reqwest",

@@ -15,10 +15,13 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     io::Read,
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     thread,
     time::{Duration, Instant},
 };
+
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 
 const MAX_BATCH_COMMANDS: usize = 32;
 
@@ -354,7 +357,45 @@ pub(crate) fn local_shell_command(
     cmd
 }
 
+pub(crate) fn configure_command_process_group(cmd: &mut Command) {
+    #[cfg(unix)]
+    {
+        cmd.process_group(0);
+    }
+}
+
+pub(crate) fn terminate_child_process_group(child: &mut Child) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        let pgid = libc::pid_t::try_from(child.id()).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "child pid does not fit pid_t",
+            )
+        })?;
+        // SAFETY: commands are placed in a fresh process group whose id is the child pid.
+        let result = unsafe { libc::kill(-pgid, libc::SIGKILL) };
+        if result == 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            return Ok(());
+        }
+        if child.kill().is_ok() {
+            return Ok(());
+        }
+        Err(error)
+    }
+
+    #[cfg(not(unix))]
+    {
+        child.kill()
+    }
+}
+
 pub fn run_command_collect(mut cmd: Command, timeout: Duration) -> Result<RawExecOutput> {
+    configure_command_process_group(&mut cmd);
     let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -388,9 +429,9 @@ pub fn run_command_collect(mut cmd: Command, timeout: Duration) -> Result<RawExe
             break status.code();
         }
 
-        if started.elapsed() > timeout {
+        if started.elapsed() >= timeout {
             timed_out = true;
-            let _ = child.kill();
+            let _ = terminate_child_process_group(&mut child);
             let status = child.wait()?;
             break status.code();
         }
@@ -454,5 +495,21 @@ mod tests {
         )
         .unwrap();
         assert_eq!(output.stdout, b"hidden-value");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn timeout_kills_external_child_processes_promptly() {
+        let started = Instant::now();
+        let output =
+            run_local_shell_with_env("sleep 1", None, &BTreeMap::new(), Duration::from_millis(50))
+                .unwrap();
+
+        assert!(output.timed_out);
+        assert!(
+            started.elapsed() < Duration::from_millis(700),
+            "timeout waited for an inherited pipe holder: {:?}",
+            started.elapsed()
+        );
     }
 }

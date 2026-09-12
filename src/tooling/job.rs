@@ -7,7 +7,13 @@ use crate::{
         state::AppState,
         target::{ResolvedTarget, TargetId},
     },
-    tooling::{exec::local_shell_command, secret, stream::RingBuffer},
+    tooling::{
+        exec::{
+            configure_command_process_group, local_shell_command, terminate_child_process_group,
+        },
+        secret,
+        stream::RingBuffer,
+    },
     transport::ssh,
 };
 use serde::{Deserialize, Serialize};
@@ -228,7 +234,7 @@ impl JobRegistry {
         let running = session.status.lock().unwrap().finished.is_none();
         let requested = if running {
             session.cancel_requested.store(true, Ordering::Release);
-            session.child.lock().unwrap().kill().is_ok()
+            terminate_child_process_group(&mut session.child.lock().unwrap()).is_ok()
         } else {
             false
         };
@@ -285,6 +291,7 @@ fn spawn_job(
     max_output: usize,
     timeout_ms: Option<u64>,
 ) -> Result<JobSession> {
+    configure_command_process_group(&mut command);
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -381,7 +388,7 @@ fn spawn_monitor(
         });
         if should_timeout {
             let mut child = child.lock().unwrap();
-            let _ = child.kill();
+            let _ = terminate_child_process_group(&mut child);
             let exit = child.wait().ok();
             let mut status = status.lock().unwrap();
             status.exit_code = exit.and_then(|status| status.code());
@@ -455,5 +462,15 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
         assert_eq!(poll_response("job_test", &session).status, "timed_out");
+
+        let eof_deadline = Instant::now() + Duration::from_millis(700);
+        while (!session.stdout_eof.load(Ordering::Acquire)
+            || !session.stderr_eof.load(Ordering::Acquire))
+            && Instant::now() < eof_deadline
+        {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(session.stdout_eof.load(Ordering::Acquire));
+        assert!(session.stderr_eof.load(Ordering::Acquire));
     }
 }
