@@ -23,17 +23,17 @@ a human-readable MCP App for reviewing file changes.
 
 ## Highlights
 
-- One 32-tool interface for local and SSH targets
-- Persistent OpenSSH workers for ordinary remote command and file operations
-- Foreground commands plus cancellable background jobs with incremental output
+- One interface for local and SSH targets: 32 model-facing tools plus one App-only stream helper
+- Persistent OpenSSH workers for remote file operations
+- Live foreground command output plus cancellable background jobs with incremental output
 - Persistent PTY terminals with live resize support
 - Atomic file writes, exact edits, deletion previews, SHA-256 compare-and-swap,
   and validated multi-file patches with rollback
 - File-backed secret injection without placing secret values in MCP arguments
 - ChatGPT and connector file import/export with bounded transfer sizes
-- Self-contained MCP Apps for target/MCP-server inventory, non-interactive
-  `exec` results, and file review; command output renders ANSI styling safely,
-  while file changes show full added/deleted content and editor-style diffs
+- Self-contained MCP Apps for target/MCP-server inventory, live `exec` results,
+  and file review; command output renders ANSI styling safely, while file changes
+  show full added/deleted content and editor-style diffs
 - Allowlisted downstream Streamable HTTP MCP gateway
 - Stdio and HTTP transports, static bearer authentication, OAuth 2.0 with PKCE,
   and persistent rotating refresh tokens
@@ -323,14 +323,14 @@ advanced deployments; see the example configuration.
 
 ## Tool catalog
 
-Target Ops currently exposes 32 tools.
+Target Ops publishes 33 tool descriptors: 32 model-facing tools and the App-only `exec_stream` helper.
 
 | Area | Tools |
 | --- | --- |
 | Server | `server_info` |
 | Targets | `target_list`, `target_current`, `target_select`, `target_connect`, `target_disconnect` |
 | Downstream MCP | `mcp_server_list`, `mcp_tools_list`, `mcp_tool_call` |
-| Commands and jobs | `exec`, `exec_batch`, `exec_start`, `job_poll`, `job_output`, `job_cancel` |
+| Commands and jobs | `exec`, `exec_batch`, `exec_start`, `job_poll`, `job_output`, `job_cancel`; App-only: `exec_stream` |
 | Files and directories | `file_read`, `file_list`, `file_find`, `file_edit`, `file_write`, `file_delete`, `file_import`, `file_export`, `file_patch`, `file_move`, `file_chmod`, `directory_create` |
 | Terminals | `terminal_open`, `terminal_send`, `terminal_read`, `terminal_resize`, `terminal_close` |
 
@@ -343,9 +343,7 @@ enabled, tool descriptors also advertise the configured OAuth scopes.
 `target_list` and `mcp_server_list` share the stable
 `ui://target-ops/inventory/v1.html` MCP App. The compact card shows target kind,
 active/enabled state, allowed operations and roots, or downstream server state,
-configuration source, timeout, response limit, and safe header-count metadata.
-It is display-only and does not expose downstream endpoint URLs or secret
-values.
+configuration source, timeout, response limit, and header-count metadata.
 
 ### Commands and background jobs
 
@@ -358,20 +356,21 @@ or control flow; use `exec_batch` for unrelated inspections instead of joining
 them with shell separators.
 
 Both tools bind to the stable `ui://target-ops/exec-terminal/v1.html` MCP App.
-Single-command results show stdout, stderr, target, exit status, timeout, and
-truncation state; long successful output is collapsed. Batch results use compact
-command rows, keep successful commands collapsed, and automatically expand
-failures. ANSI SGR color/style sequences are rendered safely instead of being
-shown as raw escape codes. `ExecResponse` also includes the executed command so
-the App can show it reliably without depending on client-specific tool-input
-forwarding. The stable resource URI is retained for compatibility even though
-the visual design no longer imitates an interactive terminal.
+For a foreground `exec`, the App attaches to the App-only `exec_stream` helper
+and polls independent stdout/stderr sequence cursors while the command is still
+running. Output starts expanded; successful output collapses about three seconds
+after completion, while failures and timeouts stay expanded. Batch rows follow
+the same expand-first behavior and collapse successful items after completion.
+ANSI SGR color/style sequences are rendered safely instead of being shown as raw
+escape codes. The stable resource URI is retained for compatibility.
 
-Child stdin is disconnected from the MCP control stream. `exec_start` starts a
-dedicated process and returns a job ID immediately; use independent
-stdout/stderr sequence cursors with `job_output`, inspect completion through
-`job_poll`, and request termination with `job_cancel`. SSH jobs do not occupy
-the persistent SSH worker used by ordinary operations.
+`exec` and `exec_start` share the same `CommandSession` implementation for
+process lifecycle, stdout/stderr capture, timeout, cancellation, and incremental
+output. `exec` waits for the session and uses the target policy's default timeout
+when none is supplied; `exec_start` returns a job ID immediately and has no
+runtime timeout unless one is requested. Child stdin is disconnected from the
+MCP control stream. SSH command sessions use dedicated OpenSSH processes; remote
+file operations continue to use persistent per-target SSH workers.
 
 Both command tools accept `secret_env`. A value may come from a text file or a
 dot-selected scalar in TOML or JSON:

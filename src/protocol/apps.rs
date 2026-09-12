@@ -25,8 +25,8 @@ const RESOURCES: [AppResource; 4] = [
         uri: EXEC_TERMINAL_UI_URI,
         name: "target-ops-exec-result",
         title: "Target Ops command result",
-        description: "Non-interactive view of Target Ops exec results.",
-        widget_description: "Shows the executed command, ANSI-styled stdout and stderr, target, exit status, timeout, and truncation state without implying an interactive terminal.",
+        description: "Target Ops command output.",
+        widget_description: "Shows the command, live output, target, exit status, timeout, and truncation state.",
         html: EXEC_TERMINAL_UI_HTML,
         prefers_border: true,
     },
@@ -181,7 +181,7 @@ mod tests {
         assert!(html.contains("ui/notifications/initialized"));
         assert!(html.contains("appInfo: { name: 'target-ops-exec-result'"));
         assert!(html.contains("Command result"));
-        assert!(html.contains("Non-interactive execution"));
+        assert!(html.contains("exec_stream"));
         assert!(html.contains("data.command"));
         assert!(html.contains("renderAnsi"));
         assert!(html.contains("stdout_truncated"));
@@ -223,8 +223,8 @@ mod tests {
         assert!(html.contains("appInfo: { name: 'target-ops-inventory'"));
         assert!(html.contains("renderTargets"));
         assert!(html.contains("renderServers"));
-        assert!(html.contains("Local and SSH execution targets"));
-        assert!(html.contains("Configured downstream servers"));
+        assert!(!html.contains("This view is read-only"));
+        assert!(!html.contains("Endpoint URLs and secret values are not exposed"));
     }
 
     #[test]

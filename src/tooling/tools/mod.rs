@@ -8,4 +8,4 @@ pub(crate) const FILE_READ_UI_URI: &str = "ui://target-ops/file-read/v1.html";
 pub(crate) const INVENTORY_UI_URI: &str = "ui://target-ops/inventory/v1.html";
 
 pub use catalog::list_tools;
-pub use dispatch::call_tool;
+pub use dispatch::{call_tool, call_tool_with_request_id};

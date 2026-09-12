@@ -14,7 +14,9 @@ use crate::{
             FileFindRequest, FileListRequest, FileMoveRequest, FilePatchRequest, FileReadRequest,
             FileWriteRequest,
         },
-        job::{ExecStartRequest, JobCancelRequest, JobOutputRequest, JobPollRequest},
+        job::{
+            ExecStartRequest, ExecStreamRequest, JobCancelRequest, JobOutputRequest, JobPollRequest,
+        },
         mcp_client,
         terminal::{
             TerminalCloseRequest, TerminalOpenRequest, TerminalReadRequest, TerminalResizeRequest,
@@ -28,6 +30,15 @@ use serde_json::{json, Value};
 use std::{str::FromStr, sync::Arc, time::Duration};
 
 pub fn call_tool(state: Arc<AppState>, name: &str, args: Value) -> Result<Value> {
+    call_tool_with_request_id(state, name, args, None)
+}
+
+pub fn call_tool_with_request_id(
+    state: Arc<AppState>,
+    name: &str,
+    args: Value,
+    request_id: Option<&Value>,
+) -> Result<Value> {
     match name {
         "server_info" => Ok(server_info(&state)),
         "target_list" => Ok(json!({ "targets": state.list_targets() })),
@@ -51,14 +62,22 @@ pub fn call_tool(state: Arc<AppState>, name: &str, args: Value) -> Result<Value>
             )?;
             Ok(json!({ "server": req.server, "tool": req.tool, "result": result }))
         }
-        "exec" => Ok(serde_json::to_value(exec::run(
+        "exec" => Ok(serde_json::to_value(exec::run_with_request_id(
             &state,
             parse::<ExecRequest>(args)?,
+            request_id,
         )?)?),
         "exec_batch" => Ok(serde_json::to_value(exec::run_batch(
             &state,
             parse::<ExecBatchRequest>(args)?,
         )?)?),
+        "exec_stream" => {
+            Ok(serde_json::to_value(state.jobs.stream(parse::<
+                ExecStreamRequest,
+            >(
+                args
+            )?)?)?)
+        }
         "exec_start" => Ok(serde_json::to_value(
             state.jobs.start(&state, parse::<ExecStartRequest>(args)?)?,
         )?),
@@ -194,10 +213,9 @@ fn server_info(state: &AppState) -> Value {
         "runtime_dir": state.config.server.runtime_dir.display().to_string(),
         "started_at_debug": format!("{:?}", state.started_at()),
         "notes": [
-            "The same policy-gated tools operate on local and SSH targets.",
-            "SSH command and file operations reuse persistent per-target OpenSSH workers.",
-            "The active target is process-scoped; terminal and job sessions remain bound to their original targets.",
-            "Background jobs use dedicated processes so they do not monopolize persistent SSH workers."
+            "SSH file operations reuse persistent per-target OpenSSH workers.",
+            "exec and exec_start share the same command-session implementation.",
+            "The active target is process-scoped; terminal and job sessions remain bound to their original targets."
         ]
     })
 }

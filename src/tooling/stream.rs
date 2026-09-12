@@ -14,6 +14,7 @@ struct RingBufferInner {
 struct OutputChunk {
     seq: u64,
     bytes: Vec<u8>,
+    truncated_prefix: bool,
 }
 
 impl RingBuffer {
@@ -35,10 +36,17 @@ impl RingBuffer {
         let mut inner = self.inner.lock().unwrap();
         let seq = inner.next_seq;
         inner.next_seq += 1;
-        inner.current_bytes += bytes.len();
+        let truncated_prefix = bytes.len() > self.max_bytes;
+        let retained = if truncated_prefix {
+            &bytes[bytes.len() - self.max_bytes..]
+        } else {
+            bytes
+        };
+        inner.current_bytes += retained.len();
         inner.chunks.push_back(OutputChunk {
             seq,
-            bytes: bytes.to_vec(),
+            bytes: retained.to_vec(),
+            truncated_prefix,
         });
 
         while inner.current_bytes > self.max_bytes {
@@ -53,10 +61,10 @@ impl RingBuffer {
     pub(crate) fn read_since(&self, since_seq: u64, max_bytes: usize) -> (Vec<u8>, u64, bool) {
         let inner = self.inner.lock().unwrap();
         let mut out = Vec::new();
-        let mut truncated = inner
-            .chunks
-            .front()
-            .is_some_and(|first| since_seq.saturating_add(1) < first.seq);
+        let mut truncated = inner.chunks.front().is_some_and(|first| {
+            since_seq.saturating_add(1) < first.seq
+                || (first.truncated_prefix && first.seq > since_seq)
+        });
 
         for chunk in inner.chunks.iter().filter(|chunk| chunk.seq > since_seq) {
             if out.len() + chunk.bytes.len() > max_bytes {
@@ -100,6 +108,16 @@ mod tests {
         let (output, seq, truncated) = buffer.read_since(0, 1024);
         assert_eq!(output, b"def");
         assert_eq!(seq, 2);
+        assert!(truncated);
+    }
+
+    #[test]
+    fn keeps_tail_of_oversized_single_chunk() {
+        let buffer = RingBuffer::new(4);
+        buffer.push(b"abcdef");
+        let (output, seq, truncated) = buffer.read_since(0, 1024);
+        assert_eq!(output, b"cdef");
+        assert_eq!(seq, 1);
         assert!(truncated);
     }
 }

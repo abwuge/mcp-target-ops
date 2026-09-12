@@ -24,6 +24,8 @@ pub struct CommandSession {
     child: Arc<Mutex<Child>>,
     stdout: Arc<RingBuffer>,
     stderr: Arc<RingBuffer>,
+    stdout_capture: Arc<CaptureBuffer>,
+    stderr_capture: Arc<CaptureBuffer>,
     stdout_eof: Arc<AtomicBool>,
     stderr_eof: Arc<AtomicBool>,
     status: Arc<Mutex<CommandStatus>>,
@@ -37,6 +39,53 @@ struct CommandStatus {
     timed_out: bool,
 }
 
+struct CaptureBuffer {
+    bytes: Mutex<Vec<u8>>,
+    max_bytes: usize,
+    truncated: AtomicBool,
+}
+
+impl CaptureBuffer {
+    fn new(max_bytes: usize) -> Self {
+        Self {
+            bytes: Mutex::new(Vec::new()),
+            max_bytes,
+            truncated: AtomicBool::new(false),
+        }
+    }
+
+    fn push(&self, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+        let mut captured = self.bytes.lock().unwrap();
+        let remaining = self.max_bytes.saturating_sub(captured.len());
+        if remaining > 0 {
+            captured.extend_from_slice(&bytes[..remaining.min(bytes.len())]);
+        }
+        if bytes.len() > remaining {
+            self.truncated.store(true, Ordering::Release);
+        }
+    }
+
+    fn snapshot(&self) -> (Vec<u8>, bool) {
+        (
+            self.bytes.lock().unwrap().clone(),
+            self.truncated.load(Ordering::Acquire),
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CommandStatusSnapshot {
+    pub exit_code: Option<i32>,
+    pub timed_out: bool,
+    pub cancelled: bool,
+    pub elapsed_ms: u64,
+    pub finished: bool,
+    pub eof: bool,
+}
+
 #[derive(Debug)]
 pub struct CommandSnapshot {
     pub exit_code: Option<i32>,
@@ -45,8 +94,6 @@ pub struct CommandSnapshot {
     pub stdout_truncated: bool,
     pub stderr_truncated: bool,
     pub timed_out: bool,
-    pub cancelled: bool,
-    pub elapsed_ms: u64,
     pub finished: bool,
     pub eof: bool,
 }
@@ -86,13 +133,26 @@ impl CommandSession {
             .take()
             .ok_or_else(|| Error::Tool("failed to open command stderr".to_string()))?;
 
+        let max_output = max_output.max(1);
         let child = Arc::new(Mutex::new(child));
-        let stdout = Arc::new(RingBuffer::new(max_output.max(1)));
-        let stderr = Arc::new(RingBuffer::new(max_output.max(1)));
+        let stdout = Arc::new(RingBuffer::new(max_output));
+        let stderr = Arc::new(RingBuffer::new(max_output));
+        let stdout_capture = Arc::new(CaptureBuffer::new(max_output));
+        let stderr_capture = Arc::new(CaptureBuffer::new(max_output));
         let stdout_eof = Arc::new(AtomicBool::new(false));
         let stderr_eof = Arc::new(AtomicBool::new(false));
-        spawn_reader(stdout_pipe, Arc::clone(&stdout), Arc::clone(&stdout_eof));
-        spawn_reader(stderr_pipe, Arc::clone(&stderr), Arc::clone(&stderr_eof));
+        spawn_reader(
+            stdout_pipe,
+            Arc::clone(&stdout),
+            Arc::clone(&stdout_capture),
+            Arc::clone(&stdout_eof),
+        );
+        spawn_reader(
+            stderr_pipe,
+            Arc::clone(&stderr),
+            Arc::clone(&stderr_capture),
+            Arc::clone(&stderr_eof),
+        );
 
         let status = Arc::new(Mutex::new(CommandStatus {
             started: Instant::now(),
@@ -108,6 +168,8 @@ impl CommandSession {
             child,
             stdout,
             stderr,
+            stdout_capture,
+            stderr_capture,
             stdout_eof,
             stderr_eof,
             status,
@@ -125,14 +187,29 @@ impl CommandSession {
         }
     }
 
-    pub fn snapshot(&self) -> CommandSnapshot {
+    pub fn status_snapshot(&self) -> CommandStatusSnapshot {
         let status = self.status.lock().unwrap();
         let end = status.finished.unwrap_or_else(Instant::now);
-        let (stdout, _, stdout_truncated) = self.stdout.read_since(0, usize::MAX);
-        let (stderr, _, stderr_truncated) = self.stderr.read_since(0, usize::MAX);
-        let eof = self.stdout_eof.load(Ordering::Acquire)
-            && self.stderr_eof.load(Ordering::Acquire)
-            && status.finished.is_some();
+        let finished = status.finished.is_some();
+        CommandStatusSnapshot {
+            exit_code: status.exit_code,
+            timed_out: status.timed_out,
+            cancelled: self.cancel_requested.load(Ordering::Acquire),
+            elapsed_ms: end
+                .saturating_duration_since(status.started)
+                .as_millis()
+                .min(u128::from(u64::MAX)) as u64,
+            finished,
+            eof: finished
+                && self.stdout_eof.load(Ordering::Acquire)
+                && self.stderr_eof.load(Ordering::Acquire),
+        }
+    }
+
+    pub fn snapshot(&self) -> CommandSnapshot {
+        let status = self.status_snapshot();
+        let (stdout, stdout_truncated) = self.stdout_capture.snapshot();
+        let (stderr, stderr_truncated) = self.stderr_capture.snapshot();
         CommandSnapshot {
             exit_code: status.exit_code,
             stdout,
@@ -140,13 +217,8 @@ impl CommandSession {
             stdout_truncated,
             stderr_truncated,
             timed_out: status.timed_out,
-            cancelled: self.cancel_requested.load(Ordering::Acquire),
-            elapsed_ms: end
-                .saturating_duration_since(status.started)
-                .as_millis()
-                .min(u128::from(u64::MAX)) as u64,
-            finished: status.finished.is_some(),
-            eof,
+            finished: status.finished,
+            eof: status.eof,
         }
     }
 
@@ -186,12 +258,12 @@ impl CommandSession {
     }
 
     pub fn state(&self) -> &'static str {
-        let status = self.status.lock().unwrap();
-        if status.finished.is_none() {
+        let status = self.status_snapshot();
+        if !status.finished {
             "running"
         } else if status.timed_out {
             "timed_out"
-        } else if self.cancel_requested.load(Ordering::Acquire) {
+        } else if status.cancelled {
             "cancelled"
         } else if status.exit_code == Some(0) {
             "completed"
@@ -204,6 +276,7 @@ impl CommandSession {
 fn spawn_reader(
     mut reader: impl Read + Send + 'static,
     buffer: Arc<RingBuffer>,
+    capture: Arc<CaptureBuffer>,
     eof: Arc<AtomicBool>,
 ) {
     thread::spawn(move || {
@@ -211,7 +284,10 @@ fn spawn_reader(
         loop {
             match reader.read(&mut scratch) {
                 Ok(0) => break,
-                Ok(n) => buffer.push(&scratch[..n]),
+                Ok(n) => {
+                    buffer.push(&scratch[..n]);
+                    capture.push(&scratch[..n]);
+                }
                 Err(_) => break,
             }
         }
@@ -320,5 +396,19 @@ mod tests {
         assert!(snapshot.timed_out);
         assert!(snapshot.eof);
         assert!(started.elapsed() < Duration::from_millis(700));
+    }
+
+    #[test]
+    fn final_capture_preserves_prefix_when_stream_buffer_rolls() {
+        let mut command = Command::new("sh");
+        command.arg("-lc").arg("printf abcdef");
+        let session = CommandSession::spawn(command, TargetId::Local, 4, None).unwrap();
+        let snapshot = session.wait();
+        assert_eq!(snapshot.stdout, b"abcd");
+        assert!(snapshot.stdout_truncated);
+
+        let delta = session.output_since(0, 0, 1024);
+        assert_eq!(delta.stdout, b"cdef");
+        assert!(delta.stdout_truncated);
     }
 }

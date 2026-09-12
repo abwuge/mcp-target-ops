@@ -9,6 +9,7 @@ use crate::{
     tooling::job::ExecStartRequest,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::{collections::BTreeMap, thread, time::Instant};
 
 const MAX_BATCH_COMMANDS: usize = 32;
@@ -124,6 +125,14 @@ pub struct RawExecOutput {
 }
 
 pub fn run(state: &AppState, req: ExecRequest) -> Result<ExecResponse> {
+    run_with_request_id(state, req, None)
+}
+
+pub fn run_with_request_id(
+    state: &AppState,
+    req: ExecRequest,
+    request_id: Option<&Value>,
+) -> Result<ExecResponse> {
     let command = req.command.clone();
     let output = state.jobs.run_foreground(
         state,
@@ -135,6 +144,7 @@ pub fn run(state: &AppState, req: ExecRequest) -> Result<ExecResponse> {
             max_output_bytes: req.max_output_bytes,
             secret_env: req.secret_env,
         },
+        request_id,
     )?;
 
     Ok(ExecResponse {

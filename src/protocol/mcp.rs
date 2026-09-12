@@ -139,7 +139,11 @@ fn handle_request(state: Arc<AppState>, request: RpcRequest) -> Option<RpcRespon
                 .oauth_enabled
                 .then_some(state.config.server.oauth_scopes.as_slice())
         ) })),
-        "tools/call" => tools_call(state, request.params.unwrap_or_else(|| json!({}))),
+        "tools/call" => tools_call(
+            state,
+            id.as_ref(),
+            request.params.unwrap_or_else(|| json!({})),
+        ),
         "resources/list" => Ok(apps::list_resources(
             state.config.server.public_base_url.as_deref(),
         )),
@@ -197,7 +201,7 @@ fn initialize(state: &AppState, params: Value) -> Result<Value> {
     }))
 }
 
-fn tools_call(state: Arc<AppState>, params: Value) -> Result<Value> {
+fn tools_call(state: Arc<AppState>, request_id: Option<&Value>, params: Value) -> Result<Value> {
     #[derive(Deserialize)]
     struct ToolCallParams {
         name: String,
@@ -206,10 +210,11 @@ fn tools_call(state: Arc<AppState>, params: Value) -> Result<Value> {
     }
 
     let params: ToolCallParams = serde_json::from_value(params)?;
-    match tools::call_tool(
+    match tools::call_tool_with_request_id(
         state,
         &params.name,
         params.arguments.unwrap_or_else(|| json!({})),
+        request_id,
     ) {
         Ok(mut value) => {
             let content = if params.name == "file_export" {

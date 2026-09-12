@@ -28,11 +28,11 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
         tool("target_select", "Select a session-scoped active target. Later calls may omit target and use this sticky target.", object_schema(vec![required_string("target", "Target id: local or ssh:<profile>")])),
         tool("target_connect", "Connect or warm an SSH target persistent worker.", object_schema(vec![required_string("target", "Target id: local or ssh:<profile>")])),
         tool("target_disconnect", "Disconnect an SSH target persistent worker, or no-op for local targets.", object_schema(vec![required_string("target", "Target id: local or ssh:<profile>")])),
-        tool("mcp_server_list", "List configured downstream MCP servers. Secret values and endpoint URLs are not exposed.", object_schema(vec![])),
+        tool("mcp_server_list", "List downstream MCP servers.", object_schema(vec![])),
         tool("mcp_tools_list", "Initialize one configured downstream MCP server and return its tools/list result.", object_schema(vec![
             required_string("server", "Configured downstream MCP server name."),
         ])),
-        tool("mcp_tool_call", "Initialize one configured downstream MCP server and call one of its tools. Only configured servers are reachable; credentials stay in server-owned configuration or server-side secret references.", object_schema(vec![
+        tool("mcp_tool_call", "Initialize a configured downstream MCP server and call one of its tools.", object_schema(vec![
             required_string("server", "Configured downstream MCP server name."),
             required_string("tool", "Downstream MCP tool name."),
             optional_value("arguments", "JSON object passed as downstream tool arguments. Defaults to an empty object.", json!({"type":"object","additionalProperties":true})),
@@ -43,7 +43,17 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
             optional_string("cwd", "Working directory."),
             optional_integer("timeout_ms", "Timeout in milliseconds."),
             optional_integer("max_output_bytes", "Maximum bytes to return for stdout and stderr."),
-            optional_value("secret_env", "Map environment variable names to secret references. Secret values are resolved inside Target Ops and are not included in the tool request or tool metadata; commands can still expose them if they print their environment.", secret_env_schema()),
+            optional_value("secret_env", "Map environment variable names to server-side secret references.", secret_env_schema()),
+        ])),
+        tool("exec_stream", "Read incremental output from the foreground exec session associated with this App view.", object_schema(vec![
+            optional_string("session_id", "Foreground exec session id returned by a previous exec_stream call."),
+            optional_value("request_id", "Original MCP tools/call JSON-RPC id used to attach this App to its exact exec session.", json!({"type":["string","number"]})),
+            optional_string("target", "Original exec target argument; compatibility fallback when request_id is unavailable."),
+            optional_string("command", "Original exec command; compatibility fallback when request_id is unavailable."),
+            optional_string("cwd", "Original exec working directory; compatibility fallback when request_id is unavailable."),
+            optional_integer("stdout_since_seq", "Last stdout sequence already consumed."),
+            optional_integer("stderr_since_seq", "Last stderr sequence already consumed."),
+            optional_integer("max_bytes", "Maximum bytes to return from each stream."),
         ])),
         tool("exec_batch", "Run multiple logically independent non-interactive commands in one tool call and return a separate result for each. Prefer this over combining unrelated inspections with shell separators; use exec for commands that must share shell state such as cd, variables, pipelines, or control flow. Prefer batch file_read for reading several known files.", exec_batch_schema()),
         tool("exec_start", "Start a non-interactive command as a background job. Jobs use dedicated processes, support incremental output and cancellation, and do not block later tool calls.", object_schema(vec![
@@ -52,7 +62,7 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
             optional_string("cwd", "Working directory."),
             optional_integer("timeout_ms", "Optional job timeout in milliseconds. Omit for no runtime timeout."),
             optional_integer("max_output_bytes", "Maximum retained bytes for each stdout and stderr buffer."),
-            optional_value("secret_env", "Map environment variable names to secret references. Secret values are resolved inside Target Ops and are not included in the tool request or tool metadata; commands can still expose them if they print their environment.", secret_env_schema()),
+            optional_value("secret_env", "Map environment variable names to server-side secret references.", secret_env_schema()),
         ])),
         tool("job_poll", "Return the current state and exit information for a background job.", object_schema(vec![
             required_string("job_id", "Job id returned by exec_start."),
@@ -155,11 +165,21 @@ fn tool(
         );
     }
 
+    if name == "exec_stream" {
+        meta.insert("ui".to_string(), json!({ "visibility": ["app"] }));
+        meta.insert("openai/widgetAccessible".to_string(), Value::Bool(true));
+        meta.insert(
+            "openai/visibility".to_string(),
+            Value::String("private".to_string()),
+        );
+    }
+
     if matches!(name, "exec" | "exec_batch") {
         meta.insert(
             "ui".to_string(),
             json!({ "resourceUri": EXEC_TERMINAL_UI_URI }),
         );
+        meta.insert("openai/widgetAccessible".to_string(), Value::Bool(true));
         meta.insert(
             "openai/outputTemplate".to_string(),
             Value::String(EXEC_TERMINAL_UI_URI.to_string()),
@@ -255,6 +275,7 @@ fn tool_annotations(name: &str) -> Value {
             | "mcp_tools_list"
             | "job_poll"
             | "job_output"
+            | "exec_stream"
             | "file_read"
             | "file_list"
             | "file_export"
@@ -384,7 +405,7 @@ fn exec_batch_schema() -> Value {
             },
             "mode": { "type": "string", "enum": ["sequential", "parallel"], "description": "Execution mode. Defaults to sequential." },
             "stop_on_error": { "type": "boolean", "description": "In sequential mode, stop after the first non-zero, timed-out, or tool-level failure. Defaults to false." },
-            "secret_env": { "description": "Shared secret environment map for all commands. Secret values are resolved inside Target Ops and omitted from tool metadata.", "type": "object", "additionalProperties": secret_ref_schema() }
+            "secret_env": { "description": "Shared map of environment variable names to server-side secret references.", "type": "object", "additionalProperties": secret_ref_schema() }
         },
         "required": ["commands"],
         "additionalProperties": false
@@ -633,7 +654,7 @@ mod tests {
         let tools = list_tools(None);
         let tools = tools.as_array().expect("tool list is an array");
 
-        assert_eq!(tools.len(), 32);
+        assert_eq!(tools.len(), 33);
         for tool in tools {
             let name = tool["name"].as_str().expect("tool has a name");
             assert_eq!(
@@ -690,6 +711,25 @@ mod tests {
             file_read["_meta"]["openai/toolInvocation/invoked"],
             "File read"
         );
+    }
+
+    #[test]
+    fn exec_stream_is_app_only_and_exec_widget_can_call_tools() {
+        let tools = list_tools(None);
+        let tools = tools.as_array().unwrap();
+        let stream = tools
+            .iter()
+            .find(|tool| tool["name"] == "exec_stream")
+            .expect("exec_stream tool");
+        assert_eq!(stream["_meta"]["ui"]["visibility"], json!(["app"]));
+        assert_eq!(stream["_meta"]["openai/visibility"], "private");
+        assert_eq!(stream["_meta"]["openai/widgetAccessible"], true);
+
+        let exec = tools
+            .iter()
+            .find(|tool| tool["name"] == "exec")
+            .expect("exec tool");
+        assert_eq!(exec["_meta"]["openai/widgetAccessible"], true);
     }
 
     #[test]

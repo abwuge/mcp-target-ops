@@ -91,6 +91,28 @@ pub(super) fn output_schema(name: &str) -> Value {
             "required": ["command", "resolved_target"],
             "additionalProperties": false
         }),
+        "exec_stream" => json!({
+            "type": "object",
+            "properties": {
+                "attached": { "type": "boolean" },
+                "session_id": nullable_string_schema(),
+                "target": nullable_string_schema(),
+                "status": nullable_string_schema(),
+                "exit_code": nullable_integer_schema(),
+                "elapsed_ms": { "type": ["integer", "null"], "minimum": 0 },
+                "stdout_from_seq": { "type": "integer", "minimum": 0 },
+                "stdout_next_seq": { "type": "integer", "minimum": 0 },
+                "stdout": { "type": "string" },
+                "stdout_truncated": { "type": "boolean" },
+                "stderr_from_seq": { "type": "integer", "minimum": 0 },
+                "stderr_next_seq": { "type": "integer", "minimum": 0 },
+                "stderr": { "type": "string" },
+                "stderr_truncated": { "type": "boolean" },
+                "eof": { "type": "boolean" }
+            },
+            "required": ["attached", "stdout_from_seq", "stdout_next_seq", "stdout_truncated", "stderr_from_seq", "stderr_next_seq", "stderr_truncated", "eof"],
+            "additionalProperties": false
+        }),
         "exec_batch" => json!({
             "type": "object",
             "properties": {

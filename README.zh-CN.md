@@ -307,14 +307,14 @@ URL 或秘密值。高级部署仍可使用内联 URL 或文件秘密引用，�
 
 ## 工具列表
 
-Target Ops 当前共提供 32 个工具。
+Target Ops 当前发布 33 个工具描述：32 个模型可见工具，以及 1 个仅供 App 使用的 `exec_stream`。
 
 | 类别 | 工具 |
 | --- | --- |
 | 服务 | `server_info` |
 | 目标 | `target_list`、`target_current`、`target_select`、`target_connect`、`target_disconnect` |
 | 下游 MCP | `mcp_server_list`、`mcp_tools_list`、`mcp_tool_call` |
-| 命令与任务 | `exec`、`exec_batch`、`exec_start`、`job_poll`、`job_output`、`job_cancel` |
+| 命令与任务 | `exec`、`exec_batch`、`exec_start`、`job_poll`、`job_output`、`job_cancel`；仅 App：`exec_stream` |
 | 文件与目录 | `file_read`、`file_list`、`file_find`、`file_edit`、`file_write`、`file_delete`、`file_import`、`file_export`、`file_patch`、`file_move`、`file_chmod`、`directory_create` |
 | 终端 | `terminal_open`、`terminal_send`、`terminal_read`、`terminal_resize`、`terminal_close` |
 
@@ -327,8 +327,7 @@ scope。
 `target_list` 与 `mcp_server_list` 共用稳定的
 `ui://target-ops/inventory/v1.html` MCP App。该紧凑卡片会展示目标类型、active/enabled
 状态、允许的操作与目录，或下游 MCP 服务器的启用状态、配置来源、超时、响应大小
-限制和安全的请求头数量信息。该界面只用于展示，不会暴露下游 endpoint URL 或秘密
-值。
+限制和请求头数量信息。
 
 ### 命令与后台任务
 
@@ -338,17 +337,17 @@ scope。
 管道或控制流等 shell 状态，应继续使用 `exec`；若只是为了减少工具调用而批量进行互不
 依赖的检查，应优先使用 `exec_batch`，而不是用 shell 分隔符强行拼接。
 
-两者都绑定到稳定的 `ui://target-ops/exec-terminal/v1.html` MCP App。单条命令会展示
-stdout、stderr、目标、退出码、超时和截断状态，并自动折叠较长的成功输出；批量结果
-采用紧凑命令行列表，成功项默认收起，失败项自动展开。ANSI SGR 颜色/样式会被安全
-渲染，不再直接显示原始转义码。`ExecResponse` 也会携带实际执行的命令，因此 App 无需
-依赖不同客户端是否转发工具输入，也能稳定显示命令。为兼容客户端缓存与资源发现，资源
-URI 保持不变，但视觉设计不再模拟可交互终端。
+两者都绑定到稳定的 `ui://target-ops/exec-terminal/v1.html` MCP App。前台 `exec`
+运行时，App 会通过仅 App 可见的 `exec_stream` 附着到对应会话，并使用相互独立的
+stdout/stderr 序号游标轮询增量输出。输出在运行期间默认展开；成功结束后约 3 秒自动
+折叠，失败和超时保持展开。批量命令同样先展开，成功项结束后再延迟折叠。ANSI SGR
+颜色/样式会被安全渲染。资源 URI 保持不变以兼容客户端缓存与资源发现。
 
-子进程 stdin 与 MCP 控制流隔离。`exec_start` 使用独立进程启动任务并立即返回任务
-ID；`job_output` 通过相互独立的 stdout/stderr 序号游标增量读取输出，`job_poll`
-查询状态，`job_cancel` 请求终止。SSH 后台任务不会占用普通操作使用的持久 SSH
-worker。
+`exec` 与 `exec_start` 现在共用同一套 `CommandSession`，统一处理进程生命周期、
+stdout/stderr 捕获、超时、取消与增量输出。`exec` 会等待会话结束，并在未显式设置
+超时时继续使用目标策略的默认 timeout；`exec_start` 会立即返回任务 ID，未指定时不
+设置运行时 timeout。子进程 stdin 与 MCP 控制流隔离。SSH 命令会话使用独立 OpenSSH
+进程；远程文件操作继续复用每个目标的持久 SSH worker。
 
 两个命令工具都支持 `secret_env`。值可以来自纯文本文件，也可以来自 TOML/JSON
 中以点号路径选中的标量：

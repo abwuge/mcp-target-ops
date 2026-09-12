@@ -37,20 +37,16 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
 .chip.type { background: var(--accent-bg); }
 .meta { margin-top: 5px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
 .notice { padding: 14px 12px; color: var(--muted); }
-.details { border-top: 1px solid var(--border); }
-.details summary { cursor: pointer; padding: 8px 12px; font-size: 12px; user-select: none; color: var(--muted); }
-.detail-list { padding: 0 12px 10px; color: var(--muted); font-size: 11px; }
 </style>
 </head>
 <body>
 <div class="card">
   <div class="head">
-    <div class="file"><div class="title" id="title">Inventory</div><div class="path" id="subtitle">Configured resources</div></div>
+    <div class="file"><div class="title" id="title">Inventory</div><div class="path" id="subtitle"></div></div>
     <div class="kind" id="kind">Inventory</div>
     <div class="status" id="count">0 items</div>
   </div>
   <div class="viewer" id="list"><div class="notice" id="empty">Waiting for results…</div></div>
-  <details class="details"><summary>Details</summary><div class="detail-list" id="details">Read-only configuration summary. Endpoint URLs and secret values are not exposed.</div></details>
 </div>
 <script>
 (() => {
@@ -59,7 +55,6 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
   const kind = document.getElementById('kind');
   const count = document.getElementById('count');
   const list = document.getElementById('list');
-  const details = document.getElementById('details');
 
   function element(tag, className, text) { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = String(text); return node; }
   function chip(text, className = '') { return element('span', `chip ${className}`.trim(), text); }
@@ -70,7 +65,7 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
 
   function renderTargets(targets) {
     title.textContent = 'Targets';
-    subtitle.textContent = 'Local and SSH execution targets';
+    subtitle.textContent = '';
     kind.textContent = 'Inventory';
     setCount(targets.length, targets.some(item => item.enabled !== false));
     clearList();
@@ -88,12 +83,11 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
       if (roots.length) parts.push(`roots: ${roots.join(', ')}`); if (policy.require_explicit_target_for_write) parts.push('explicit target required for writes');
       row.appendChild(element('div', 'meta', parts.join('  ·  '))); list.appendChild(row);
     }
-    details.textContent = `${targets.length} configured target${targets.length === 1 ? '' : 's'}. This view is read-only.`;
   }
 
   function renderServers(servers) {
     title.textContent = 'MCP servers';
-    subtitle.textContent = 'Configured downstream servers';
+    subtitle.textContent = '';
     kind.textContent = 'Inventory';
     setCount(servers.length, servers.some(item => item.enabled !== false));
     clearList();
@@ -109,14 +103,13 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
       if (staticHeaders || secretHeaders) parts.push(`headers: ${staticHeaders} static, ${secretHeaders} secret`);
       row.appendChild(element('div', 'meta', parts.join('  ·  '))); list.appendChild(row);
     }
-    details.textContent = `${servers.length} configured downstream server${servers.length === 1 ? '' : 's'}. Endpoint URLs and secret values are not exposed.`;
   }
 
   function render(raw) {
     const data = raw && typeof raw === 'object' ? raw : {};
     if (Array.isArray(data.targets)) { renderTargets(data.targets); return; }
     if (Array.isArray(data.servers)) { renderServers(data.servers); return; }
-    title.textContent = 'Inventory'; subtitle.textContent = 'Configured resources'; kind.textContent = 'Inventory'; count.textContent = '0 items'; count.className = 'status'; clearList(); list.appendChild(element('div', 'notice', 'No inventory data available.'));
+    title.textContent = 'Inventory'; subtitle.textContent = ''; kind.textContent = 'Inventory'; count.textContent = '0 items'; count.className = 'status'; clearList(); list.appendChild(element('div', 'notice', 'No inventory data available.'));
   }
 
   let rpcId = 0; const pendingRequests = new Map();
