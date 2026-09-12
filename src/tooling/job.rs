@@ -462,7 +462,7 @@ impl JobRegistry {
             req.max_bytes.unwrap_or(64 * 1024).clamp(1, 512 * 1024),
         );
         let status = session.status_snapshot();
-        let response = JobOutputResponse {
+        Ok(JobOutputResponse {
             job_id: req.job_id,
             target: session.target.to_string(),
             status: session.state().to_string(),
@@ -478,11 +478,7 @@ impl JobRegistry {
             stderr: String::from_utf8_lossy(&delta.stderr).to_string(),
             stderr_truncated: delta.stderr_truncated,
             eof: delta.eof,
-        };
-        if response.eof {
-            self.mark_delivered(&response.job_id, caller_key)?;
-        }
-        Ok(response)
+        })
     }
 
     #[cfg(test)]
@@ -508,6 +504,9 @@ impl JobRegistry {
             },
             caller_key,
         )?;
+        if output.eof {
+            self.mark_delivered(&output.job_id, caller_key)?;
+        }
         Ok(JobWaitResponse {
             wait_timed_out: !completed && !output.eof,
             output,
@@ -1107,6 +1106,57 @@ mod tests {
         assert_eq!(completed[0].job_id, started.job_id);
         assert_eq!(completed[0].stdout, "queued");
         assert!(state.jobs.take_completed_for_caller("caller-a").is_empty());
+    }
+
+    #[test]
+    fn job_output_peek_does_not_claim_completion() {
+        let state = test_state();
+        let started = state
+            .jobs
+            .start_for_caller(
+                &state,
+                ExecStartRequest {
+                    target: Some("local".into()),
+                    command: "printf peeked".into(),
+                    cwd: None,
+                    timeout_ms: Some(1000),
+                    max_output_bytes: None,
+                    secret_env: BTreeMap::new(),
+                },
+                "caller-a",
+            )
+            .unwrap();
+        while state
+            .jobs
+            .poll_for_caller(
+                JobPollRequest {
+                    job_id: started.job_id.clone(),
+                },
+                "caller-a",
+            )
+            .unwrap()
+            .status
+            == "running"
+        {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let output = state
+            .jobs
+            .output_for_caller(
+                JobOutputRequest {
+                    job_id: started.job_id.clone(),
+                    stdout_since_seq: None,
+                    stderr_since_seq: None,
+                    max_bytes: None,
+                },
+                "caller-a",
+            )
+            .unwrap();
+        assert!(output.eof);
+        assert_eq!(output.stdout, "peeked");
+        let completed = state.jobs.take_completed_for_caller("caller-a");
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].job_id, started.job_id);
     }
 
     #[test]
