@@ -203,6 +203,8 @@ mod tests {
         assert!(html.contains("renderDiff"));
         assert!(html.contains("lineRow(kind === 'deleted'"));
         assert!(html.contains("Binary file content shown as base64"));
+        assert!(html.contains(": 'File change';"));
+        assert!(html.contains("width: max-content; min-width: 100%"));
     }
 
     #[test]
@@ -216,6 +218,9 @@ mod tests {
         assert!(html.contains("renderBatch"));
         assert!(html.contains("lineRows"));
         assert!(html.contains("requested_count"));
+        assert!(html.contains("title.textContent = 'File read';"));
+        assert!(!html.contains("title.textContent = baseName(path)"));
+        assert!(html.contains("width: max-content; min-width: 100%"));
     }
 
     #[test]

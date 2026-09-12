@@ -45,7 +45,7 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
 .file-state.error { color: var(--error); }
 .file-state.warn { color: var(--warning); }
 .file-body { border-top: 1px solid color-mix(in srgb, currentColor 8%, transparent); }
-.code-line { display: grid; grid-template-columns: 52px minmax(max-content, 1fr); min-height: 20px; font: 12px/20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.code-line { display: grid; grid-template-columns: 52px max-content; width: max-content; min-width: 100%; min-height: 20px; font: 12px/20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .gutter { padding: 0 7px; text-align: right; user-select: none; color: var(--muted); border-right: 1px solid color-mix(in srgb, currentColor 8%, transparent); }
 .code { padding: 0 10px; white-space: pre; }
 .notice { padding: 14px 12px; color: var(--muted); }
@@ -80,7 +80,6 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
   const details = document.getElementById('details');
 
   const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
-  const baseName = path => String(path || '').split('/').filter(Boolean).pop() || 'File read';
   const metaRow = (label, value) => value === undefined || value === null || value === '' ? '' : `<div class="meta-row"><div class="meta-label">${esc(label)}</div><div class="meta-value">${esc(value)}</div></div>`;
 
   function lineRows(content, startLine, encoding) {
@@ -100,7 +99,7 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
 
   function renderSingle(data) {
     const path = data.path || '';
-    title.textContent = baseName(path);
+    title.textContent = 'File read';
     pathEl.textContent = path;
     kindEl.textContent = rangeText(data) || 'Read';
     statusEl.textContent = data.truncated ? 'Truncated' : 'Read';

@@ -44,7 +44,7 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
 .viewer { max-height: 480px; overflow: auto; background: color-mix(in srgb, currentColor 2%, transparent); }
 .file-block + .file-block { border-top: 1px solid var(--border); }
 .file-label { position: sticky; top: 0; z-index: 2; padding: 6px 10px; border-bottom: 1px solid var(--border); background: Canvas; font: 11px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; opacity: .78; }
-.code-line { display: grid; grid-template-columns: 42px 42px minmax(max-content, 1fr); min-height: 20px; font: 12px/20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.code-line { display: grid; grid-template-columns: 42px 42px max-content; width: max-content; min-width: 100%; min-height: 20px; font: 12px/20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .code-line.added { background: var(--add-bg); }
 .code-line.removed { background: var(--del-bg); }
 .code-line.added .gutter { background: var(--add-strong); }
@@ -84,7 +84,6 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
 
   const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
   const metaRow = (label, value) => value === undefined || value === null || value === '' ? '' : `<div class="meta-row"><div class="meta-label">${esc(label)}</div><div class="meta-value">${esc(value)}</div></div>`;
-  const baseName = path => String(path || '').split('/').filter(Boolean).pop() || 'File change';
   const lineRow = (oldNo, newNo, text, cls = '') => `<div class="code-line ${cls}"><span class="gutter">${oldNo ?? ''}</span><span class="gutter">${newNo ?? ''}</span><span class="code">${esc(text)}</span></div>`;
 
   function renderFull(content, kind, encoding) {
@@ -165,7 +164,7 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     const kind = inferKind(data);
     const label = kind === 'added' ? 'Added' : kind === 'deleted' ? 'Deleted' : kind === 'renamed' ? 'Renamed' : 'Modified';
 
-    title.textContent = paths.length > 1 ? `${paths.length} files changed` : baseName(primaryPath);
+    title.textContent = paths.length > 1 ? `${paths.length} files changed` : 'File change';
     pathEl.textContent = paths.length > 1 ? paths.join(' · ') : primaryPath;
     kindEl.textContent = label;
     kindEl.className = `kind ${kind === 'renamed' ? 'modified' : kind}`;
