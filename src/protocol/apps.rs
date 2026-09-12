@@ -181,7 +181,9 @@ mod tests {
         assert!(html.contains("ui/notifications/initialized"));
         assert!(html.contains("appInfo: { name: 'target-ops-exec-result'"));
         assert!(html.contains("Command result"));
-        assert!(html.contains("exec_stream"));
+        assert!(html.contains("job_output"));
+        assert!(html.contains("result_read"));
+        assert!(html.contains("scheduleLifecycle"));
         assert!(html.contains("data.command"));
         assert!(html.contains("renderAnsi"));
         assert!(html.contains("stdout_truncated"));

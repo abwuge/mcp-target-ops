@@ -307,14 +307,14 @@ URL 或秘密值。高级部署仍可使用内联 URL 或文件秘密引用，�
 
 ## 工具列表
 
-Target Ops 当前发布 33 个工具描述：32 个模型可见工具，以及 1 个仅供 App 使用的 `exec_stream`。
+Target Ops 当前发布 34 个工具描述：32 个模型可见工具，以及 2 个仅供 App 使用的 `exec_stream` 与 `result_read`。
 
 | 类别 | 工具 |
 | --- | --- |
 | 服务 | `server_info` |
 | 目标 | `target_list`、`target_current`、`target_select`、`target_connect`、`target_disconnect` |
 | 下游 MCP | `mcp_server_list`、`mcp_tools_list`、`mcp_tool_call` |
-| 命令与任务 | `exec`、`exec_batch`、`exec_start`、`job_poll`、`job_output`、`job_cancel`；仅 App：`exec_stream` |
+| 命令与任务 | `exec`、`exec_batch`、`exec_start`、`job_poll`、`job_output`、`job_cancel`；仅 App：`exec_stream`、`result_read` |
 | 文件与目录 | `file_read`、`file_list`、`file_find`、`file_edit`、`file_write`、`file_delete`、`file_import`、`file_export`、`file_patch`、`file_move`、`file_chmod`、`directory_create` |
 | 终端 | `terminal_open`、`terminal_send`、`terminal_read`、`terminal_resize`、`terminal_close` |
 
@@ -337,17 +337,14 @@ scope。
 管道或控制流等 shell 状态，应继续使用 `exec`；若只是为了减少工具调用而批量进行互不
 依赖的检查，应优先使用 `exec_batch`，而不是用 shell 分隔符强行拼接。
 
-两者都绑定到稳定的 `ui://target-ops/exec-terminal/v1.html` MCP App。前台 `exec`
-运行时，App 会使用 host context 中原始 MCP `tools/call` request id，通过仅 App 可见的
-`exec_stream` 精确附着到对应会话，再以相互独立的 stdout/stderr 序号游标轮询增量输出；
-旧 Host 若不提供该 id，则兼容回退到原始命令参数匹配。输出在运行期间默认展开；成功结束后约 3 秒自动
-折叠，失败和超时保持展开。批量命令同样先展开，成功项结束后再延迟折叠。ANSI SGR
-颜色/样式会被安全渲染。资源 URI 保持不变以兼容客户端缓存与资源发现。
+`exec`、`exec_batch` 与 `exec_start` 都绑定到稳定的 `ui://target-ops/exec-terminal/v1.html` MCP App。同步 `exec` 保持为短命令路径并正常等待最终结果；预计运行超过几秒，或实时输出有价值时，应优先使用 `exec_start`。它会立即返回 job id，因此 App 可以在主工具调用结束后约每 180 ms 调用一次 `job_output` 获取 stdout/stderr 增量，不会再被同步父调用阻塞。ANSI SGR 颜色/样式会被安全渲染。
+
+所有 Target Ops App 使用统一的结果卡生命周期：成功卡约 3 秒后自动折叠；失败、超时或类似 warning 的卡片也会自动折叠，只是延迟稍长，约 6 秒，因为这类异常通常会被模型自己继续处理。约 30 秒后卡片进入 sleep，清空完整输出、diff、代码行和 ANSI DOM，只保留轻量摘要。静态工具结果缓存在 `runtime_dir/results/` 下，TTL 为 1 小时，总容量上限 100 MiB；用户重新展开时由仅 App 可见的 `result_read` 按每个结果独立生成的不可预测 `result_id` 恢复。长命令卡则从保留的 job output buffer 重新构造。当前不自动请求 iframe teardown，因此历史卡片仍可重新打开。
 
 `exec` 与 `exec_start` 现在共用同一套 `CommandSession`，统一处理进程生命周期、
 stdout/stderr 捕获、超时、取消与增量输出。`exec` 会等待会话结束，并在未显式设置
 超时时继续使用目标策略的默认 timeout；`exec_start` 会立即返回任务 ID，未指定时不
-设置运行时 timeout。子进程 stdin 与 MCP 控制流隔离。SSH 命令会话使用独立 OpenSSH
+设置运行时 timeout。当前 ChatGPT Host 会把 App 发起的工具调用排在正在执行的同步 `exec` 之后，因此实时 UI 输出明确通过 `exec_start` 实现，而不再依赖前台 `exec_stream` 轮询。子进程 stdin 与 MCP 控制流隔离。SSH 命令会话使用独立 OpenSSH
 进程；远程文件操作继续复用每个目标的持久 SSH worker。
 
 两个命令工具都支持 `secret_env`。值可以来自纯文本文件，也可以来自 TOML/JSON

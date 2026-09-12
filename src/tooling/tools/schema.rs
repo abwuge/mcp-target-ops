@@ -1,7 +1,7 @@
 use serde_json::{json, Value};
 
 pub(super) fn output_schema(name: &str) -> Value {
-    match name {
+    let mut schema = match name {
         "server_info" => json!({
             "type": "object",
             "properties": {
@@ -113,6 +113,15 @@ pub(super) fn output_schema(name: &str) -> Value {
             "required": ["attached", "stdout_from_seq", "stdout_next_seq", "stdout_truncated", "stderr_from_seq", "stderr_next_seq", "stderr_truncated", "eof"],
             "additionalProperties": false
         }),
+        "result_read" => json!({
+            "type": "object",
+            "properties": {
+                "found": { "type": "boolean" },
+                "data": {}
+            },
+            "required": ["found"],
+            "additionalProperties": false
+        }),
         "exec_batch" => json!({
             "type": "object",
             "properties": {
@@ -161,6 +170,10 @@ pub(super) fn output_schema(name: &str) -> Value {
             "properties": {
                 "job_id": { "type": "string" },
                 "target": { "type": "string" },
+                "status": { "type": "string", "enum": ["running", "completed", "failed", "cancelled", "timed_out"] },
+                "exit_code": nullable_integer_schema(),
+                "elapsed_ms": { "type": "integer", "minimum": 0 },
+                "timed_out": { "type": "boolean" },
                 "stdout_from_seq": { "type": "integer", "minimum": 0 },
                 "stdout_next_seq": { "type": "integer", "minimum": 0 },
                 "stdout": { "type": "string" },
@@ -171,7 +184,7 @@ pub(super) fn output_schema(name: &str) -> Value {
                 "stderr_truncated": { "type": "boolean" },
                 "eof": { "type": "boolean" }
             },
-            "required": ["job_id", "target", "stdout_from_seq", "stdout_next_seq", "stdout", "stdout_truncated", "stderr_from_seq", "stderr_next_seq", "stderr", "stderr_truncated", "eof"],
+            "required": ["job_id", "target", "status", "elapsed_ms", "timed_out", "stdout_from_seq", "stdout_next_seq", "stdout", "stdout_truncated", "stderr_from_seq", "stderr_next_seq", "stderr", "stderr_truncated", "eof"],
             "additionalProperties": false
         }),
         "job_cancel" => json!({
@@ -445,7 +458,30 @@ pub(super) fn output_schema(name: &str) -> Value {
             "additionalProperties": false
         }),
         _ => unreachable!("output schema missing for tool {name}"),
+    };
+
+    if caches_app_result(name) {
+        schema["properties"]["result_id"] = json!({ "type": "string" });
     }
+    schema
+}
+
+fn caches_app_result(name: &str) -> bool {
+    matches!(
+        name,
+        "target_list"
+            | "mcp_server_list"
+            | "exec"
+            | "exec_batch"
+            | "exec_start"
+            | "file_read"
+            | "file_edit"
+            | "file_write"
+            | "file_delete"
+            | "file_import"
+            | "file_patch"
+            | "file_move"
+    )
 }
 
 fn file_read_batch_item_schema() -> Value {

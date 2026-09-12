@@ -37,7 +37,7 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
             required_string("tool", "Downstream MCP tool name."),
             optional_value("arguments", "JSON object passed as downstream tool arguments. Defaults to an empty object.", json!({"type":"object","additionalProperties":true})),
         ])),
-        tool("exec", "Run one non-interactive shell command or script on the explicit target or current active target. Use exec_batch instead when you need several logically independent command results. Prefer file_read/file_find over cat, sed, or grep when the task is purely reading known files.", object_schema(vec![
+        tool("exec", "Run one short non-interactive shell command or script and wait for its final result. Prefer exec_start when a command may run for more than a few seconds or live output would be useful. Use exec_batch for several logically independent commands. Prefer file_read/file_find over cat, sed, or grep when reading known files.", object_schema(vec![
             optional_string("target", "Target id: local or ssh:<profile>. Omit to use active target."),
             required_string("command", "Shell command or script to execute as one shell unit."),
             optional_string("cwd", "Working directory."),
@@ -55,8 +55,11 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
             optional_integer("stderr_since_seq", "Last stderr sequence already consumed."),
             optional_integer("max_bytes", "Maximum bytes to return from each stream."),
         ])),
+        tool("result_read", "Reload a cached tool result for a sleeping App view.", object_schema(vec![
+            required_string("result_id", "Opaque result id returned with the original App-backed tool result."),
+        ])),
         tool("exec_batch", "Run multiple logically independent non-interactive commands in one tool call and return a separate result for each. Prefer this over combining unrelated inspections with shell separators; use exec for commands that must share shell state such as cd, variables, pipelines, or control flow. Prefer batch file_read for reading several known files.", exec_batch_schema()),
-        tool("exec_start", "Start a non-interactive command as a background job. Jobs use dedicated processes, support incremental output and cancellation, and do not block later tool calls.", object_schema(vec![
+        tool("exec_start", "Start a non-interactive command as a background job and return immediately. Prefer this for longer commands or when live output matters; the command App streams progress through job_output while the model remains free to continue. Jobs support cancellation and optional runtime timeouts.", object_schema(vec![
             optional_string("target", "Target id: local or ssh:<profile>. Omit to use active target."),
             required_string("command", "Shell command to execute."),
             optional_string("cwd", "Working directory."),
@@ -165,7 +168,7 @@ fn tool(
         );
     }
 
-    if name == "exec_stream" {
+    if matches!(name, "exec_stream" | "result_read") {
         meta.insert("ui".to_string(), json!({ "visibility": ["app"] }));
         meta.insert("openai/widgetAccessible".to_string(), Value::Bool(true));
         meta.insert(
@@ -174,7 +177,7 @@ fn tool(
         );
     }
 
-    if matches!(name, "exec" | "exec_batch") {
+    if matches!(name, "exec" | "exec_batch" | "exec_start") {
         meta.insert(
             "ui".to_string(),
             json!({ "resourceUri": EXEC_TERMINAL_UI_URI }),
@@ -186,6 +189,8 @@ fn tool(
         );
         let (invoking, invoked) = if name == "exec_batch" {
             ("Running command batch…", "Command batch finished")
+        } else if name == "exec_start" {
+            ("Starting command…", "Command started")
         } else {
             ("Running command…", "Command finished")
         };
@@ -197,6 +202,10 @@ fn tool(
             "openai/toolInvocation/invoked".to_string(),
             Value::String(invoked.to_string()),
         );
+    }
+
+    if name == "job_output" {
+        meta.insert("openai/widgetAccessible".to_string(), Value::Bool(true));
     }
 
     if name == "file_read" {
@@ -276,6 +285,7 @@ fn tool_annotations(name: &str) -> Value {
             | "job_poll"
             | "job_output"
             | "exec_stream"
+            | "result_read"
             | "file_read"
             | "file_list"
             | "file_export"
@@ -654,7 +664,7 @@ mod tests {
         let tools = list_tools(None);
         let tools = tools.as_array().expect("tool list is an array");
 
-        assert_eq!(tools.len(), 33);
+        assert_eq!(tools.len(), 34);
         for tool in tools {
             let name = tool["name"].as_str().expect("tool has a name");
             assert_eq!(
@@ -717,19 +727,23 @@ mod tests {
     fn exec_stream_is_app_only_and_exec_widget_can_call_tools() {
         let tools = list_tools(None);
         let tools = tools.as_array().unwrap();
-        let stream = tools
-            .iter()
-            .find(|tool| tool["name"] == "exec_stream")
-            .expect("exec_stream tool");
-        assert_eq!(stream["_meta"]["ui"]["visibility"], json!(["app"]));
-        assert_eq!(stream["_meta"]["openai/visibility"], "private");
-        assert_eq!(stream["_meta"]["openai/widgetAccessible"], true);
+        for name in ["exec_stream", "result_read"] {
+            let tool = tools
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .expect("app-only tool");
+            assert_eq!(tool["_meta"]["ui"]["visibility"], json!(["app"]));
+            assert_eq!(tool["_meta"]["openai/visibility"], "private");
+            assert_eq!(tool["_meta"]["openai/widgetAccessible"], true);
+        }
 
-        let exec = tools
-            .iter()
-            .find(|tool| tool["name"] == "exec")
-            .expect("exec tool");
-        assert_eq!(exec["_meta"]["openai/widgetAccessible"], true);
+        for name in ["exec", "exec_start", "job_output"] {
+            let tool = tools
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .expect("widget-accessible command tool");
+            assert_eq!(tool["_meta"]["openai/widgetAccessible"], true);
+        }
     }
 
     #[test]
@@ -744,6 +758,7 @@ mod tests {
                 "Running command batch…",
                 "Command batch finished",
             ),
+            ("exec_start", "Starting command…", "Command started"),
         ] {
             let tool = tools
                 .iter()

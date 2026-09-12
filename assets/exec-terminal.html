@@ -149,10 +149,21 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
   }
 
   let collapseTimer = null;
-  function scheduleCollapse(success) {
+  let sleepTimer = null;
+  let sleeping = false;
+  function scheduleLifecycle(success) {
     if (collapseTimer) window.clearTimeout(collapseTimer);
+    if (sleepTimer) window.clearTimeout(sleepTimer);
+    sleeping = false;
     execution.open = true;
-    if (success) collapseTimer = window.setTimeout(() => { execution.open = false; }, 3000);
+    collapseTimer = window.setTimeout(() => { execution.open = false; }, success ? 3000 : 6000);
+    sleepTimer = window.setTimeout(() => {
+      execution.open = false;
+      viewer.replaceChildren();
+      meta.replaceChildren();
+      details.hidden = true;
+      sleeping = true;
+    }, 30000);
   }
 
   function renderSingle(data, toolInput) {
@@ -168,7 +179,7 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     if (!stdoutText && !stderrText) viewer.appendChild(element('div', 'notice', 'Command completed without output.'));
     meta.innerHTML = metaRow('target', target) + metaRow('exit code', exitCode) + metaRow('timed out', timedOut ? 'yes' : 'no') + metaRow('stdout', data.stdout_truncated ? 'truncated' : 'complete') + metaRow('stderr', data.stderr_truncated ? 'truncated' : 'complete');
     details.hidden = !meta.innerHTML;
-    scheduleCollapse(exitCode === 0 && !timedOut);
+    scheduleLifecycle(exitCode === 0 && !timedOut);
   }
 
   function renderBatchItem(item) {
@@ -186,7 +197,7 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     if (item.error) body.appendChild(element('div', 'notice error', item.error));
     const notes = []; if (item.stdout_truncated) notes.push('stdout truncated'); if (item.stderr_truncated) notes.push('stderr truncated'); if (timedOut) notes.push('timeout exceeded'); if (notes.length) body.appendChild(element('div', 'item-note', notes.join(' · ')));
     block.appendChild(body);
-    if (success) window.setTimeout(() => { block.open = false; }, 3000);
+    window.setTimeout(() => { block.open = false; }, success ? 3000 : 6000);
     return block;
   }
 
@@ -200,25 +211,28 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     viewer.replaceChildren(); if (!results.length) viewer.appendChild(element('div', 'notice', 'No command results returned.')); else results.forEach(item => viewer.appendChild(renderBatchItem(item)));
     meta.innerHTML = metaRow('target', target) + metaRow('mode', mode) + metaRow('requested', requested) + metaRow('executed', executed) + metaRow('succeeded', succeeded) + metaRow('failed', failed) + metaRow('timed out', data.timed_out) + metaRow('stopped early', data.stopped_early ? 'yes' : 'no');
     details.hidden = !meta.innerHTML;
+    scheduleLifecycle(failed === 0 && !data.timed_out);
   }
 
   function render(raw, toolInput) { const data = raw && typeof raw === 'object' ? raw : {}; if (Array.isArray(data.results) && ('requested_count' in data || 'executed_count' in data)) renderBatch(data); else renderSingle(data, toolInput); }
 
   let rpcId = 0; const pendingRequests = new Map();
   let currentToolInput = window.openai?.toolInput || null;
-  let originalToolCallId = null;
-  let streamSessionId = null; let stdoutSeq = 0; let stderrSeq = 0; let liveStdout = ''; let liveStderr = ''; let streamActive = false; let finalReceived = false;
+  let resultId = null;
+  let liveStdout = ''; let liveStderr = ''; let stdoutSeq = 0; let stderrSeq = 0; let jobPolling = false;
   const rpcRequest = (method, params) => new Promise((resolve, reject) => { const id = ++rpcId; pendingRequests.set(id, {resolve,reject}); window.parent.postMessage({jsonrpc:'2.0',id,method,params}, '*'); });
   const toolResultData = result => result?.structuredContent || result?.content?.find?.(item => item?.type === 'json')?.json || result?.content || result || {};
 
   function renderLive(data, toolInput) {
     if (collapseTimer) window.clearTimeout(collapseTimer);
+    if (sleepTimer) window.clearTimeout(sleepTimer);
+    sleeping = false;
     execution.open = true;
     const commandText = typeof toolInput?.command === 'string' ? toolInput.command : 'Command unavailable';
     const target = data.target || toolInput?.target || 'target';
     title.textContent = 'Command result'; pathEl.textContent = commandPreview(commandText); kindEl.textContent = target;
     const state = data.status || 'running';
-    if (state === 'running') status('Running'); else if (state === 'timed_out') status('Timed out', 'warn'); else if (state === 'completed') status('Exit 0', 'ok'); else if (state === 'failed') status(typeof data.exit_code === 'number' ? `Exit ${data.exit_code}` : 'Failed', 'error'); else status(state);
+    if (state === 'running') status('Running'); else if (state === 'timed_out') status('Timed out', 'warn'); else if (state === 'completed') status(typeof data.exit_code === 'number' ? `Exit ${data.exit_code}` : 'Completed', 'ok'); else if (state === 'failed') status(typeof data.exit_code === 'number' ? `Exit ${data.exit_code}` : 'Failed', 'error'); else status(state);
     viewer.replaceChildren();
     const commandBlock = element('div', 'block'); commandBlock.appendChild(element('div', 'block-label', 'Command')); commandBlock.appendChild(element('pre', 'command', commandText)); viewer.appendChild(commandBlock);
     if (liveStdout) viewer.appendChild(outputDetails('stdout', liveStdout, true, false));
@@ -229,41 +243,58 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     viewer.scrollTop = viewer.scrollHeight;
   }
 
-  async function pollStream() {
-    if (streamActive || finalReceived || !currentToolInput?.command || Array.isArray(currentToolInput?.commands)) return;
-    streamActive = true;
+  async function pollJob(startData, reset = true) {
+    if (jobPolling || !startData?.job_id) return;
+    jobPolling = true;
+    if (reset) { liveStdout = ''; liveStderr = ''; stdoutSeq = 0; stderrSeq = 0; }
     try {
-      while (!finalReceived) {
-        const args = streamSessionId
-          ? { session_id: streamSessionId, stdout_since_seq: stdoutSeq, stderr_since_seq: stderrSeq, max_bytes: 65536 }
-          : originalToolCallId !== null && originalToolCallId !== undefined
-            ? { request_id: originalToolCallId, stdout_since_seq: stdoutSeq, stderr_since_seq: stderrSeq, max_bytes: 65536 }
-            : { target: currentToolInput.target, command: currentToolInput.command, cwd: currentToolInput.cwd, stdout_since_seq: stdoutSeq, stderr_since_seq: stderrSeq, max_bytes: 65536 };
-        Object.keys(args).forEach(key => args[key] === undefined && delete args[key]);
-        let result;
-        try { result = toolResultData(await rpcRequest('tools/call', { name: 'exec_stream', arguments: args })); }
-        catch (_) { break; }
-        if (!result?.attached) { await new Promise(resolve => setTimeout(resolve, 120)); continue; }
-        streamSessionId = result.session_id || streamSessionId;
+      while (true) {
+        const result = toolResultData(await rpcRequest('tools/call', { name: 'job_output', arguments: { job_id: startData.job_id, stdout_since_seq: stdoutSeq, stderr_since_seq: stderrSeq, max_bytes: 65536 } }));
         if (typeof result.stdout === 'string') liveStdout += result.stdout;
         if (typeof result.stderr === 'string') liveStderr += result.stderr;
         if (Number.isInteger(result.stdout_next_seq)) stdoutSeq = result.stdout_next_seq;
         if (Number.isInteger(result.stderr_next_seq)) stderrSeq = result.stderr_next_seq;
         renderLive(result, currentToolInput);
-        if (result.eof) break;
+        if (result.eof) { scheduleLifecycle(result.status === 'completed' && result.exit_code === 0 && !result.timed_out); break; }
         await new Promise(resolve => setTimeout(resolve, 180));
       }
-    } finally { streamActive = false; }
+    } catch (_) {
+      status('Output unavailable', 'warn');
+      scheduleLifecycle(false);
+    } finally { jobPolling = false; }
   }
 
+  function handleResult(raw) {
+    const data = toolResultData(raw);
+    if (typeof data?.result_id === 'string') resultId = data.result_id;
+    if (data?.job_id && data?.status === 'running') pollJob(data);
+    else render(data, currentToolInput);
+  }
+
+  async function restoreSleepingCard() {
+    if (!sleeping || !resultId) return;
+    sleeping = false;
+    viewer.innerHTML = '<div class="notice">Loading result…</div>';
+    try {
+      const cached = toolResultData(await rpcRequest('tools/call', { name: 'result_read', arguments: { result_id: resultId } }));
+      if (!cached?.found || !cached?.data) { viewer.innerHTML = '<div class="notice">Result expired.</div>'; return; }
+      if (cached.data.job_id) await pollJob(cached.data, true); else render(cached.data, currentToolInput);
+    } catch (_) { viewer.innerHTML = '<div class="notice">Result unavailable.</div>'; }
+  }
+
+  execution.addEventListener('toggle', () => { if (execution.open && sleeping) restoreSleepingCard(); });
   window.addEventListener('message', event => {
     const msg = event.data;
     if (msg?.jsonrpc === '2.0' && msg.id !== undefined && pendingRequests.has(msg.id)) { const pending = pendingRequests.get(msg.id); pendingRequests.delete(msg.id); if (msg.error) pending.reject(msg.error); else pending.resolve(msg.result); return; }
-    if (msg?.method === 'ui/notifications/tool-input') { currentToolInput = msg.params?.arguments || msg.params?.toolInput || msg.params; pollStream(); return; }
-    if (msg?.method === 'ui/notifications/tool-result') { finalReceived = true; currentToolInput = msg.params?.toolInput || msg.params?.arguments || currentToolInput; render(msg.params?.structuredContent || msg.params?.content || msg.params, currentToolInput); }
+    if (msg?.method === 'ui/notifications/tool-input') { currentToolInput = msg.params?.arguments || msg.params?.toolInput || msg.params; return; }
+    if (msg?.method === 'ui/notifications/tool-result') { currentToolInput = msg.params?.toolInput || msg.params?.arguments || currentToolInput; handleResult(msg.params?.structuredContent || msg.params?.content || msg.params); }
   });
-  async function initializeBridge() { const initialized = await rpcRequest('ui/initialize', { appInfo: { name: 'target-ops-exec-result', version: '1.4.0' }, appCapabilities: { tools: {} }, protocolVersion: '2026-01-26' }); originalToolCallId = initialized?.hostContext?.toolInfo?.id ?? null; window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/initialized',params:{}}, '*'); pollStream(); }
-  if (window.openai?.toolOutput) { finalReceived = true; render(window.openai.toolOutput, currentToolInput); } else if (window.openai?.toolResponseMetadata?.structuredContent) { finalReceived = true; render(window.openai.toolResponseMetadata.structuredContent, currentToolInput); }
+  async function initializeBridge() {
+    await rpcRequest('ui/initialize', { appInfo: { name: 'target-ops-exec-result', version: '1.5.0' }, appCapabilities: { tools: {} }, protocolVersion: '2026-01-26' });
+    window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/initialized',params:{}}, '*');
+    if (window.openai?.toolOutput) handleResult(window.openai.toolOutput);
+    else if (window.openai?.toolResponseMetadata?.structuredContent) handleResult(window.openai.toolResponseMetadata.structuredContent);
+  }
   initializeBridge().catch(error => console.error('Failed to initialize MCP Apps bridge:', error));
 })();
 </script>

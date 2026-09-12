@@ -81,6 +81,11 @@ pub struct JobOutputRequest {
 pub struct JobOutputResponse {
     pub job_id: String,
     pub target: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    pub elapsed_ms: u64,
+    pub timed_out: bool,
     pub stdout_from_seq: u64,
     pub stdout_next_seq: u64,
     pub stdout: String,
@@ -290,9 +295,14 @@ impl JobRegistry {
             stderr_from_seq,
             req.max_bytes.unwrap_or(64 * 1024).clamp(1, 512 * 1024),
         );
+        let status = session.status_snapshot();
         Ok(JobOutputResponse {
             job_id: req.job_id,
             target: session.target.to_string(),
+            status: session.state().to_string(),
+            exit_code: status.exit_code,
+            elapsed_ms: status.elapsed_ms,
+            timed_out: status.timed_out,
             stdout_from_seq: delta.stdout_from_seq,
             stdout_next_seq: delta.stdout_next_seq,
             stdout: String::from_utf8_lossy(&delta.stdout).to_string(),

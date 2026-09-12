@@ -211,12 +211,18 @@ fn tools_call(state: Arc<AppState>, request_id: Option<&Value>, params: Value) -
 
     let params: ToolCallParams = serde_json::from_value(params)?;
     match tools::call_tool_with_request_id(
-        state,
+        Arc::clone(&state),
         &params.name,
         params.arguments.unwrap_or_else(|| json!({})),
         request_id,
     ) {
         Ok(mut value) => {
+            if caches_app_result(&params.name) {
+                let result_id = state.results.store(&value)?;
+                if let Some(object) = value.as_object_mut() {
+                    object.insert("result_id".to_string(), Value::String(result_id));
+                }
+            }
             let content = if params.name == "file_export" {
                 let file = value
                     .get_mut("file")
@@ -268,4 +274,22 @@ fn tools_call(state: Arc<AppState>, request_id: Option<&Value>, params: Value) -
             "isError": true,
         })),
     }
+}
+
+fn caches_app_result(name: &str) -> bool {
+    matches!(
+        name,
+        "target_list"
+            | "mcp_server_list"
+            | "exec"
+            | "exec_batch"
+            | "exec_start"
+            | "file_read"
+            | "file_edit"
+            | "file_write"
+            | "file_delete"
+            | "file_import"
+            | "file_patch"
+            | "file_move"
+    )
 }

@@ -323,14 +323,14 @@ advanced deployments; see the example configuration.
 
 ## Tool catalog
 
-Target Ops publishes 33 tool descriptors: 32 model-facing tools and the App-only `exec_stream` helper.
+Target Ops publishes 34 tool descriptors: 32 model-facing tools and two App-only helpers, `exec_stream` and `result_read`.
 
 | Area | Tools |
 | --- | --- |
 | Server | `server_info` |
 | Targets | `target_list`, `target_current`, `target_select`, `target_connect`, `target_disconnect` |
 | Downstream MCP | `mcp_server_list`, `mcp_tools_list`, `mcp_tool_call` |
-| Commands and jobs | `exec`, `exec_batch`, `exec_start`, `job_poll`, `job_output`, `job_cancel`; App-only: `exec_stream` |
+| Commands and jobs | `exec`, `exec_batch`, `exec_start`, `job_poll`, `job_output`, `job_cancel`; App-only: `exec_stream`, `result_read` |
 | Files and directories | `file_read`, `file_list`, `file_find`, `file_edit`, `file_write`, `file_delete`, `file_import`, `file_export`, `file_patch`, `file_move`, `file_chmod`, `directory_create` |
 | Terminals | `terminal_open`, `terminal_send`, `terminal_read`, `terminal_resize`, `terminal_close` |
 
@@ -355,22 +355,15 @@ result per command. Sequential batches may stop on the first failure. Use
 or control flow; use `exec_batch` for unrelated inspections instead of joining
 them with shell separators.
 
-Both tools bind to the stable `ui://target-ops/exec-terminal/v1.html` MCP App.
-For a foreground `exec`, the App attaches to the App-only `exec_stream` helper
-using the original MCP `tools/call` request id exposed in App host context, then
-polls independent stdout/stderr sequence cursors while the command is still
-running. Older hosts without that id fall back to matching the original command
-arguments. Output starts expanded; successful output collapses about three seconds
-after completion, while failures and timeouts stay expanded. Batch rows follow
-the same expand-first behavior and collapse successful items after completion.
-ANSI SGR color/style sequences are rendered safely instead of being shown as raw
-escape codes. The stable resource URI is retained for compatibility.
+`exec`, `exec_batch`, and `exec_start` bind to the stable `ui://target-ops/exec-terminal/v1.html` MCP App. Synchronous `exec` remains the short-command path and returns its final result normally. For commands likely to run more than a few seconds, or whenever live output matters, prefer `exec_start`: it returns a job ID immediately, allowing the App to poll `job_output` about every 180 ms without being blocked by the parent tool call. ANSI SGR color/style sequences are rendered safely instead of being shown as raw escape codes.
+
+All Target Ops Apps use the same result-card lifecycle. Successful cards collapse after about three seconds; failed or warning-like cards also collapse automatically after a slightly longer delay of about six seconds because most such failures are recoverable workflow events. After about 30 seconds, cards enter a sleep state and discard heavy output/diff DOM. Static tool results are cached under `runtime_dir/results/` for one hour with a 100 MiB global cap and can be restored by the App-only `result_read` helper using an opaque per-result `result_id`. Long-running job cards rebuild from the retained job output buffer. The cards remain present and reopenable; Target Ops does not automatically request iframe teardown.
 
 `exec` and `exec_start` share the same `CommandSession` implementation for
 process lifecycle, stdout/stderr capture, timeout, cancellation, and incremental
 output. `exec` waits for the session and uses the target policy's default timeout
 when none is supplied; `exec_start` returns a job ID immediately and has no
-runtime timeout unless one is requested. Child stdin is disconnected from the
+runtime timeout unless one is requested. Current ChatGPT hosts serialize App-originated tool calls behind an in-flight synchronous `exec`, so live UI output is intentionally implemented through `exec_start` rather than foreground `exec_stream` polling. Child stdin is disconnected from the
 MCP control stream. SSH command sessions use dedicated OpenSSH processes; remote
 file operations continue to use persistent per-target SSH workers.
 
