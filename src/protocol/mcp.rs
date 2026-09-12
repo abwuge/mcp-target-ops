@@ -140,8 +140,10 @@ fn handle_request(state: Arc<AppState>, request: RpcRequest) -> Option<RpcRespon
                 .then_some(state.config.server.oauth_scopes.as_slice())
         ) })),
         "tools/call" => tools_call(state, request.params.unwrap_or_else(|| json!({}))),
-        "resources/list" => Ok(apps::list_resources()),
-        "resources/read" => resources_read(request.params.unwrap_or_else(|| json!({}))),
+        "resources/list" => Ok(apps::list_resources(
+            state.config.server.public_base_url.as_deref(),
+        )),
+        "resources/read" => resources_read(&state, request.params.unwrap_or_else(|| json!({}))),
         "ping" => Ok(json!({})),
         other => Err(Error::Tool(format!("unsupported method: {other}"))),
     };
@@ -165,14 +167,14 @@ fn handle_request(state: Arc<AppState>, request: RpcRequest) -> Option<RpcRespon
     }
 }
 
-fn resources_read(params: Value) -> Result<Value> {
+fn resources_read(state: &AppState, params: Value) -> Result<Value> {
     #[derive(Deserialize)]
     struct ResourceReadParams {
         uri: String,
     }
 
     let params: ResourceReadParams = serde_json::from_value(params)?;
-    apps::read_resource(&params.uri)
+    apps::read_resource(&params.uri, state.config.server.public_base_url.as_deref())
         .ok_or_else(|| Error::Tool(format!("unknown resource: {}", params.uri)))
 }
 
