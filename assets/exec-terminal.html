@@ -76,7 +76,7 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
 </style>
 </head>
 <body>
-<details class="card" id="execution" open>
+<details class="card" id="execution">
   <summary class="head">
     <div class="file"><div class="title" id="title">Command result</div><div class="path" id="path"></div></div>
     <div class="kind" id="kind">Exec</div>
@@ -151,22 +151,27 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
   let collapseTimer = null;
   let sleepTimer = null;
   let sleeping = false;
+  function sleepCard() {
+    if (execution.open) return;
+    viewer.replaceChildren();
+    meta.replaceChildren();
+    details.hidden = true;
+    sleeping = true;
+  }
+  function scheduleSleepOnly() {
+    if (sleepTimer) window.clearTimeout(sleepTimer);
+    sleepTimer = window.setTimeout(sleepCard, 30000);
+  }
   function scheduleLifecycle(success) {
     if (collapseTimer) window.clearTimeout(collapseTimer);
     if (sleepTimer) window.clearTimeout(sleepTimer);
     sleeping = false;
     execution.open = true;
     collapseTimer = window.setTimeout(() => { execution.open = false; }, success ? 3000 : 6000);
-    sleepTimer = window.setTimeout(() => {
-      execution.open = false;
-      viewer.replaceChildren();
-      meta.replaceChildren();
-      details.hidden = true;
-      sleeping = true;
-    }, 30000);
+    sleepTimer = window.setTimeout(sleepCard, 30000);
   }
 
-  function renderSingle(data, toolInput) {
+  function renderSingle(data, toolInput, fresh = true) {
     const commandText = typeof data.command === 'string' && data.command ? data.command : (typeof toolInput?.command === 'string' ? toolInput.command : 'Command unavailable');
     const target = data.resolved_target?.target || data.target || 'target'; const exitCode = data.exit_code; const timedOut = data.timed_out === true;
     const stdoutText = typeof data.stdout === 'string' ? data.stdout : ''; const stderrText = typeof data.stderr === 'string' ? data.stderr : '';
@@ -179,11 +184,11 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     if (!stdoutText && !stderrText) viewer.appendChild(element('div', 'notice', 'Command completed without output.'));
     meta.innerHTML = metaRow('target', target) + metaRow('exit code', exitCode) + metaRow('timed out', timedOut ? 'yes' : 'no') + metaRow('stdout', data.stdout_truncated ? 'truncated' : 'complete') + metaRow('stderr', data.stderr_truncated ? 'truncated' : 'complete');
     details.hidden = !meta.innerHTML;
-    scheduleLifecycle(exitCode === 0 && !timedOut);
+    if (fresh) scheduleLifecycle(exitCode === 0 && !timedOut); else scheduleSleepOnly();
   }
 
-  function renderBatchItem(item) {
-    const success = item.success === true; const timedOut = item.timed_out === true; const block = element('details', 'batch-item'); block.open = true;
+  function renderBatchItem(item, fresh = true) {
+    const success = item.success === true; const timedOut = item.timed_out === true; const block = element('details', 'batch-item'); block.open = fresh;
     const summary = document.createElement('summary'); summary.appendChild(element('span', 'batch-command', commandPreview(item.command)));
     const parts = []; if (timedOut) parts.push('timed out'); else if (typeof item.exit_code === 'number') parts.push(`exit ${item.exit_code}`); else if (item.error) parts.push('error'); const duration = formatDuration(item.elapsed_ms); if (duration) parts.push(duration);
     summary.appendChild(element('span', `batch-state${!success ? timedOut ? ' warn' : ' error' : ''}`, parts.join(' · ') || (success ? 'done' : 'failed'))); block.appendChild(summary);
@@ -197,24 +202,24 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     if (item.error) body.appendChild(element('div', 'notice error', item.error));
     const notes = []; if (item.stdout_truncated) notes.push('stdout truncated'); if (item.stderr_truncated) notes.push('stderr truncated'); if (timedOut) notes.push('timeout exceeded'); if (notes.length) body.appendChild(element('div', 'item-note', notes.join(' · ')));
     block.appendChild(body);
-    window.setTimeout(() => { block.open = false; }, success ? 3000 : 6000);
+    if (fresh) window.setTimeout(() => { block.open = false; }, success ? 3000 : 6000);
     return block;
   }
 
-  function renderBatch(data) {
-    if (collapseTimer) window.clearTimeout(collapseTimer);
-    execution.open = true;
+  function renderBatch(data, fresh = true) {
+    if (fresh && collapseTimer) window.clearTimeout(collapseTimer);
+    if (fresh) execution.open = true;
     const results = Array.isArray(data.results) ? data.results : []; const requested = Number.isInteger(data.requested_count) ? data.requested_count : results.length; const executed = Number.isInteger(data.executed_count) ? data.executed_count : results.length; const succeeded = Number.isInteger(data.succeeded) ? data.succeeded : results.filter(item => item.success === true).length; const failed = Number.isInteger(data.failed) ? data.failed : executed - succeeded;
     const target = data.resolved_target?.target || data.target || 'target'; const mode = data.mode === 'parallel' ? 'parallel' : 'sequential';
     title.textContent = `${executed} command${executed === 1 ? '' : 's'}`; pathEl.textContent = `${target} · ${mode}${executed !== requested ? ` · ${executed}/${requested} executed` : ''}`; kindEl.textContent = 'Batch';
     status(failed ? `${succeeded} passed · ${failed} failed` : `${succeeded} passed`, failed ? 'error' : 'ok');
-    viewer.replaceChildren(); if (!results.length) viewer.appendChild(element('div', 'notice', 'No command results returned.')); else results.forEach(item => viewer.appendChild(renderBatchItem(item)));
+    viewer.replaceChildren(); if (!results.length) viewer.appendChild(element('div', 'notice', 'No command results returned.')); else results.forEach(item => viewer.appendChild(renderBatchItem(item, fresh)));
     meta.innerHTML = metaRow('target', target) + metaRow('mode', mode) + metaRow('requested', requested) + metaRow('executed', executed) + metaRow('succeeded', succeeded) + metaRow('failed', failed) + metaRow('timed out', data.timed_out) + metaRow('stopped early', data.stopped_early ? 'yes' : 'no');
     details.hidden = !meta.innerHTML;
-    scheduleLifecycle(failed === 0 && !data.timed_out);
+    if (fresh) scheduleLifecycle(failed === 0 && !data.timed_out); else scheduleSleepOnly();
   }
 
-  function render(raw, toolInput) { const data = raw && typeof raw === 'object' ? raw : {}; if (Array.isArray(data.results) && ('requested_count' in data || 'executed_count' in data)) renderBatch(data); else renderSingle(data, toolInput); }
+  function render(raw, toolInput, fresh = true) { const data = raw && typeof raw === 'object' ? raw : {}; if (Array.isArray(data.results) && ('requested_count' in data || 'executed_count' in data)) renderBatch(data, fresh); else renderSingle(data, toolInput, fresh); }
 
   let rpcId = 0; const pendingRequests = new Map();
   let currentToolInput = window.openai?.toolInput || null;
@@ -223,11 +228,11 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
   const rpcRequest = (method, params) => new Promise((resolve, reject) => { const id = ++rpcId; pendingRequests.set(id, {resolve,reject}); window.parent.postMessage({jsonrpc:'2.0',id,method,params}, '*'); });
   const toolResultData = result => result?.structuredContent || result?.content?.find?.(item => item?.type === 'json')?.json || result?.content || result || {};
 
-  function renderLive(data, toolInput) {
+  function renderLive(data, toolInput, fresh = true) {
     if (collapseTimer) window.clearTimeout(collapseTimer);
     if (sleepTimer) window.clearTimeout(sleepTimer);
     sleeping = false;
-    execution.open = true;
+    if (fresh) execution.open = true;
     const commandText = typeof toolInput?.command === 'string' ? toolInput.command : 'Command unavailable';
     const target = data.target || toolInput?.target || 'target';
     title.textContent = 'Command result'; pathEl.textContent = commandPreview(commandText); kindEl.textContent = target;
@@ -243,7 +248,7 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     viewer.scrollTop = viewer.scrollHeight;
   }
 
-  async function pollJob(startData, reset = true) {
+  async function pollJob(startData, reset = true, fresh = true) {
     if (jobPolling || !startData?.job_id) return;
     jobPolling = true;
     if (reset) { liveStdout = ''; liveStderr = ''; stdoutSeq = 0; stderrSeq = 0; }
@@ -254,21 +259,21 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
         if (typeof result.stderr === 'string') liveStderr += result.stderr;
         if (Number.isInteger(result.stdout_next_seq)) stdoutSeq = result.stdout_next_seq;
         if (Number.isInteger(result.stderr_next_seq)) stderrSeq = result.stderr_next_seq;
-        renderLive(result, currentToolInput);
-        if (result.eof) { scheduleLifecycle(result.status === 'completed' && result.exit_code === 0 && !result.timed_out); break; }
+        renderLive(result, currentToolInput, fresh);
+        if (result.eof) { if (fresh) scheduleLifecycle(result.status === 'completed' && result.exit_code === 0 && !result.timed_out); else scheduleSleepOnly(); break; }
         await new Promise(resolve => setTimeout(resolve, 180));
       }
     } catch (_) {
       status('Output unavailable', 'warn');
-      scheduleLifecycle(false);
+      if (fresh) scheduleLifecycle(false); else scheduleSleepOnly();
     } finally { jobPolling = false; }
   }
 
-  function handleResult(raw) {
+  function handleResult(raw, fresh = true) {
     const data = toolResultData(raw);
     if (typeof data?.result_id === 'string') resultId = data.result_id;
-    if (data?.job_id && data?.status === 'running') pollJob(data);
-    else render(data, currentToolInput);
+    if (data?.job_id && data?.status === 'running') pollJob(data, true, fresh);
+    else render(data, currentToolInput, fresh);
   }
 
   async function restoreSleepingCard() {
@@ -278,11 +283,16 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     try {
       const cached = toolResultData(await rpcRequest('tools/call', { name: 'result_read', arguments: { result_id: resultId } }));
       if (!cached?.found || !cached?.data) { viewer.innerHTML = '<div class="notice">Result expired.</div>'; return; }
-      if (cached.data.job_id) await pollJob(cached.data, true); else render(cached.data, currentToolInput);
+      if (cached.data.job_id) await pollJob(cached.data, true, false); else render(cached.data, currentToolInput, false);
     } catch (_) { viewer.innerHTML = '<div class="notice">Result unavailable.</div>'; }
   }
 
-  execution.addEventListener('toggle', () => { if (execution.open && sleeping) restoreSleepingCard(); });
+  execution.addEventListener('toggle', () => {
+    if (execution.open) {
+      if (sleepTimer) window.clearTimeout(sleepTimer);
+      if (sleeping) restoreSleepingCard();
+    } else scheduleSleepOnly();
+  });
   window.addEventListener('message', event => {
     const msg = event.data;
     if (msg?.jsonrpc === '2.0' && msg.id !== undefined && pendingRequests.has(msg.id)) { const pending = pendingRequests.get(msg.id); pendingRequests.delete(msg.id); if (msg.error) pending.reject(msg.error); else pending.resolve(msg.result); return; }
@@ -292,8 +302,8 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
   async function initializeBridge() {
     await rpcRequest('ui/initialize', { appInfo: { name: 'target-ops-exec-result', version: '1.5.0' }, appCapabilities: { tools: {} }, protocolVersion: '2026-01-26' });
     window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/initialized',params:{}}, '*');
-    if (window.openai?.toolOutput) handleResult(window.openai.toolOutput);
-    else if (window.openai?.toolResponseMetadata?.structuredContent) handleResult(window.openai.toolResponseMetadata.structuredContent);
+    if (window.openai?.toolOutput) handleResult(window.openai.toolOutput, false);
+    else if (window.openai?.toolResponseMetadata?.structuredContent) handleResult(window.openai.toolResponseMetadata.structuredContent, false);
   }
   initializeBridge().catch(error => console.error('Failed to initialize MCP Apps bridge:', error));
 })();

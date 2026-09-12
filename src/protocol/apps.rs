@@ -230,6 +230,22 @@ mod tests {
     }
 
     #[test]
+    fn historical_app_cards_boot_collapsed_without_rearming_lifecycle() {
+        for html in [
+            EXEC_TERMINAL_UI_HTML,
+            FILE_CHANGE_UI_HTML,
+            FILE_READ_UI_HTML,
+            INVENTORY_UI_HTML,
+        ] {
+            assert!(!html.contains("class=\"card\" id=\"card\" open"));
+            assert!(!html.contains("class=\"card\" id=\"execution\" open"));
+            assert!(html.contains("toolOutput"));
+            assert!(html.contains(", false)"));
+            assert!(html.contains("scheduleSleepOnly"));
+        }
+    }
+
+    #[test]
     fn omits_widget_domain_without_public_base_url() {
         let listed = list_resources(None);
         for resource in listed["resources"].as_array().unwrap() {

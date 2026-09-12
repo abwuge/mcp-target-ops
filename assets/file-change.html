@@ -62,7 +62,7 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
 </style>
 </head>
 <body>
-<details class="card" id="card" open>
+<details class="card" id="card">
   <summary class="head">
     <div class="file"><div class="title" id="title">File change</div><div class="path" id="path"></div></div>
     <div class="kind modified" id="kind">Modified</div>
@@ -155,7 +155,7 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     return 'modified';
   }
 
-  function render(raw) {
+  function render(raw, fresh = true) {
     const data = raw && typeof raw === 'object' ? raw : {};
     if (typeof data.result_id === 'string') resultId = data.result_id;
     const target = data.resolved_target?.target || data.target;
@@ -192,15 +192,23 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
       metaRow('old sha', data.old_sha256) +
       metaRow('new sha', data.new_sha256);
     details.hidden = !meta.innerHTML;
-    scheduleLifecycle(true);
+    if (fresh) scheduleLifecycle(true); else scheduleSleepOnly();
   }
 
   let collapseTimer = null; let sleepTimer = null; let sleeping = false;
+  function sleepCard() {
+    if (card.open) return;
+    viewer.replaceChildren(); meta.replaceChildren(); details.hidden = true; sleeping = true;
+  }
+  function scheduleSleepOnly() {
+    if (sleepTimer) clearTimeout(sleepTimer);
+    sleepTimer = setTimeout(sleepCard, 30000);
+  }
   function scheduleLifecycle(success) {
     if (collapseTimer) clearTimeout(collapseTimer); if (sleepTimer) clearTimeout(sleepTimer);
     sleeping = false; card.open = true;
     collapseTimer = setTimeout(() => { card.open = false; }, success ? 3000 : 6000);
-    sleepTimer = setTimeout(() => { card.open = false; viewer.replaceChildren(); meta.replaceChildren(); details.hidden = true; sleeping = true; }, 30000);
+    sleepTimer = setTimeout(sleepCard, 30000);
   }
 
   let rpcId = 0;
@@ -216,10 +224,15 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
   async function restoreSleepingCard() {
     if (!sleeping || !resultId) return;
     sleeping = false; viewer.innerHTML = '<div class="notice">Loading result…</div>';
-    try { const cached = toolResultData(await rpcRequest('tools/call', { name: 'result_read', arguments: { result_id: resultId } })); if (cached?.found && cached?.data) render(cached.data); else viewer.innerHTML = '<div class="notice">Result expired.</div>'; }
+    try { const cached = toolResultData(await rpcRequest('tools/call', { name: 'result_read', arguments: { result_id: resultId } })); if (cached?.found && cached?.data) render(cached.data, false); else viewer.innerHTML = '<div class="notice">Result expired.</div>'; }
     catch (_) { viewer.innerHTML = '<div class="notice">Result unavailable.</div>'; }
   }
-  card.addEventListener('toggle', () => { if (card.open && sleeping) restoreSleepingCard(); });
+  card.addEventListener('toggle', () => {
+    if (card.open) {
+      if (sleepTimer) clearTimeout(sleepTimer);
+      if (sleeping) restoreSleepingCard();
+    } else scheduleSleepOnly();
+  });
 
   window.addEventListener('message', event => {
     const msg = event.data;
@@ -242,8 +255,8 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
       protocolVersion: '2026-01-26',
     });
     window.parent.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/initialized', params: {} }, '*');
-    if (window.openai?.toolOutput) render(window.openai.toolOutput);
-    else if (window.openai?.toolResponseMetadata?.structuredContent) render(window.openai.toolResponseMetadata.structuredContent);
+    if (window.openai?.toolOutput) render(window.openai.toolOutput, false);
+    else if (window.openai?.toolResponseMetadata?.structuredContent) render(window.openai.toolResponseMetadata.structuredContent, false);
   }
   initializeBridge().catch(error => console.error('Failed to initialize MCP Apps bridge:', error));
 })();
