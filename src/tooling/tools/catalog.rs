@@ -1,4 +1,4 @@
-use super::{schema::output_schema, EXEC_TERMINAL_UI_URI, FILE_CHANGE_UI_URI};
+use super::{schema::output_schema, EXEC_TERMINAL_UI_URI, FILE_CHANGE_UI_URI, INVENTORY_UI_URI};
 use serde_json::{json, Value};
 
 pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
@@ -135,6 +135,27 @@ fn tool(
     if let Some(schemes) = security_schemes {
         object.insert("securitySchemes".to_string(), schemes.clone());
         meta.insert("securitySchemes".to_string(), schemes.clone());
+    }
+
+    if matches!(name, "target_list" | "mcp_server_list") {
+        meta.insert("ui".to_string(), json!({ "resourceUri": INVENTORY_UI_URI }));
+        meta.insert(
+            "openai/outputTemplate".to_string(),
+            Value::String(INVENTORY_UI_URI.to_string()),
+        );
+        let (invoking, invoked) = if name == "target_list" {
+            ("Listing targets…", "Targets listed")
+        } else {
+            ("Listing MCP servers…", "MCP servers listed")
+        };
+        meta.insert(
+            "openai/toolInvocation/invoking".to_string(),
+            Value::String(invoking.to_string()),
+        );
+        meta.insert(
+            "openai/toolInvocation/invoked".to_string(),
+            Value::String(invoked.to_string()),
+        );
     }
 
     if name == "exec" {
@@ -532,6 +553,30 @@ mod tests {
                 tool["outputSchema"]["type"], "object",
                 "tool {name} must declare an object output schema"
             );
+        }
+    }
+
+    #[test]
+    fn list_tools_bind_inventory_app_resource() {
+        let tools = list_tools(None);
+        let tools = tools.as_array().unwrap();
+
+        for (name, invoking, invoked) in [
+            ("target_list", "Listing targets…", "Targets listed"),
+            (
+                "mcp_server_list",
+                "Listing MCP servers…",
+                "MCP servers listed",
+            ),
+        ] {
+            let tool = tools
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .expect("list tool");
+            assert_eq!(tool["_meta"]["ui"]["resourceUri"], INVENTORY_UI_URI);
+            assert_eq!(tool["_meta"]["openai/outputTemplate"], INVENTORY_UI_URI);
+            assert_eq!(tool["_meta"]["openai/toolInvocation/invoking"], invoking);
+            assert_eq!(tool["_meta"]["openai/toolInvocation/invoked"], invoked);
         }
     }
 

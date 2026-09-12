@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root {
+  color-scheme: light dark;
+  font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --bg: #ffffff;
+  --surface: #f6f8fa;
+  --border: #d0d7de;
+  --text: #1f2328;
+  --muted: #656d76;
+  --success: #1a7f37;
+  --danger: #cf222e;
+  --accent: #0969da;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --success: #3fb950;
+    --danger: #ff7b72;
+    --accent: #58a6ff;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 7px; background: transparent; color: var(--text); }
+.card { overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); }
+.header { display: flex; gap: 10px; align-items: center; padding: 9px 11px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.heading { min-width: 0; margin-right: auto; }
+.title { font-weight: 650; line-height: 1.2; }
+.subtitle { margin-top: 1px; color: var(--muted); font-size: 11px; }
+.count { border: 1px solid var(--border); border-radius: 999px; padding: 2px 7px; color: var(--muted); font-size: 10px; white-space: nowrap; }
+.list { display: grid; }
+.row { min-width: 0; padding: 9px 11px; }
+.row + .row { border-top: 1px solid var(--border); }
+.topline { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.name { min-width: 0; margin-right: auto; font-weight: 620; overflow-wrap: anywhere; }
+.chip { border: 1px solid var(--border); border-radius: 999px; padding: 1px 6px; color: var(--muted); font-size: 10px; line-height: 1.45; white-space: nowrap; }
+.chip.active, .chip.enabled { color: var(--success); }
+.chip.disabled { color: var(--danger); }
+.chip.kind { color: var(--accent); }
+.meta { margin-top: 5px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.empty { padding: 13px 11px; color: var(--muted); font-style: italic; }
+@media (max-width: 520px) {
+  body { padding: 5px; }
+  .header, .row, .empty { padding-left: 9px; padding-right: 9px; }
+}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="header">
+    <div class="heading">
+      <div class="title" id="title">Inventory</div>
+      <div class="subtitle" id="subtitle">Configured resources</div>
+    </div>
+    <div class="count" id="count">0</div>
+  </div>
+  <div class="list" id="list"></div>
+  <div class="empty" id="empty">Waiting for results…</div>
+</div>
+<script>
+(() => {
+  const title = document.getElementById('title');
+  const subtitle = document.getElementById('subtitle');
+  const count = document.getElementById('count');
+  const list = document.getElementById('list');
+  const empty = document.getElementById('empty');
+
+  function element(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = String(text);
+    return node;
+  }
+
+  function chip(text, className = '') {
+    return element('span', `chip ${className}`.trim(), text);
+  }
+
+  function formatBytes(bytes) {
+    const value = Number(bytes);
+    if (!Number.isFinite(value) || value < 0) return 'unknown size';
+    if (value < 1024) return `${value} B`;
+    if (value < 1024 * 1024) return `${Math.round(value / 102.4) / 10} KiB`;
+    return `${Math.round(value / 104857.6) / 10} MiB`;
+  }
+
+  function formatTimeout(ms) {
+    const value = Number(ms);
+    if (!Number.isFinite(value) || value < 0) return 'unknown timeout';
+    if (value % 1000 === 0) return `${value / 1000}s timeout`;
+    return `${value}ms timeout`;
+  }
+
+  function renderTargets(targets) {
+    title.textContent = 'Targets';
+    subtitle.textContent = 'Local and SSH execution targets';
+    count.textContent = String(targets.length);
+
+    for (const item of targets) {
+      const row = element('div', 'row');
+      const top = element('div', 'topline');
+      top.appendChild(element('div', 'name', item.id || item.config_key || 'unnamed target'));
+      top.appendChild(chip(item.kind || 'target', 'kind'));
+      if (item.active) top.appendChild(chip('active', 'active'));
+      top.appendChild(chip(item.enabled === false ? 'disabled' : 'enabled', item.enabled === false ? 'disabled' : 'enabled'));
+      row.appendChild(top);
+
+      const policy = item.policy && typeof item.policy === 'object' ? item.policy : {};
+      const capabilities = [];
+      if (policy.allow_exec) capabilities.push('exec');
+      if (policy.allow_terminal) capabilities.push('terminal');
+      if (policy.allow_file_read) capabilities.push('read');
+      if (policy.allow_file_write) capabilities.push('write');
+      if (policy.allow_select_active) capabilities.push('select');
+      const roots = Array.isArray(policy.allowed_roots) ? policy.allowed_roots : [];
+      const parts = [capabilities.length ? capabilities.join(' · ') : 'no allowed operations'];
+      if (roots.length) parts.push(`roots: ${roots.join(', ')}`);
+      if (policy.require_explicit_target_for_write) parts.push('explicit target required for writes');
+      row.appendChild(element('div', 'meta', parts.join('  ·  ')));
+      list.appendChild(row);
+    }
+  }
+
+  function renderServers(servers) {
+    title.textContent = 'MCP servers';
+    subtitle.textContent = 'Configured downstream servers';
+    count.textContent = String(servers.length);
+
+    for (const item of servers) {
+      const row = element('div', 'row');
+      const top = element('div', 'topline');
+      top.appendChild(element('div', 'name', item.name || 'unnamed server'));
+      top.appendChild(chip(item.config_source || 'configured', 'kind'));
+      top.appendChild(chip(item.enabled === false ? 'disabled' : 'enabled', item.enabled === false ? 'disabled' : 'enabled'));
+      row.appendChild(top);
+
+      const parts = [formatTimeout(item.timeout_ms), `max ${formatBytes(item.max_response_bytes)}`];
+      if (item.secret_target) parts.push(`secret target: ${item.secret_target}`);
+      const staticHeaders = Array.isArray(item.static_header_names) ? item.static_header_names.length : 0;
+      const secretHeaders = Array.isArray(item.secret_header_names) ? item.secret_header_names.length : 0;
+      if (staticHeaders || secretHeaders) parts.push(`headers: ${staticHeaders} static, ${secretHeaders} secret`);
+      row.appendChild(element('div', 'meta', parts.join('  ·  ')));
+      list.appendChild(row);
+    }
+  }
+
+  function render(raw) {
+    const data = raw && typeof raw === 'object' ? raw : {};
+    list.replaceChildren();
+
+    if (Array.isArray(data.targets)) {
+      empty.hidden = data.targets.length > 0;
+      if (!data.targets.length) empty.textContent = 'No targets configured.';
+      renderTargets(data.targets);
+      return;
+    }
+
+    if (Array.isArray(data.servers)) {
+      empty.hidden = data.servers.length > 0;
+      if (!data.servers.length) empty.textContent = 'No downstream MCP servers configured.';
+      renderServers(data.servers);
+      return;
+    }
+
+    title.textContent = 'Inventory';
+    subtitle.textContent = 'Configured resources';
+    count.textContent = '0';
+    empty.hidden = false;
+    empty.textContent = 'No inventory data available.';
+  }
+
+  let rpcId = 0;
+  const pendingRequests = new Map();
+  const rpcRequest = (method, params) => new Promise((resolve, reject) => {
+    const id = ++rpcId;
+    pendingRequests.set(id, { resolve, reject });
+    window.parent.postMessage({ jsonrpc: '2.0', id, method, params }, '*');
+  });
+
+  window.addEventListener('message', event => {
+    const msg = event.data;
+    if (msg?.jsonrpc === '2.0' && msg.id !== undefined && pendingRequests.has(msg.id)) {
+      const pending = pendingRequests.get(msg.id);
+      pendingRequests.delete(msg.id);
+      if (msg.error) pending.reject(msg.error);
+      else pending.resolve(msg.result);
+      return;
+    }
+    if (msg?.method === 'ui/notifications/tool-result') {
+      render(msg.params?.structuredContent || msg.params?.content || msg.params);
+    }
+  });
+
+  async function initializeBridge() {
+    await rpcRequest('ui/initialize', {
+      appInfo: { name: 'target-ops-inventory', version: '1.0.0' },
+      appCapabilities: {},
+      protocolVersion: '2026-01-26',
+    });
+    window.parent.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/initialized', params: {} }, '*');
+  }
+
+  if (window.openai?.toolOutput) render(window.openai.toolOutput);
+  else if (window.openai?.toolResponseMetadata?.structuredContent) render(window.openai.toolResponseMetadata.structuredContent);
+  initializeBridge().catch(error => console.error('Failed to initialize MCP Apps bridge:', error));
+})();
+</script>
+</body>
+</html>

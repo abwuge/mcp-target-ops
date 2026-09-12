@@ -11,8 +11,9 @@ filesystem roots, timeouts, and output limits.
 
 It can run over stdio for local clients or HTTP for remote MCP clients and
 ChatGPT. HTTP mode also includes OAuth, a bounded GPT Actions REST facade,
-ChatGPT file import/export metadata, a non-interactive command-result MCP App for
-`exec`, and a human-readable MCP App for reviewing file changes.
+ChatGPT file import/export metadata, compact inventory cards for targets and
+downstream MCP servers, a non-interactive command-result MCP App for `exec`, and
+a human-readable MCP App for reviewing file changes.
 
 > [!CAUTION]
 > Target Ops can execute commands and modify files. Keep the local target
@@ -30,9 +31,9 @@ ChatGPT file import/export metadata, a non-interactive command-result MCP App fo
   and validated multi-file patches with rollback
 - File-backed secret injection without placing secret values in MCP arguments
 - ChatGPT and connector file import/export with bounded transfer sizes
-- Self-contained MCP Apps for non-interactive `exec` results and file review;
-  command output renders ANSI styling safely, while file changes show full
-  added/deleted content and editor-style diffs
+- Self-contained MCP Apps for target/MCP-server inventory, non-interactive
+  `exec` results, and file review; command output renders ANSI styling safely,
+  while file changes show full added/deleted content and editor-style diffs
 - Allowlisted downstream Streamable HTTP MCP gateway
 - Stdio and HTTP transports, static bearer authentication, OAuth 2.0 with PKCE,
   and persistent rotating refresh tokens
@@ -337,6 +338,15 @@ Every tool declares an object `outputSchema`, returns successful data through
 `structuredContent`, and includes standard MCP annotations. When OAuth is
 enabled, tool descriptors also advertise the configured OAuth scopes.
 
+### Target and MCP server inventory
+
+`target_list` and `mcp_server_list` share the stable
+`ui://target-ops/inventory/v1.html` MCP App. The compact card shows target kind,
+active/enabled state, allowed operations and roots, or downstream server state,
+configuration source, timeout, response limit, and safe header-count metadata.
+It is display-only and does not expose downstream endpoint URLs or secret
+values.
+
 ### Commands and background jobs
 
 `exec` runs a bounded non-interactive shell command. In ChatGPT it binds to the
@@ -576,6 +586,7 @@ Source layout:
 assets/
   exec-terminal.html     MCP App non-interactive exec result interface
   file-change.html       MCP App file review interface
+  inventory-card.html    MCP App target and MCP server inventory card
   oauth-authorize.html   OAuth authorization page
 
 src/core/

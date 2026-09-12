@@ -10,8 +10,8 @@ SSH 主机上执行命令、管理文件、持续读取后台任务输出，以�
 
 它既可以通过 stdio 服务本地 MCP 客户端，也可以通过 HTTP 服务远程 MCP
 客户端与 ChatGPT。HTTP 模式还内置 OAuth、受严格限制的 GPT Actions REST
-接口、ChatGPT 文件导入/导出元数据、用于 `exec` 的非交互式命令结果 MCP App，
-以及用于直观审阅文件变更的 MCP App。
+接口、ChatGPT 文件导入/导出元数据、用于目标与下游 MCP 服务器列表的紧凑卡片、
+用于 `exec` 的非交互式命令结果 MCP App，以及用于直观审阅文件变更的 MCP App。
 
 > [!CAUTION]
 > Target Ops 能够执行命令和修改文件。除非确有需要，否则应保持本机目标禁用；
@@ -28,8 +28,9 @@ SSH 主机上执行命令、管理文件、持续读取后台任务输出，以�
   多文件补丁
 - 从文件解析秘密并注入环境变量，秘密值不会出现在 MCP 参数中
 - 支持 ChatGPT/连接器文件导入导出，并限制传输大小
-- 自包含 MCP App：`exec` 使用非交互式命令结果界面并安全渲染 ANSI 样式；文件
-  变更对新增/删除显示完整内容，对修改显示编辑器式差异
+- 自包含 MCP App：目标/MCP 服务器列表使用紧凑卡片；`exec` 使用非交互式命令
+  结果界面并安全渲染 ANSI 样式；文件变更对新增/删除显示完整内容，对修改显示
+  编辑器式差异
 - 仅允许访问预先配置服务器的下游 Streamable HTTP MCP 网关
 - 同时支持 stdio、HTTP、静态 Bearer Token、PKCE OAuth 2.0，以及持久化的
   轮换刷新令牌
@@ -321,6 +322,14 @@ Target Ops 当前共提供 31 个工具。
 并包含标准 MCP annotations。启用 OAuth 后，工具描述还会公布已配置的 OAuth
 scope。
 
+### 目标与 MCP 服务器列表卡片
+
+`target_list` 与 `mcp_server_list` 共用稳定的
+`ui://target-ops/inventory/v1.html` MCP App。该紧凑卡片会展示目标类型、active/enabled
+状态、允许的操作与目录，或下游 MCP 服务器的启用状态、配置来源、超时、响应大小
+限制和安全的请求头数量信息。该界面只用于展示，不会暴露下游 endpoint URL 或秘密
+值。
+
 ### 命令与后台任务
 
 `exec` 执行受限的非交互式 shell 命令。在 ChatGPT 中，它会绑定稳定的
@@ -539,6 +548,7 @@ cargo clippy --locked --all-targets -- -D warnings
 assets/
   exec-terminal.html     MCP App 非交互式 exec 结果界面
   file-change.html       MCP App 文件审阅界面
+  inventory-card.html    MCP App 目标与 MCP 服务器列表卡片
   oauth-authorize.html   OAuth 授权页
 
 src/core/

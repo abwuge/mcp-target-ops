@@ -1,10 +1,11 @@
-use crate::tooling::tools::{EXEC_TERMINAL_UI_URI, FILE_CHANGE_UI_URI};
+use crate::tooling::tools::{EXEC_TERMINAL_UI_URI, FILE_CHANGE_UI_URI, INVENTORY_UI_URI};
 use serde_json::{json, Value};
 
 pub const MCP_APP_MIME_TYPE: &str = "text/html;profile=mcp-app";
 
 const EXEC_TERMINAL_UI_HTML: &str = include_str!("../../assets/exec-terminal.html");
 const FILE_CHANGE_UI_HTML: &str = include_str!("../../assets/file-change.html");
+const INVENTORY_UI_HTML: &str = include_str!("../../assets/inventory-card.html");
 
 struct AppResource {
     uri: &'static str,
@@ -16,7 +17,7 @@ struct AppResource {
     prefers_border: bool,
 }
 
-const RESOURCES: [AppResource; 2] = [
+const RESOURCES: [AppResource; 3] = [
     AppResource {
         uri: EXEC_TERMINAL_UI_URI,
         name: "target-ops-exec-result",
@@ -34,6 +35,15 @@ const RESOURCES: [AppResource; 2] = [
         widget_description: "Reviews file changes like an editor: full content for added/deleted files and color-highlighted diffs for modified files.",
         html: FILE_CHANGE_UI_HTML,
         prefers_border: true,
+    },
+    AppResource {
+        uri: INVENTORY_UI_URI,
+        name: "target-ops-inventory",
+        title: "Target Ops inventory",
+        description: "Compact overview of configured targets or downstream MCP servers.",
+        widget_description: "Shows configured local and SSH targets or downstream MCP servers as a compact status card.",
+        html: INVENTORY_UI_HTML,
+        prefers_border: false,
     },
 ];
 
@@ -97,11 +107,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn lists_both_app_resources_with_expected_metadata() {
+    fn lists_app_resources_with_expected_metadata() {
         let widget_domain = "https://mcp.example.com";
         let listed = list_resources(Some(widget_domain));
         let resources = listed["resources"].as_array().expect("resources array");
-        assert_eq!(resources.len(), 2);
+        assert_eq!(resources.len(), 3);
 
         let exec_result = resources
             .iter()
@@ -111,8 +121,14 @@ mod tests {
         assert_eq!(exec_result["_meta"]["ui"]["prefersBorder"], false);
         assert_eq!(exec_result["_meta"]["openai/widgetPrefersBorder"], false);
         assert_eq!(exec_result["_meta"]["ui"]["domain"], widget_domain);
-        assert_eq!(exec_result["_meta"]["ui"]["csp"]["connectDomains"], json!([]));
-        assert_eq!(exec_result["_meta"]["ui"]["csp"]["resourceDomains"], json!([]));
+        assert_eq!(
+            exec_result["_meta"]["ui"]["csp"]["connectDomains"],
+            json!([])
+        );
+        assert_eq!(
+            exec_result["_meta"]["ui"]["csp"]["resourceDomains"],
+            json!([])
+        );
 
         let file_change = resources
             .iter()
@@ -122,6 +138,15 @@ mod tests {
         assert_eq!(file_change["_meta"]["ui"]["prefersBorder"], true);
         assert_eq!(file_change["_meta"]["openai/widgetPrefersBorder"], true);
         assert_eq!(file_change["_meta"]["openai/widgetDomain"], widget_domain);
+
+        let inventory = resources
+            .iter()
+            .find(|resource| resource["uri"] == INVENTORY_UI_URI)
+            .expect("inventory resource");
+        assert_eq!(inventory["mimeType"], MCP_APP_MIME_TYPE);
+        assert_eq!(inventory["_meta"]["ui"]["prefersBorder"], false);
+        assert_eq!(inventory["_meta"]["openai/widgetPrefersBorder"], false);
+        assert_eq!(inventory["_meta"]["openai/widgetDomain"], widget_domain);
     }
 
     #[test]
@@ -153,6 +178,19 @@ mod tests {
         assert!(html.contains("renderDiff"));
         assert!(html.contains("lineRow(kind === 'deleted'"));
         assert!(html.contains("Binary file content shown as base64"));
+    }
+
+    #[test]
+    fn reads_inventory_resource() {
+        let read = read_resource(INVENTORY_UI_URI, Some("https://mcp.example.com"))
+            .expect("inventory resource exists");
+        assert_eq!(read["contents"][0]["mimeType"], MCP_APP_MIME_TYPE);
+        let html = read["contents"][0]["text"].as_str().unwrap();
+        assert!(html.contains("appInfo: { name: 'target-ops-inventory'"));
+        assert!(html.contains("renderTargets"));
+        assert!(html.contains("renderServers"));
+        assert!(html.contains("Local and SSH execution targets"));
+        assert!(html.contains("Configured downstream servers"));
     }
 
     #[test]
