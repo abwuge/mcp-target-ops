@@ -245,9 +245,9 @@ pre { margin: 0; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Co
     const timedOut = data.timed_out === true;
     const stdoutText = typeof data.stdout === 'string' ? data.stdout : '';
     const stderrText = typeof data.stderr === 'string' ? data.stderr : '';
-    const commandText = typeof toolInput?.command === 'string' && toolInput.command
-      ? toolInput.command
-      : 'Command unavailable';
+    const commandText = typeof data.command === 'string' && data.command
+      ? data.command
+      : (typeof toolInput?.command === 'string' && toolInput.command ? toolInput.command : 'Command unavailable');
 
     target.textContent = resolvedTarget;
     command.textContent = commandText;

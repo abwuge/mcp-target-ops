@@ -79,6 +79,7 @@ pub(super) fn output_schema(name: &str) -> Value {
         "exec" => json!({
             "type": "object",
             "properties": {
+                "command": { "type": "string" },
                 "resolved_target": resolved_target_schema(),
                 "exit_code": nullable_integer_schema(),
                 "stdout": { "type": "string" },
@@ -87,7 +88,7 @@ pub(super) fn output_schema(name: &str) -> Value {
                 "stderr_truncated": { "type": "boolean" },
                 "timed_out": { "type": "boolean" }
             },
-            "required": ["resolved_target"],
+            "required": ["command", "resolved_target"],
             "additionalProperties": false
         }),
         "exec_start" => json!({

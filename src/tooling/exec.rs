@@ -37,6 +37,7 @@ pub struct ExecRequest {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ExecResponse {
+    pub command: String,
     pub resolved_target: ResolvedTarget,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
@@ -99,6 +100,7 @@ pub fn run(state: &AppState, req: ExecRequest) -> Result<ExecResponse> {
     let (stderr, stderr_truncated) = truncate_bytes(raw.stderr, max_output);
 
     Ok(ExecResponse {
+        command: req.command,
         resolved_target: state.resolved_target_value(target, source),
         exit_code: raw.exit_code,
         stdout: String::from_utf8_lossy(&stdout).to_string(),
@@ -217,6 +219,7 @@ mod tests {
     #[test]
     fn omits_empty_and_inactive_exec_fields() {
         let response = ExecResponse {
+            command: "true".to_string(),
             resolved_target: ResolvedTarget::new(TargetId::Local, TargetSource::Explicit),
             exit_code: Some(0),
             stdout: String::new(),
@@ -229,6 +232,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(response).unwrap(),
             json!({
+                "command": "true",
                 "resolved_target": { "target": "local", "source": "explicit" },
                 "exit_code": 0
             })

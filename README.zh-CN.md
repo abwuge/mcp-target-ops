@@ -326,8 +326,9 @@ scope。
 `exec` 执行受限的非交互式 shell 命令。在 ChatGPT 中，它会绑定稳定的
 `ui://target-ops/exec-terminal/v1.html` MCP App，以紧凑的非交互式命令结果界面展示
 stdout、stderr、目标、退出码、超时和截断状态。ANSI SGR 颜色/样式会被安全渲染，
-不再直接显示原始转义码。为兼容客户端缓存与资源发现，资源 URI 保持不变，但视觉
-设计不再模拟可交互终端。
+不再直接显示原始转义码。`ExecResponse` 也会携带实际执行的命令，因此 App 无需依赖
+不同客户端是否转发工具输入，也能稳定显示命令。为兼容客户端缓存与资源发现，资源
+URI 保持不变，但视觉设计不再模拟可交互终端。
 
 子进程 stdin 与 MCP 控制流隔离。`exec_start` 使用独立进程启动任务并立即返回任务
 ID；`job_output` 通过相互独立的 stdout/stderr 序号游标增量读取输出，`job_poll`

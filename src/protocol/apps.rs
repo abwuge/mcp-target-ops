@@ -136,6 +136,7 @@ mod tests {
         assert!(html.contains("appInfo: { name: 'target-ops-exec-result'"));
         assert!(html.contains("Command result"));
         assert!(html.contains("Non-interactive execution"));
+        assert!(html.contains("data.command"));
         assert!(html.contains("renderAnsi"));
         assert!(html.contains("stdout_truncated"));
         assert!(html.contains("stderr_truncated"));

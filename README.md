@@ -343,9 +343,11 @@ enabled, tool descriptors also advertise the configured OAuth scopes.
 stable `ui://target-ops/exec-terminal/v1.html` MCP App, which presents stdout,
 stderr, target, exit status, timeout, and truncation state as a compact
 non-interactive command result. ANSI SGR color/style sequences are rendered
-safely instead of being shown as raw escape codes. The stable resource URI is
-retained for compatibility even though the visual design no longer imitates an
-interactive terminal.
+safely instead of being shown as raw escape codes. `ExecResponse` also includes
+the executed command so the App can show it reliably without depending on
+client-specific tool-input forwarding. The stable resource URI is retained for
+compatibility even though the visual design no longer imitates an interactive
+terminal.
 
 Child stdin is disconnected from the MCP control stream. `exec_start` starts a
 dedicated process and returns a job ID immediately; use independent
