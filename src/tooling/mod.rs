@@ -2,6 +2,7 @@ mod command_session;
 mod edit;
 mod stream;
 
+pub mod download;
 pub mod exec;
 pub mod file_bridge;
 pub mod fs;

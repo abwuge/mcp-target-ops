@@ -233,6 +233,9 @@ Process-wide runtime behavior lives under `[runtime]`:
 | `job_wait_default_timeout_ms` | `60000` | Default server-side `job_wait` window |
 | `job_wait_max_timeout_ms` | `120000` | Maximum server-side `job_wait` window |
 | `file_transfer_default_max_bytes` | `26214400` | Default `file_import` / `file_export` transfer limit |
+| `file_export_delivery` | `link` | Default `file_export` delivery: temporary download link or legacy attachment |
+| `file_export_link_ttl_secs` | `600` | Default link lifetime; hard maximum is 86400 seconds |
+| `file_export_link_single_use` | `false` | Consume a link after the first successful GET; disabled by default to tolerate prefetching |
 | `file_download_timeout_ms` | `30000` | Default HTTPS connector-file download timeout |
 | `terminal_default_rows` | `30` | Default PTY rows |
 | `terminal_default_cols` | `120` | Default PTY columns |
@@ -454,9 +457,27 @@ remain process-local.
 
 `file_import` accepts a ChatGPT or connector file parameter after runtime
 rewriting to a mounted local path or HTTPS file reference. It writes through the
-normal atomic/CAS policy. HTTPS redirects are disabled. `file_export` returns a
-standard MCP embedded resource and ChatGPT-compatible output metadata. Both
-directions use `runtime.file_transfer_default_max_bytes` (25 MiB by default) and retain a compiled 100 MiB hard maximum.
+normal atomic/CAS policy. HTTPS redirects are disabled.
+
+`file_export` defaults to `delivery = "link"`. After the normal target read-policy
+check, the server stages a private copy under `runtime_dir/downloads/`, assigns a
+cryptographically random 256-bit opaque token, and returns a URL under
+`/downloads/<token>` instead of an MCP file attachment. The default lifetime is
+10 minutes; `link_ttl_secs` may override it up to 24 hours. Links are reusable by
+default so browser or host prefetching does not consume them, while `single_use =
+true` makes the first successful GET consume the token. On Unix the staging
+directory is mode 0700 and staged files are mode 0600. Expired tokens are
+rejected, and staged exports are purged whenever the service starts.
+
+Link delivery requires `server.public_base_url`; HTTPS is required except for
+localhost testing. Treat the opaque download URL as short-lived sensitive data.
+`delivery = "attachment"` preserves the original MCP embedded-resource and
+ChatGPT file-output path for compatibility. Only attachment mode emits the
+embedded base64 resource and `file` result field, while link mode returns download
+metadata only.
+
+Both import and export use `runtime.file_transfer_default_max_bytes` (25 MiB by
+default) and retain a compiled 100 MiB hard maximum.
 
 File-changing tools bind to the stable MCP App resource:
 
@@ -542,6 +563,7 @@ state.
 | `GET /` | Public service summary and endpoint discovery |
 | `GET /health` | Public health status |
 | `GET /favicon.ico` | Public application icon |
+| `GET /downloads/<token>` | Temporary `file_export` download addressed by its opaque token |
 | `POST /` or `POST /mcp` | MCP JSON-RPC; protected when auth is configured |
 | `DELETE /mcp` | Acknowledge MCP session close; protected when auth is configured |
 | `GET /openapi.json` | Public GPT Actions OpenAPI 3.1 document |

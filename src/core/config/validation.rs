@@ -62,6 +62,16 @@ fn validate_runtime(config: &Config) -> Result<()> {
         )));
     }
     validate_nonzero(
+        "runtime.file_export_link_ttl_secs",
+        runtime.file_export_link_ttl_secs,
+    )?;
+    if runtime.file_export_link_ttl_secs > super::FILE_EXPORT_LINK_MAX_TTL_SECS {
+        return Err(Error::Config(format!(
+            "runtime.file_export_link_ttl_secs must not exceed {}",
+            super::FILE_EXPORT_LINK_MAX_TTL_SECS
+        )));
+    }
+    validate_nonzero(
         "runtime.file_download_timeout_ms",
         runtime.file_download_timeout_ms,
     )?;

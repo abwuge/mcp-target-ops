@@ -272,18 +272,27 @@ fn tools_call(
                     object.insert("result_id".to_string(), Value::String(result_id));
                 }
             }
-            let content = if params.name == "file_export" {
+            // COMPAT(COMPAT-009): Explicit attachment delivery keeps the original
+            // embedded-resource result for clients that still need host materialization.
+            let content = if params.name == "file_export"
+                && value.get("delivery").and_then(Value::as_str) == Some("attachment")
+            {
                 let file = value
                     .get_mut("file")
                     .and_then(Value::as_object_mut)
                     .ok_or_else(|| {
-                        Error::Tool("file_export result is missing file metadata".to_string())
+                        Error::Tool(
+                            "attachment file_export result is missing file metadata".to_string(),
+                        )
                     })?;
                 let blob = file
                     .remove("data_base64")
                     .and_then(|value| value.as_str().map(str::to_string))
                     .ok_or_else(|| {
-                        Error::Tool("file_export result is missing encoded file data".to_string())
+                        Error::Tool(
+                            "attachment file_export result is missing encoded file data"
+                                .to_string(),
+                        )
                     })?;
                 let mime_type = file
                     .get("mime_type")
@@ -382,6 +391,7 @@ mod tests {
     use super::*;
     use crate::core::config::{Config, TargetConfig};
     use crate::tooling::job::JobPollRequest;
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
     use std::time::Duration;
     use tempfile::tempdir;
 
@@ -392,8 +402,11 @@ mod tests {
         if let Some(TargetConfig::Local(local)) = config.targets.get_mut("local") {
             local.enabled = true;
             local.policy.allow_exec = true;
+            local.policy.allow_file_read = true;
+            local.policy.allowed_roots = vec![path.to_string_lossy().to_string()];
         }
         config.server.default_target = Some("local".to_string());
+        config.server.public_base_url = Some("https://files.example.test".to_string());
         config.server.oauth_state_file = None;
         config.server.runtime_dir = path.join("runtime");
         Arc::new(AppState::new(config).unwrap())
@@ -418,6 +431,67 @@ mod tests {
         )
         .unwrap()
         .unwrap()
+    }
+
+    #[test]
+    fn link_file_export_has_no_embedded_resource() {
+        let state = test_state();
+        let source = state
+            .config
+            .server
+            .runtime_dir
+            .parent()
+            .unwrap()
+            .join("export.txt");
+        std::fs::write(&source, b"link export").unwrap();
+
+        let response = call_tool_for(
+            Arc::clone(&state),
+            "session:export-link",
+            1,
+            "file_export",
+            json!({ "target": "local", "path": source }),
+        );
+        let result = &response["result"];
+        assert_eq!(result["structuredContent"]["delivery"], "link");
+        assert!(result["structuredContent"].get("file").is_none());
+        assert!(result["structuredContent"]["download"]["url"]
+            .as_str()
+            .unwrap()
+            .starts_with("https://files.example.test/downloads/"));
+        assert!(result["content"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn attachment_file_export_keeps_embedded_resource_compatibility() {
+        let state = test_state();
+        let source = state
+            .config
+            .server
+            .runtime_dir
+            .parent()
+            .unwrap()
+            .join("export.txt");
+        std::fs::write(&source, b"attachment export").unwrap();
+
+        let response = call_tool_for(
+            Arc::clone(&state),
+            "session:export-attachment",
+            1,
+            "file_export",
+            json!({ "target": "local", "path": source, "delivery": "attachment" }),
+        );
+        let result = &response["result"];
+        assert_eq!(result["structuredContent"]["delivery"], "attachment");
+        assert!(result["structuredContent"]["download"].is_null());
+        assert!(result["structuredContent"]["file"]
+            .get("data_base64")
+            .is_none());
+        assert_eq!(result["content"][0]["type"], "resource");
+        assert_eq!(
+            result["content"][0]["resource"]["blob"],
+            BASE64.encode(b"attachment export")
+        );
     }
 
     #[test]

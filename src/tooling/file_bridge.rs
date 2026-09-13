@@ -1,6 +1,6 @@
 use crate::{
     core::{
-        config::FILE_TRANSFER_HARD_MAX_BYTES,
+        config::{FileExportDelivery, FILE_EXPORT_LINK_MAX_TTL_SECS, FILE_TRANSFER_HARD_MAX_BYTES},
         error::{Error, Result},
         policy::{self, FileAccess},
         state::AppState,
@@ -59,6 +59,12 @@ pub struct FileExportRequest {
     #[serde(default)]
     pub mime_type: Option<String>,
     #[serde(default)]
+    pub delivery: Option<FileExportDelivery>,
+    #[serde(default)]
+    pub link_ttl_secs: Option<u64>,
+    #[serde(default)]
+    pub single_use: Option<bool>,
+    #[serde(default)]
     pub max_bytes: Option<usize>,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
@@ -68,7 +74,11 @@ pub struct FileExportRequest {
 pub struct FileExportResponse {
     pub resolved_target: crate::core::target::ResolvedTarget,
     pub path: String,
-    pub file: ExportedFile,
+    pub delivery: FileExportDelivery,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<ExportedFile>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub download: Option<DownloadLink>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -78,6 +88,17 @@ pub struct ExportedFile {
     pub bytes: usize,
     pub sha256: String,
     pub data_base64: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DownloadLink {
+    pub url: String,
+    pub file_name: String,
+    pub mime_type: String,
+    pub bytes: usize,
+    pub sha256: String,
+    pub expires_at_unix_secs: u64,
+    pub single_use: bool,
 }
 
 #[derive(Debug)]
@@ -142,6 +163,9 @@ pub fn export(state: &AppState, req: FileExportRequest) -> Result<FileExportResp
         req.max_bytes,
         state.config.runtime.file_transfer_default_max_bytes,
     )?;
+    let delivery = req
+        .delivery
+        .unwrap_or(state.config.runtime.file_export_delivery);
     let (target, source) = state.resolve_target(req.target.as_deref())?;
     let config = state.get_target_config(&target)?;
     policy::check_file(&target, config, &req.path, FileAccess::Read, source)?;
@@ -171,18 +195,95 @@ pub fn export(state: &AppState, req: FileExportRequest) -> Result<FileExportResp
     let mime_type = req
         .mime_type
         .unwrap_or_else(|| infer_mime_type(&file_name).to_string());
+    validate_mime_type(&mime_type)?;
+    let sha256 = sha256_hex(&bytes);
+
+    let (file, download) = match delivery {
+        // COMPAT(COMPAT-009): Keep the original embedded attachment payload as an
+        // explicit opt-in while link delivery is the default.
+        FileExportDelivery::Attachment => (
+            Some(ExportedFile {
+                file_name: file_name.clone(),
+                mime_type: mime_type.clone(),
+                bytes: bytes.len(),
+                sha256: sha256.clone(),
+                data_base64: BASE64.encode(&bytes),
+            }),
+            None,
+        ),
+        FileExportDelivery::Link => {
+            let ttl_secs = req
+                .link_ttl_secs
+                .unwrap_or(state.config.runtime.file_export_link_ttl_secs);
+            if ttl_secs == 0 || ttl_secs > FILE_EXPORT_LINK_MAX_TTL_SECS {
+                return Err(Error::Tool(format!(
+                    "link_ttl_secs must be between 1 and {FILE_EXPORT_LINK_MAX_TTL_SECS}"
+                )));
+            }
+            let single_use = req
+                .single_use
+                .unwrap_or(state.config.runtime.file_export_link_single_use);
+            let base_url = download_base_url(state)?;
+            let issued = state.downloads.issue(
+                &bytes,
+                file_name.clone(),
+                mime_type.clone(),
+                sha256.clone(),
+                Duration::from_secs(ttl_secs),
+                single_use,
+            )?;
+            (
+                None,
+                Some(DownloadLink {
+                    url: format!("{base_url}/downloads/{}", issued.token),
+                    file_name,
+                    mime_type,
+                    bytes: bytes.len(),
+                    sha256,
+                    expires_at_unix_secs: issued.expires_at_unix_secs,
+                    single_use,
+                }),
+            )
+        }
+    };
 
     Ok(FileExportResponse {
         resolved_target: state.resolved_target_value(target, source),
         path: req.path,
-        file: ExportedFile {
-            file_name,
-            mime_type,
-            bytes: bytes.len(),
-            sha256: sha256_hex(&bytes),
-            data_base64: BASE64.encode(bytes),
-        },
+        delivery,
+        file,
+        download,
     })
+}
+
+fn download_base_url(state: &AppState) -> Result<String> {
+    let base_url = state.config.server.public_base_url.as_deref().ok_or_else(|| {
+        Error::Tool(
+            "link delivery requires server.public_base_url; configure the public HTTPS origin or request delivery=attachment"
+                .to_string(),
+        )
+    })?;
+    let parsed = Url::parse(base_url)
+        .map_err(|err| Error::Tool(format!("invalid server.public_base_url: {err}")))?;
+    let local_http = parsed.scheme() == "http"
+        && matches!(parsed.host_str(), Some("localhost" | "127.0.0.1" | "::1"));
+    if parsed.scheme() != "https" && !local_http {
+        return Err(Error::Tool(
+            "link delivery requires an HTTPS public_base_url (plain HTTP is allowed only for localhost testing)"
+                .to_string(),
+        ));
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(Error::Tool(
+            "server.public_base_url must not contain credentials".to_string(),
+        ));
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err(Error::Tool(
+            "server.public_base_url must not contain a query or fragment".to_string(),
+        ));
+    }
+    Ok(base_url.trim_end_matches('/').to_string())
 }
 
 fn transfer_limit(requested: Option<usize>, default_limit: usize) -> Result<usize> {
@@ -313,6 +414,21 @@ fn read_local_connector_file(state: &AppState, path: &str, limit: usize) -> Resu
     Ok(bytes)
 }
 
+fn validate_mime_type(value: &str) -> Result<()> {
+    if value.is_empty()
+        || value.len() > 256
+        || value.trim() != value
+        || !value.bytes().all(|byte| matches!(byte, 0x21..=0x7e))
+        || !value.contains('/')
+    {
+        return Err(Error::Tool(
+            "mime_type must be a non-empty visible ASCII media type without whitespace or control characters"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn infer_mime_type(file_name: &str) -> &'static str {
     match Path::new(file_name)
         .extension()
@@ -367,5 +483,14 @@ mod tests {
     fn infers_common_mime_types() {
         assert_eq!(infer_mime_type("report.pdf"), "application/pdf");
         assert_eq!(infer_mime_type("data.bin"), "application/octet-stream");
+    }
+
+    #[test]
+    fn rejects_unsafe_mime_type_overrides() {
+        assert!(validate_mime_type("application/zip").is_ok());
+        assert!(validate_mime_type("text/plain;charset=utf-8").is_ok());
+        assert!(validate_mime_type("text/plain\r\nX-Evil: 1").is_err());
+        assert!(validate_mime_type(" text/plain").is_err());
+        assert!(validate_mime_type("not-a-media-type").is_err());
     }
 }

@@ -41,6 +41,14 @@ job_wait_max_timeout_ms = 120000
 # Default maximum size accepted by file_import/file_export. The compiled absolute
 # file-transfer ceiling is 100 MiB, so this configurable default cannot exceed it.
 file_transfer_default_max_bytes = 26214400
+# Default file_export delivery. "link" returns a temporary opaque download URL;
+# "attachment" preserves the embedded-resource compatibility path.
+file_export_delivery = "link"
+# Default link lifetime in seconds. The compiled maximum is 86400 seconds.
+file_export_link_ttl_secs = 600
+# Consume a link after its first successful GET. False tolerates host/browser
+# prefetching and is therefore the default.
+file_export_link_single_use = false
 # Timeout used when file_import downloads an HTTPS connector/file reference and
 # the request does not supply its own timeout_ms.
 file_download_timeout_ms = 30000
@@ -77,9 +85,9 @@ runtime_dir = "/tmp/mcp-target-ops"
 # GPT Action or another single-service client.
 # http_bearer_token = "change-me"
 #
-# Exact public HTTPS origin used by OAuth metadata, the generated GPT Actions
-# OpenAPI document, and the ChatGPT MCP App widget domain. Do not include a
-# trailing slash. You may also use MCP_TARGET_OPS_PUBLIC_BASE_URL.
+# Exact public HTTPS origin used by OAuth metadata, generated download links, the
+# GPT Actions OpenAPI document, and the ChatGPT MCP App widget domain. Do not
+# include a trailing slash. You may also use MCP_TARGET_OPS_PUBLIC_BASE_URL.
 # public_base_url = "https://mcp.example.com"
 #
 # Enable the embedded OAuth authorization server for remote MCP / ChatGPT Apps.

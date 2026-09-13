@@ -5,7 +5,10 @@ use crate::{
         oauth::OAuthState,
         target::{ResolvedTarget, TargetId, TargetSource},
     },
-    tooling::{job::JobRegistry, result_store::ResultStore, terminal::TerminalRegistry},
+    tooling::{
+        download::DownloadRegistry, job::JobRegistry, result_store::ResultStore,
+        terminal::TerminalRegistry,
+    },
     transport::ssh::SshSessionRegistry,
 };
 use serde::Serialize;
@@ -18,6 +21,7 @@ pub struct AppState {
     pub terminals: TerminalRegistry,
     pub jobs: JobRegistry,
     pub results: ResultStore,
+    pub downloads: DownloadRegistry,
     pub oauth: Mutex<OAuthState>,
     started_at: SystemTime,
 }
@@ -54,12 +58,14 @@ impl AppState {
         let terminals =
             TerminalRegistry::new(config.server.terminal_ring_buffer_bytes, &config.runtime);
         let jobs = JobRegistry::new(config.runtime.clone());
+        let downloads = DownloadRegistry::new(&config.server.runtime_dir)?;
 
         Ok(Self {
             ssh_sessions: SshSessionRegistry::new(),
             terminals,
             jobs,
             results,
+            downloads,
             oauth: Mutex::new(OAuthState::load(config.server.oauth_state_file.clone())?),
             config,
             active_target: Mutex::new(None),

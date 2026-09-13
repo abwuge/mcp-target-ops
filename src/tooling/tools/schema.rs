@@ -340,6 +340,7 @@ pub(super) fn output_schema(name: &str) -> Value {
             "properties": {
                 "resolved_target": resolved_target_schema(),
                 "path": { "type": "string" },
+                "delivery": { "type": "string", "enum": ["link", "attachment"] },
                 "file": {
                     "type": "object",
                     "properties": {
@@ -350,9 +351,23 @@ pub(super) fn output_schema(name: &str) -> Value {
                     },
                     "required": ["file_name", "mime_type", "bytes", "sha256"],
                     "additionalProperties": false
+                },
+                "download": {
+                    "type": "object",
+                    "properties": {
+                        "url": { "type": "string" },
+                        "file_name": { "type": "string" },
+                        "mime_type": { "type": "string" },
+                        "bytes": { "type": "integer", "minimum": 0 },
+                        "sha256": { "type": "string" },
+                        "expires_at_unix_secs": { "type": "integer", "minimum": 0 },
+                        "single_use": { "type": "boolean" }
+                    },
+                    "required": ["url", "file_name", "mime_type", "bytes", "sha256", "expires_at_unix_secs", "single_use"],
+                    "additionalProperties": false
                 }
             },
-            "required": ["resolved_target", "path", "file"],
+            "required": ["resolved_target", "path", "delivery"],
             "additionalProperties": false
         }),
         "file_patch" => json!({

@@ -5,8 +5,8 @@ mod response;
 
 pub(crate) use self::response::respond_json;
 use self::response::{
-    respond_bytes, respond_bytes_with_headers, respond_empty, respond_empty_with_allow,
-    respond_icon,
+    respond_bytes, respond_bytes_with_headers, respond_download, respond_empty,
+    respond_empty_with_allow, respond_icon,
 };
 use crate::{
     core::{
@@ -27,6 +27,7 @@ const AUTHORIZATION_SERVER_METADATA_PATH: &str = "/.well-known/oauth-authorizati
 const AUTHORIZE_PATH: &str = "/oauth/authorize";
 const TOKEN_PATH: &str = "/oauth/token";
 const REGISTER_PATH: &str = "/oauth/register";
+const DOWNLOAD_PREFIX: &str = "/downloads/";
 const APP_ICON: &[u8] = include_bytes!("../../../assets/mcp-target-ops.ico");
 
 pub(super) type Params = BTreeMap<String, String>;
@@ -149,6 +150,9 @@ fn new_mcp_session_id() -> String {
 }
 
 fn is_public_endpoint(method: &Method, path: &str) -> bool {
+    if method == &Method::Get && path.starts_with(DOWNLOAD_PREFIX) {
+        return true;
+    }
     matches!(
         (method, path),
         (Method::Get, "/")
@@ -170,6 +174,15 @@ fn handle_public_request(
     method: Method,
     path: String,
 ) -> Result<()> {
+    if method == Method::Get {
+        if let Some(token) = path.strip_prefix(DOWNLOAD_PREFIX) {
+            return match state.downloads.open(token)? {
+                Some(download) => respond_download(request, download),
+                None => respond_json(request, 404, json!({ "error": "download not found" })),
+            };
+        }
+    }
+
     match (method.clone(), path.as_str()) {
         (Method::Get, FAVICON_PATH) => respond_icon(request),
         (Method::Get, "/") => {
@@ -271,7 +284,7 @@ fn request_path(url: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_public_endpoint, APP_ICON, FAVICON_PATH};
+    use super::{is_public_endpoint, APP_ICON, DOWNLOAD_PREFIX, FAVICON_PATH};
     use crate::protocol::actions;
     use tiny_http::Method;
 
@@ -279,6 +292,10 @@ mod tests {
     fn actions_schema_is_public_but_actions_require_http_auth() {
         assert!(is_public_endpoint(&Method::Get, FAVICON_PATH));
         assert!(is_public_endpoint(&Method::Get, actions::OPENAPI_PATH));
+        assert!(is_public_endpoint(
+            &Method::Get,
+            &format!("{DOWNLOAD_PREFIX}{}", "a".repeat(64))
+        ));
         assert!(!is_public_endpoint(&Method::Get, "/actions/v1/targets"));
         assert!(!is_public_endpoint(&Method::Post, "/actions/v1/files/read"));
     }

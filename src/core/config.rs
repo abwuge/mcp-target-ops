@@ -36,6 +36,13 @@ pub struct ConfigManagementConfig {
     pub rewrite_on_start: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileExportDelivery {
+    Link,
+    Attachment,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeConfig {
     #[serde(default = "default_result_cache_max_bytes")]
@@ -64,6 +71,15 @@ pub struct RuntimeConfig {
 
     #[serde(default = "default_file_transfer_max_bytes")]
     pub file_transfer_default_max_bytes: usize,
+
+    #[serde(default = "default_file_export_delivery")]
+    pub file_export_delivery: FileExportDelivery,
+
+    #[serde(default = "default_file_export_link_ttl_secs")]
+    pub file_export_link_ttl_secs: u64,
+
+    #[serde(default)]
+    pub file_export_link_single_use: bool,
 
     #[serde(default = "default_file_download_timeout_ms")]
     pub file_download_timeout_ms: u64,
@@ -282,6 +298,9 @@ impl Default for RuntimeConfig {
             job_wait_default_timeout_ms: default_job_wait_timeout_ms(),
             job_wait_max_timeout_ms: default_job_wait_max_timeout_ms(),
             file_transfer_default_max_bytes: default_file_transfer_max_bytes(),
+            file_export_delivery: default_file_export_delivery(),
+            file_export_link_ttl_secs: default_file_export_link_ttl_secs(),
+            file_export_link_single_use: false,
             file_download_timeout_ms: default_file_download_timeout_ms(),
             terminal_default_rows: default_terminal_rows(),
             terminal_default_cols: default_terminal_cols(),
@@ -513,6 +532,14 @@ fn default_file_transfer_max_bytes() -> usize {
     25 * 1024 * 1024
 }
 
+fn default_file_export_delivery() -> FileExportDelivery {
+    FileExportDelivery::Link
+}
+
+fn default_file_export_link_ttl_secs() -> u64 {
+    10 * 60
+}
+
 fn default_file_download_timeout_ms() -> u64 {
     30_000
 }
@@ -542,6 +569,7 @@ fn default_app_job_poll_interval_ms() -> u64 {
 }
 
 pub const FILE_TRANSFER_HARD_MAX_BYTES: usize = 100 * 1024 * 1024;
+pub const FILE_EXPORT_LINK_MAX_TTL_SECS: u64 = 24 * 60 * 60;
 
 pub fn default_config_path() -> PathBuf {
     if let Ok(path) = std::env::var("MCP_TARGET_OPS_CONFIG") {

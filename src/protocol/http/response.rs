@@ -3,10 +3,13 @@ use super::{
     form::{percent_encode, quote_header_value},
     public_base_url, APP_ICON, PROTECTED_RESOURCE_METADATA_PATH,
 };
-use crate::core::{
-    error::{Error, Result},
-    oauth::OAuthError,
-    state::AppState,
+use crate::{
+    core::{
+        error::{Error, Result},
+        oauth::OAuthError,
+        state::AppState,
+    },
+    tooling::download::DownloadFile,
 };
 use serde_json::{json, Value};
 use std::io::Read;
@@ -139,6 +142,45 @@ pub(super) fn respond_icon(request: Request) -> Result<()> {
     request.respond(response).map_err(Error::Io)
 }
 
+pub(super) fn respond_download(request: Request, download: DownloadFile) -> Result<()> {
+    let encoded_name = percent_encode(&download.file_name);
+    let fallback_name = ascii_filename(&download.file_name);
+    let disposition = format!(
+        "attachment; filename={}; filename*=UTF-8''{}",
+        quote_header_value(&fallback_name),
+        encoded_name
+    );
+    let sha256 = download.sha256.clone();
+    let mime_type = download.mime_type.clone();
+    let mut response = Response::from_file(download.file).with_status_code(StatusCode(200));
+    response.add_header(header("Content-Type", &mime_type));
+    response.add_header(header("Content-Disposition", &disposition));
+    response.add_header(header("Cache-Control", "private, no-store"));
+    response.add_header(header("Pragma", "no-cache"));
+    response.add_header(header("X-Content-Type-Options", "nosniff"));
+    response.add_header(header("X-Content-SHA256", &sha256));
+    add_common_headers(&mut response);
+    request.respond(response).map_err(Error::Io)
+}
+
+fn ascii_filename(file_name: &str) -> String {
+    let sanitized: String = file_name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_' | ' ') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if sanitized.trim().is_empty() {
+        "download".to_string()
+    } else {
+        sanitized
+    }
+}
+
 pub(super) fn respond_empty(request: Request, status: u16) -> Result<()> {
     let mut response = Response::empty(StatusCode(status));
     add_common_headers(&mut response);
@@ -202,7 +244,14 @@ fn header(name: &str, value: &str) -> Header {
 
 #[cfg(test)]
 mod tests {
-    use super::html_csp;
+    use super::{ascii_filename, html_csp};
+
+    #[test]
+    fn download_filename_fallback_is_header_safe() {
+        assert_eq!(ascii_filename("报告.zip"), "__.zip");
+        assert_eq!(ascii_filename("a\r\nb.zip"), "a__b.zip");
+        assert_eq!(ascii_filename("\n\r"), "__");
+    }
 
     #[test]
     fn consent_policy_allows_only_callback_origin() {

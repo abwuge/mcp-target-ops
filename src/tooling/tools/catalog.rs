@@ -100,7 +100,7 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
         tool("file_write", "Create or replace a UTF-8 or base64 file atomically. Existing files require overwrite=true or an expected sha256. Writes require explicit target by default.", file_write_schema()),
         tool("file_delete", "Delete one file after optionally checking its sha256. Returns the deleted content for review. Directories are refused.", file_delete_schema()),
         tool("file_import", "Import a ChatGPT or connector file reference into a target path. Accepts platform-rewritten local paths or HTTPS download URLs and preserves the normal target write policy.", file_import_schema()),
-        tool("file_export", "Export one target file as an MCP embedded resource and ChatGPT-compatible file output.", file_export_schema()),
+        tool("file_export", "Export one target file. The default link delivery returns a short-lived opaque HTTPS download URL without ChatGPT attachment materialization; delivery=attachment preserves the embedded-resource compatibility path.", file_export_schema()),
         tool("file_patch", "Apply a unified diff to one UTF-8 file, or a standard multi-file unified diff rooted at path. Single-file mode supports sha256 compare-and-swap; multi-file mode validates all files before writing and rolls back earlier writes if a later write fails.", file_patch_schema()),
         tool("file_find", "Find literal text in one UTF-8 file and return matching lines with bounded context.", file_find_schema()),
         tool("file_move", "Move or rename a file or directory within one target. Existing destinations are not replaced unless overwrite=true.", file_move_schema()),
@@ -265,6 +265,9 @@ fn tool(
         meta.insert("openai/fileParams".to_string(), paths);
     }
 
+    // COMPAT(COMPAT-009): File-result rewrite aliases remain attached to
+    // file_export so explicit delivery=attachment keeps host materialization.
+    // Link delivery omits the `file` result field, so these paths are inert.
     if name == "file_export" {
         let paths = json!(["file"]);
         meta.insert("file_result_rewrite_paths".to_string(), paths.clone());
@@ -584,6 +587,9 @@ fn file_export_schema() -> Value {
             "target": { "type": "string", "description": "Target id. Omit to use active target." },
             "path": { "type": "string", "description": "Existing file path to export." },
             "mime_type": { "type": "string", "description": "Optional media type override. Otherwise inferred from the filename." },
+            "delivery": { "type": "string", "enum": ["link", "attachment"], "description": "Delivery mode. Defaults to the configured mode (link by default). Link avoids ChatGPT attachment materialization; attachment returns the legacy embedded file output." },
+            "link_ttl_secs": { "type": "integer", "minimum": 1, "maximum": 86400, "description": "Link lifetime in seconds for delivery=link. Uses the configured default (600 seconds by default)." },
+            "single_use": { "type": "boolean", "description": "Consume a link after its first successful GET. Defaults to the configured value (false by default to tolerate link prefetching)." },
             "max_bytes": { "type": "integer", "minimum": 1, "maximum": 104857600, "description": "Maximum exported file size. Uses the configured default when omitted." },
             "timeout_ms": { "type": "integer", "minimum": 1, "description": "Timeout for remote file access." }
         },

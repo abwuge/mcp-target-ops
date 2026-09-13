@@ -224,6 +224,9 @@ rewrite_on_start = false
 | `job_wait_default_timeout_ms` | `60000` | `job_wait` 服务端默认等待窗口 |
 | `job_wait_max_timeout_ms` | `120000` | `job_wait` 服务端最大等待窗口 |
 | `file_transfer_default_max_bytes` | `26214400` | `file_import` / `file_export` 默认传输上限 |
+| `file_export_delivery` | `link` | `file_export` 默认交付方式：临时下载链接或兼容 attachment |
+| `file_export_link_ttl_secs` | `600` | 下载链接默认有效期；硬上限为 86400 秒 |
+| `file_export_link_single_use` | `false` | 首次成功 GET 后是否失效；默认关闭以兼容预取 |
 | `file_download_timeout_ms` | `30000` | HTTPS 连接器文件下载默认超时 |
 | `terminal_default_rows` | `30` | PTY 默认行数 |
 | `terminal_default_cols` | `120` | PTY 默认列数 |
@@ -432,8 +435,22 @@ MCP 请求参数中；但被启动的命令仍可通过输出环境或主动发�
 
 `file_import` 接受经运行时重写后的 ChatGPT/连接器文件参数，可以是已挂载本地
 路径或 HTTPS 文件引用，并通过普通原子/CAS 写入策略落盘；HTTPS 重定向被禁用。
-`file_export` 返回标准 MCP embedded resource 与 ChatGPT 兼容输出元数据。两个方向
-默认上限由 `runtime.file_transfer_default_max_bytes` 控制（默认 25 MiB），同时保留编译期 100 MiB 硬上限。
+
+`file_export` 默认使用 `delivery = "link"`。通过普通目标读取策略检查后，服务会把
+文件暂存到 `runtime_dir/downloads/`，生成 256-bit 加密随机不透明 token，并返回
+`/downloads/<token>` 下载 URL，而不是 MCP 文件附件。默认有效期为 10 分钟，
+`link_ttl_secs` 最长可覆盖到 24 小时。链接默认可重复下载，避免浏览器或宿主预取
+提前消耗；设置 `single_use = true` 后，第一次成功 GET 即会消费该 token。Unix 下
+暂存目录权限为 0700，文件为 0600；过期 token 会被拒绝，服务每次启动都会清空旧
+暂存导出。
+
+link 模式要求配置 `server.public_base_url`，除 localhost 测试外必须使用 HTTPS。
+应把该不透明下载 URL 视为短期敏感信息。显式 `delivery = "attachment"` 则保留原有
+MCP embedded resource 与 ChatGPT 文件输出兼容路径；只有 attachment 模式会产生
+embedded base64 resource 与 `file` 结果字段，link 模式只返回下载元数据。
+
+导入和导出默认上限均由 `runtime.file_transfer_default_max_bytes` 控制（默认 25 MiB），
+同时保留编译期 100 MiB 硬上限。
 
 文件变更工具绑定到稳定的 MCP App 资源：
 
@@ -514,6 +531,7 @@ oauth_state_file = "/home/me/.config/mcp-target-ops/oauth-state.json"
 | `GET /` | 公开的服务摘要与端点发现 |
 | `GET /health` | 公开健康状态 |
 | `GET /favicon.ico` | 公开应用图标 |
+| `GET /downloads/<token>` | 由不透明 token 定位的临时 `file_export` 下载 |
 | `POST /` 或 `POST /mcp` | MCP JSON-RPC；配置认证后受保护 |
 | `DELETE /mcp` | 确认关闭 MCP session；配置认证后受保护 |
 | `GET /openapi.json` | 公开 GPT Actions OpenAPI 3.1 文档 |
