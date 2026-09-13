@@ -11,7 +11,7 @@ use crate::{
     core::{config::SshTargetConfig, error::Result, util::shell_quote},
     tooling::exec::RawExecOutput,
 };
-use std::{collections::BTreeMap, time::Duration};
+use std::{collections::BTreeMap, path::Path, time::Duration};
 
 pub fn connect(
     sessions: &SshSessionRegistry,
@@ -31,24 +31,32 @@ pub fn disconnect(
 }
 
 pub fn exec_program_and_args(
+    sessions: &SshSessionRegistry,
+    target_name: &str,
     ssh: &SshTargetConfig,
     command: &str,
     cwd: Option<&str>,
     env: &BTreeMap<String, String>,
-) -> (String, Vec<String>) {
-    let mut args = base_args(ssh);
+    timeout: Duration,
+) -> Result<(String, Vec<String>)> {
+    let control_path = sessions.ensure_control_master(target_name, ssh, timeout)?;
+    let mut args = client_args(ssh, control_path.as_deref());
     args.push(destination(ssh));
     let remote_command = with_cwd_and_env(command, cwd, env);
     args.push(format!("sh -lc {}", shell_quote(&remote_command)));
-    ("ssh".to_string(), args)
+    Ok(("ssh".to_string(), args))
 }
 
 pub fn terminal_program_and_args(
+    sessions: &SshSessionRegistry,
+    target_name: &str,
     ssh: &SshTargetConfig,
     cwd: Option<&str>,
     shell: Option<&str>,
-) -> (String, Vec<String>) {
-    let mut args = base_args(ssh);
+    timeout: Duration,
+) -> Result<(String, Vec<String>)> {
+    let control_path = sessions.ensure_control_master(target_name, ssh, timeout)?;
+    let mut args = client_args(ssh, control_path.as_deref());
     args.push("-tt".to_string());
     args.push(destination(ssh));
 
@@ -65,7 +73,19 @@ pub fn terminal_program_and_args(
         args.push(remote);
     }
 
-    ("ssh".to_string(), args)
+    Ok(("ssh".to_string(), args))
+}
+
+pub(super) fn client_args(ssh: &SshTargetConfig, control_path: Option<&Path>) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(control_path) = control_path {
+        args.push("-S".to_string());
+        args.push(control_path.display().to_string());
+        args.push("-o".to_string());
+        args.push("ControlMaster=no".to_string());
+    }
+    args.extend(base_args(ssh));
+    args
 }
 
 pub fn base_args(ssh: &SshTargetConfig) -> Vec<String> {

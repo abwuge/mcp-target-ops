@@ -1,6 +1,7 @@
 use super::{
-    default_exec_timeout_ms, default_max_output_bytes, default_mcp_max_response_bytes,
-    default_mcp_timeout_ms, default_runtime_dir, default_ssh_port, Config,
+    default_control_persist_secs, default_exec_timeout_ms, default_max_output_bytes,
+    default_mcp_max_response_bytes, default_mcp_timeout_ms, default_runtime_dir, default_ssh_port,
+    Config,
 };
 use crate::core::error::{Error, Result};
 use std::{
@@ -216,6 +217,12 @@ fn merge_dynamic_defaults(document: &mut DocumentMut) {
                 "ssh" => {
                     insert_if_missing(target, "enabled", value(true));
                     insert_if_missing(target, "port", value(i64::from(default_ssh_port())));
+                    insert_if_missing(target, "control_master", value(true));
+                    insert_if_missing(
+                        target,
+                        "control_persist_secs",
+                        value(default_control_persist_secs() as i64),
+                    );
                     insert_if_missing(target, "extra_args", value(Array::new()));
                 }
                 _ => {}
@@ -365,6 +372,7 @@ url = "https://example.com/mcp"
         assert_eq!(config.runtime.result_cache_max_bytes, 12345);
         assert!(written.contains("# keep this comment"));
         assert!(written.contains("control_master = true"));
+        assert!(written.contains("control_persist_secs = 1800"));
         assert!(written.contains("[runtime]"));
         assert!(written.contains("[targets.dev.policy]"));
         assert!(written.contains("file_backup_default_ttl_secs = 86400"));

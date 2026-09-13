@@ -1,4 +1,4 @@
-use super::{base_args, destination};
+use super::{base_args, client_args, destination};
 use crate::{
     core::{
         config::SshTargetConfig,
@@ -8,8 +8,11 @@ use crate::{
     tooling::exec::RawExecOutput,
 };
 use std::{
-    collections::HashMap,
-    io::{Read, Write},
+    collections::{hash_map::DefaultHasher, HashMap},
+    fs,
+    hash::{Hash, Hasher},
+    io::{Read, Seek, SeekFrom, Write},
+    path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
         mpsc::{self, Receiver},
@@ -18,16 +21,22 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+use tempfile::{Builder, TempDir};
 
 pub struct SshSessionRegistry {
     sessions: Mutex<HashMap<String, Arc<SshSession>>>,
+    masters: Mutex<HashMap<String, SshControlMaster>>,
+    control_dir: TempDir,
 }
 
 impl SshSessionRegistry {
-    pub fn new() -> Self {
-        Self {
+    pub fn new() -> Result<Self> {
+        let control_dir = Builder::new().prefix("mcp-target-ops-ssh-").tempdir()?;
+        Ok(Self {
             sessions: Mutex::new(HashMap::new()),
-        }
+            masters: Mutex::new(HashMap::new()),
+            control_dir,
+        })
     }
 
     pub fn ids(&self) -> Vec<String> {
@@ -36,7 +45,57 @@ impl SshSessionRegistry {
         ids
     }
 
-    fn get_or_start(&self, target_name: &str, ssh: &SshTargetConfig) -> Result<Arc<SshSession>> {
+    pub fn master_ids(&self) -> Vec<String> {
+        let mut ids: Vec<_> = self.masters.lock().unwrap().keys().cloned().collect();
+        ids.sort();
+        ids
+    }
+
+    pub(super) fn ensure_control_master(
+        &self,
+        target_name: &str,
+        ssh: &SshTargetConfig,
+        timeout: Duration,
+    ) -> Result<Option<PathBuf>> {
+        if !ssh.control_master {
+            return Ok(None);
+        }
+
+        let mut masters = self.masters.lock().unwrap();
+        if let Some(master) = masters.get(target_name) {
+            if master.control_path.exists() {
+                return Ok(Some(master.control_path.clone()));
+            }
+            masters.remove(target_name);
+        }
+
+        let control_path = self.control_path_for(target_name);
+        let _ = fs::remove_file(&control_path);
+        start_control_master(target_name, ssh, &control_path, timeout)?;
+        masters.insert(
+            target_name.to_string(),
+            SshControlMaster {
+                control_path: control_path.clone(),
+                ssh: ssh.clone(),
+            },
+        );
+        Ok(Some(control_path))
+    }
+
+    fn control_path_for(&self, target_name: &str) -> PathBuf {
+        let mut hasher = DefaultHasher::new();
+        target_name.hash(&mut hasher);
+        self.control_dir
+            .path()
+            .join(format!("{:016x}.sock", hasher.finish()))
+    }
+
+    fn get_or_start(
+        &self,
+        target_name: &str,
+        ssh: &SshTargetConfig,
+        timeout: Duration,
+    ) -> Result<Arc<SshSession>> {
         let mut sessions = self.sessions.lock().unwrap();
         if let Some(session) = sessions.get(target_name) {
             if !session.is_closed() {
@@ -44,7 +103,8 @@ impl SshSessionRegistry {
             }
         }
 
-        let session = Arc::new(SshSession::start(ssh)?);
+        let control_path = self.ensure_control_master(target_name, ssh, timeout)?;
+        let session = Arc::new(SshSession::start(ssh, control_path.as_deref())?);
         sessions.insert(target_name.to_string(), Arc::clone(&session));
         Ok(session)
     }
@@ -57,7 +117,7 @@ impl SshSessionRegistry {
         script_args: &[&str],
         timeout: Duration,
     ) -> Result<RawExecOutput> {
-        let session = self.get_or_start(target_name, ssh)?;
+        let session = self.get_or_start(target_name, ssh, timeout)?;
         let output = session.run_script(script, script_args, timeout);
         if matches!(&output, Ok(raw) if raw.timed_out) || output.is_err() || session.is_closed() {
             let mut sessions = self.sessions.lock().unwrap();
@@ -73,16 +133,46 @@ impl SshSessionRegistry {
 
     pub(super) fn disconnect(&self, target_name: &str, timeout: Duration) -> Result<RawExecOutput> {
         let session = self.sessions.lock().unwrap().remove(target_name);
-        match session {
-            Some(session) => session.shutdown(timeout),
-            None => Ok(RawExecOutput {
+        let mut output = match session {
+            Some(session) => session.shutdown(timeout)?,
+            None => RawExecOutput {
                 exit_code: Some(0),
                 stdout: b"persistent ssh worker was not running\n".to_vec(),
                 stderr: Vec::new(),
                 timed_out: false,
-            }),
+            },
+        };
+
+        if let Some(master) = self.masters.lock().unwrap().remove(target_name) {
+            let master_output = stop_control_master(&master, timeout)?;
+            output.stdout.extend_from_slice(&master_output.stdout);
+            output.stderr.extend_from_slice(&master_output.stderr);
+            output.timed_out |= master_output.timed_out;
+            if master_output.exit_code != Some(0) {
+                output.exit_code = master_output.exit_code;
+            }
+        }
+
+        Ok(output)
+    }
+}
+
+impl Drop for SshSessionRegistry {
+    fn drop(&mut self) {
+        if let Ok(sessions) = self.sessions.get_mut() {
+            sessions.clear();
+        }
+        if let Ok(masters) = self.masters.get_mut() {
+            for (_, master) in masters.drain() {
+                let _ = stop_control_master(&master, Duration::from_millis(500));
+            }
         }
     }
+}
+
+struct SshControlMaster {
+    control_path: PathBuf,
+    ssh: SshTargetConfig,
 }
 
 struct SshSession {
@@ -100,8 +190,8 @@ struct SshSessionState {
 }
 
 impl SshSession {
-    fn start(ssh: &SshTargetConfig) -> Result<Self> {
-        let mut args = base_args(ssh);
+    fn start(ssh: &SshTargetConfig, control_path: Option<&Path>) -> Result<Self> {
+        let mut args = client_args(ssh, control_path);
         args.push("-T".to_string());
         args.push(destination(ssh));
         args.push("sh".to_string());
@@ -312,6 +402,135 @@ impl Drop for SshSession {
             }
         }
         state.closed = true;
+    }
+}
+
+fn start_control_master(
+    target_name: &str,
+    ssh: &SshTargetConfig,
+    control_path: &Path,
+    timeout: Duration,
+) -> Result<()> {
+    let mut args = vec![
+        "-M".to_string(),
+        "-N".to_string(),
+        "-f".to_string(),
+        "-T".to_string(),
+        "-S".to_string(),
+        control_path.display().to_string(),
+        "-o".to_string(),
+        format!("ControlPersist={}", ssh.control_persist_secs),
+    ];
+    args.extend(base_args(ssh));
+    args.push(destination(ssh));
+
+    let output = run_ssh_management_command(args, timeout)?;
+    if output.timed_out {
+        return Err(Error::Tool(format!(
+            "timed out while starting shared SSH control master for ssh:{target_name}"
+        )));
+    }
+    if output.exit_code != Some(0) {
+        return Err(Error::Tool(format!(
+            "failed to start shared SSH control master for ssh:{target_name}: {}",
+            diagnostic_text(&output)
+        )));
+    }
+
+    let check = control_operation(ssh, control_path, "check", timeout)?;
+    if check.exit_code != Some(0) {
+        let _ = fs::remove_file(control_path);
+        return Err(Error::Tool(format!(
+            "shared SSH control master for ssh:{target_name} did not become ready: {}",
+            diagnostic_text(&check)
+        )));
+    }
+    Ok(())
+}
+
+fn stop_control_master(master: &SshControlMaster, timeout: Duration) -> Result<RawExecOutput> {
+    if !master.control_path.exists() {
+        return Ok(RawExecOutput {
+            exit_code: Some(0),
+            stdout: b"shared SSH control master was not running\n".to_vec(),
+            stderr: Vec::new(),
+            timed_out: false,
+        });
+    }
+
+    let output = control_operation(&master.ssh, &master.control_path, "exit", timeout)?;
+    let _ = fs::remove_file(&master.control_path);
+    Ok(output)
+}
+
+fn control_operation(
+    ssh: &SshTargetConfig,
+    control_path: &Path,
+    operation: &str,
+    timeout: Duration,
+) -> Result<RawExecOutput> {
+    let mut args = vec![
+        "-S".to_string(),
+        control_path.display().to_string(),
+        "-O".to_string(),
+        operation.to_string(),
+    ];
+    args.extend(base_args(ssh));
+    args.push(destination(ssh));
+    run_ssh_management_command(args, timeout)
+}
+
+fn run_ssh_management_command(args: Vec<String>, timeout: Duration) -> Result<RawExecOutput> {
+    let mut stdout_file = tempfile::tempfile()?;
+    let mut stderr_file = tempfile::tempfile()?;
+    let mut child = Command::new("ssh")
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout_file.try_clone()?))
+        .stderr(Stdio::from(stderr_file.try_clone()?))
+        .spawn()?;
+
+    let started = Instant::now();
+    let mut timed_out = false;
+    let exit_code = loop {
+        if let Some(status) = child.try_wait()? {
+            break status.code();
+        }
+        if started.elapsed() >= timeout {
+            timed_out = true;
+            let _ = child.kill();
+            break child.wait()?.code();
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    stdout_file.seek(SeekFrom::Start(0))?;
+    stderr_file.seek(SeekFrom::Start(0))?;
+    stdout_file.read_to_end(&mut stdout)?;
+    stderr_file.read_to_end(&mut stderr)?;
+
+    Ok(RawExecOutput {
+        exit_code,
+        stdout,
+        stderr,
+        timed_out,
+    })
+}
+
+fn diagnostic_text(output: &RawExecOutput) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let text = if stderr.trim().is_empty() {
+        stdout.trim()
+    } else {
+        stderr.trim()
+    };
+    if text.is_empty() {
+        format!("ssh exited with {:?}", output.exit_code)
+    } else {
+        text.to_string()
     }
 }
 

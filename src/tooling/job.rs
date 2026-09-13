@@ -430,12 +430,18 @@ impl JobRegistry {
                     (default_timeout <= limit).then_some(default_timeout)
                 }
             });
+        let connect_timeout = req
+            .timeout_ms
+            .map(Duration::from_millis)
+            .unwrap_or(default_timeout);
         let command = command_for_target(
+            state,
             &target,
             config,
             &req.command,
             req.cwd.as_deref(),
             &secret_env,
+            connect_timeout,
         )?;
         let session = CommandSession::spawn(command, target.clone(), max_output, timeout)?;
         Ok((state.resolved_target_value(target, source), session))
@@ -756,16 +762,26 @@ fn request_key(request_id: &Value) -> Result<String> {
 }
 
 fn command_for_target(
+    state: &AppState,
     target: &TargetId,
     config: &TargetConfig,
     command: &str,
     cwd: Option<&str>,
     env: &BTreeMap<String, String>,
+    connect_timeout: Duration,
 ) -> Result<Command> {
     match (target, config) {
         (TargetId::Local, TargetConfig::Local(_)) => Ok(local_shell_command(command, cwd, env)),
-        (TargetId::Ssh(_), TargetConfig::Ssh(ssh_config)) => {
-            let (program, args) = ssh::exec_program_and_args(ssh_config, command, cwd, env);
+        (TargetId::Ssh(name), TargetConfig::Ssh(ssh_config)) => {
+            let (program, args) = ssh::exec_program_and_args(
+                &state.ssh_sessions,
+                name,
+                ssh_config,
+                command,
+                cwd,
+                env,
+                connect_timeout,
+            )?;
             let mut process = Command::new(program);
             process.args(args);
             Ok(process)

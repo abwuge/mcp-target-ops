@@ -242,12 +242,13 @@ fn server_info(state: &AppState) -> Value {
         "version": state.config.server.version.clone(),
         "active_target": active_target,
         "ssh_session_ids": state.ssh_sessions.ids(),
+        "ssh_master_ids": state.ssh_sessions.master_ids(),
         "terminal_ids": state.terminals.ids(),
         "job_ids": state.jobs.ids(),
         "runtime_dir": state.config.server.runtime_dir.display().to_string(),
         "started_at_debug": format!("{:?}", state.started_at()),
         "notes": [
-            "SSH file operations reuse persistent per-target OpenSSH workers.",
+            "SSH exec, jobs, terminals, and persistent file workers share a per-target OpenSSH ControlMaster when enabled.",
             "exec and exec_start share the same command-session implementation.",
             "The active target is process-scoped; terminal and job sessions remain bound to their original targets."
         ]

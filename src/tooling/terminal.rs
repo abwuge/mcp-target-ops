@@ -19,6 +19,7 @@ use std::{
         Arc, Mutex,
     },
     thread,
+    time::Duration,
 };
 
 static TERMINAL_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -147,12 +148,17 @@ impl TerminalRegistry {
                     .unwrap_or_else(|| "sh".to_string());
                 (shell, Vec::new(), req.cwd.clone())
             }
-            (TargetId::Ssh(_), TargetConfig::Ssh(ssh_config)) => {
+            (TargetId::Ssh(name), TargetConfig::Ssh(ssh_config)) => {
+                let timeout =
+                    Duration::from_millis(policy::target_policy(config).default_timeout_ms);
                 let (program, args) = ssh::terminal_program_and_args(
+                    &state.ssh_sessions,
+                    &name,
                     ssh_config,
                     req.cwd.as_deref(),
                     req.shell.as_deref(),
-                );
+                    timeout,
+                )?;
                 (program, args, None)
             }
             _ => {

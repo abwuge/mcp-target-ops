@@ -71,7 +71,7 @@ impl AppState {
         backups.start_cleanup_worker()?;
 
         Ok(Self {
-            ssh_sessions: SshSessionRegistry::new(),
+            ssh_sessions: SshSessionRegistry::new()?,
             terminals,
             jobs,
             results,

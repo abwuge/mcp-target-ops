@@ -259,6 +259,10 @@ fn validate_targets(config: &Config) -> Result<()> {
                         "targets.{name}.identity_file must not be empty"
                     )));
                 }
+                validate_nonzero(
+                    &format!("targets.{name}.control_persist_secs"),
+                    ssh.control_persist_secs,
+                )?;
                 validate_target_shell(&format!("targets.{name}.shell"), ssh.shell.as_deref())?;
                 validate_policy(&format!("targets.{name}.policy"), &ssh.policy)?;
             }

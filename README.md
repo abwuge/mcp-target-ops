@@ -307,6 +307,8 @@ SSH target fields:
 | `port` | SSH port, default `22` |
 | `user` | Optional SSH username |
 | `identity_file` | Optional private-key path passed to OpenSSH |
+| `control_master` | Reuse one OpenSSH transport across commands, jobs, terminals, and file workers; default `true` |
+| `control_persist_secs` | Keep an idle shared ControlMaster alive for reuse; default `1800` seconds |
 | `extra_args` | Additional OpenSSH arguments, such as `BatchMode=yes` |
 | `shell` | Optional remote shell program |
 | `policy` | Per-target permission and limit table |
@@ -408,8 +410,12 @@ process lifecycle, stdout/stderr capture, timeout, cancellation, and incremental
 output. `exec` waits for the session and uses the target policy's default timeout
 when none is supplied; `exec_start` returns a job ID immediately and has no
 runtime timeout unless one is requested. Current ChatGPT hosts serialize App-originated tool calls behind an in-flight synchronous `exec`, so live UI output is intentionally implemented through `exec_start` rather than foreground `exec_stream` polling. Child stdin is disconnected from the
-MCP control stream. SSH command sessions use dedicated OpenSSH processes; remote
-file operations continue to use persistent per-target SSH workers.
+MCP control stream. SSH command sessions still use dedicated local OpenSSH child
+processes for independent lifecycle, streaming, timeout, and cancellation, but
+those clients multiplex over a per-target OpenSSH ControlMaster when
+`control_master = true`. Remote file workers and persistent terminals use that
+same transport, so independent operations remain concurrent without repeating
+TCP/SSH handshakes.
 
 Both command tools accept `secret_env`. A value may come from a text file or a
 dot-selected scalar in TOML or JSON:

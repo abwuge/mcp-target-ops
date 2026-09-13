@@ -204,6 +204,12 @@ pub struct SshTargetConfig {
     #[serde(default)]
     pub identity_file: Option<PathBuf>,
 
+    #[serde(default = "default_true")]
+    pub control_master: bool,
+
+    #[serde(default = "default_control_persist_secs")]
+    pub control_persist_secs: u64,
+
     #[serde(default)]
     pub extra_args: Vec<String>,
 
@@ -498,6 +504,10 @@ fn default_runtime_dir() -> PathBuf {
 
 fn default_ssh_port() -> u16 {
     22
+}
+
+fn default_control_persist_secs() -> u64 {
+    30 * 60
 }
 
 fn default_true() -> bool {
