@@ -2,10 +2,10 @@ mod backend;
 mod patch_format;
 mod types;
 
-pub(crate) use self::backend::read_bytes;
+pub(crate) use self::backend::{file_exists, file_mode, read_bytes, write_bytes};
 pub use self::types::*;
 
-use self::backend::{file_exists, list_entries, write_bytes};
+use self::backend::list_entries;
 
 use super::edit::{apply_text_edits, unified_diff, EditOutcome};
 use crate::{

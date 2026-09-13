@@ -23,12 +23,12 @@ a human-readable MCP App for reviewing file changes.
 
 ## Highlights
 
-- One interface for local and SSH targets: 33 model-facing tools plus two App-only helpers
+- One interface for local and SSH targets: 37 model-facing tools plus two App-only helpers
 - Persistent OpenSSH workers for remote file operations
 - Live foreground command output plus cancellable background jobs with incremental output
 - Persistent PTY terminals with live resize support
 - Atomic file writes, exact edits, deletion previews, SHA-256 compare-and-swap,
-  and validated multi-file patches with rollback
+  validated multi-file patches with rollback, and centrally managed expiring file backups
 - File-backed secret injection without placing secret values in MCP arguments
 - ChatGPT and connector file import/export with bounded transfer sizes
 - Self-contained MCP Apps for target/MCP-server inventory, live `exec` results,
@@ -237,6 +237,12 @@ Process-wide runtime behavior lives under `[runtime]`:
 | `file_export_link_ttl_secs` | `600` | Default link lifetime; hard maximum is 86400 seconds |
 | `file_export_link_single_use` | `false` | Consume a link after the first successful GET; disabled by default to tolerate prefetching |
 | `file_download_timeout_ms` | `30000` | Default HTTPS connector-file download timeout |
+| `file_backup_default_ttl_secs` | `86400` | Default managed rollback-snapshot lifetime (24 hours) |
+| `file_backup_max_ttl_secs` | `2592000` | Maximum requested backup lifetime (30 days hard ceiling) |
+| `file_backup_cleanup_interval_secs` | `60` | Background cleanup interval; normal tool traffic also performs throttled cleanup |
+| `file_backup_max_file_bytes` | `104857600` | Maximum size of one managed backup |
+| `file_backup_store_max_bytes` | `1073741824` | Total managed-backup disk budget; oldest snapshots are evicted first |
+| `file_backup_max_entries` | `1024` | Maximum retained snapshot count; also bounds empty/tiny-file backup metadata |
 | `terminal_default_rows` | `30` | Default PTY rows |
 | `terminal_default_cols` | `120` | Default PTY columns |
 | `app_success_collapse_ms` | `3000` | App card auto-collapse delay after success |
@@ -359,7 +365,7 @@ advanced deployments; see the example configuration.
 
 ## Tool catalog
 
-Target Ops publishes 35 tool descriptors: 33 model-facing tools and two App-only helpers, `exec_stream` and `result_read`.
+Target Ops publishes 39 tool descriptors: 37 model-facing tools and two App-only helpers, `exec_stream` and `result_read`.
 
 | Area | Tools |
 | --- | --- |
@@ -367,7 +373,7 @@ Target Ops publishes 35 tool descriptors: 33 model-facing tools and two App-only
 | Targets | `target_list`, `target_current`, `target_select`, `target_connect`, `target_disconnect` |
 | Downstream MCP | `mcp_server_list`, `mcp_tools_list`, `mcp_tool_call` |
 | Commands and jobs | `exec`, `exec_batch`, `exec_start`, `job_poll`, `job_output`, `job_wait`, `job_cancel`; App-only: `exec_stream`, `result_read` |
-| Files and directories | `file_read`, `file_list`, `file_find`, `file_edit`, `file_write`, `file_delete`, `file_import`, `file_export`, `file_patch`, `file_move`, `file_chmod`, `directory_create` |
+| Files and directories | `file_read`, `file_backup`, `file_backup_list`, `file_restore`, `file_backup_delete`, `file_list`, `file_find`, `file_edit`, `file_write`, `file_delete`, `file_import`, `file_export`, `file_patch`, `file_move`, `file_chmod`, `directory_create` |
 | Terminals | `terminal_open`, `terminal_send`, `terminal_read`, `terminal_resize`, `terminal_close` |
 
 Every tool declares an object `outputSchema`, returns successful data through
@@ -443,6 +449,39 @@ command can still reveal it by printing or transmitting its environment.
   sections are intentionally rejected.
 - `file_move` does not overwrite by default; `file_chmod` and
   `directory_create` use the same write policy as other mutations.
+
+### Managed rollback snapshots
+
+Use `file_backup` whenever a temporary safety copy is needed before an edit,
+configuration change, service restart, migration, or other risky operation.
+Models should not create adjacent `.bak`, `.old`, timestamped, or similarly
+ad-hoc copies with `cp`/`mv`: the `exec` tool description explicitly points
+backup workflows to the managed tool instead.
+
+Managed snapshots are stored centrally under `server.runtime_dir/file-backups/`
+rather than beside the source file. A snapshot records the target, original path,
+SHA-256, byte size, Unix mode when available, creation/expiry timestamps, and an
+optional short note. `file_backup` defaults to a 24-hour TTL; callers may request
+a different TTL up to the configured maximum (30 days by default). On Unix the
+backup directories are mode 0700 and payload/metadata files are mode 0600.
+
+`file_backup_list` discovers still-valid snapshots after the caller has lost the
+original tool result or conversation context. It returns the newest 100 matches by
+default, accepts `limit` up to 200, and reports `total_matches` plus `truncated`.
+`file_restore` restores either to
+the original path or an explicit destination and verifies backup integrity first.
+Restoring over an existing file requires either `expected_current_sha256` or an
+explicit `overwrite = true`; the original mode is reapplied where supported.
+`file_backup_delete` removes an individual snapshot early without touching its
+source file.
+
+Expired snapshots are made unavailable by backup operations immediately and are
+physically removed at server startup, by a background cleanup worker (every 60
+seconds by default), and opportunistically during normal tool traffic. Cleanup
+enforces both `file_backup_store_max_bytes` and
+`file_backup_max_entries`; if either budget would be exceeded, the oldest
+snapshots are evicted first even when their TTL has not yet elapsed. No manual
+backup-directory housekeeping is required.
 
 ### Terminals
 

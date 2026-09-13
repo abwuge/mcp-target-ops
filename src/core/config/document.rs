@@ -61,6 +61,20 @@ file_export_link_ttl_secs = 600
 file_export_link_single_use = false
 # Default timeout for downloading HTTPS connector/file references in file_import.
 file_download_timeout_ms = 30000
+# Managed file_backup retention. Backups live under server.runtime_dir instead of
+# beside the source file, so models do not leave scattered .bak/.old copies.
+file_backup_default_ttl_secs = 86400
+# Per-call ttl_secs cannot exceed this value; the compiled ceiling is 2592000 (30d).
+file_backup_max_ttl_secs = 2592000
+# Background interval for removing expired backups and enforcing store budgets.
+# Normal tool traffic also performs throttled cleanup as a fallback.
+file_backup_cleanup_interval_secs = 60
+# Maximum size of one managed backup and total on-disk backup budget.
+file_backup_max_file_bytes = 104857600
+file_backup_store_max_bytes = 1073741824
+# Maximum number of retained managed snapshots. This also bounds empty/tiny-file
+# backups whose metadata would otherwise evade a byte-only payload budget.
+file_backup_max_entries = 1024
 # Default terminal_open PTY size when rows/cols are omitted.
 terminal_default_rows = 30
 terminal_default_cols = 120
@@ -312,6 +326,9 @@ mod tests {
         assert!(written.contains("exec_auto_background_after_ms = 5000"));
         assert!(written.contains("file_export_delivery = \"link\""));
         assert!(written.contains("file_export_link_ttl_secs = 600"));
+        assert!(written.contains("file_backup_default_ttl_secs = 86400"));
+        assert!(written.contains("file_backup_store_max_bytes = 1073741824"));
+        assert!(written.contains("file_backup_max_entries = 1024"));
         assert!(written.contains("default_timeout_ms = 30000"));
         assert!(!written.contains("http_bearer_token"));
         assert!(!written.contains("oauth_authorization_password"));
@@ -350,6 +367,8 @@ url = "https://example.com/mcp"
         assert!(written.contains("control_master = true"));
         assert!(written.contains("[runtime]"));
         assert!(written.contains("[targets.dev.policy]"));
+        assert!(written.contains("file_backup_default_ttl_secs = 86400"));
+        assert!(written.contains("file_backup_max_ttl_secs = 2592000"));
         assert!(written.contains("default_timeout_ms = 30000"));
         assert!(written.contains("timeout_ms = 20000"));
     }

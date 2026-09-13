@@ -84,6 +84,24 @@ pub struct RuntimeConfig {
     #[serde(default = "default_file_download_timeout_ms")]
     pub file_download_timeout_ms: u64,
 
+    #[serde(default = "default_file_backup_ttl_secs")]
+    pub file_backup_default_ttl_secs: u64,
+
+    #[serde(default = "default_file_backup_max_ttl_secs")]
+    pub file_backup_max_ttl_secs: u64,
+
+    #[serde(default = "default_file_backup_cleanup_interval_secs")]
+    pub file_backup_cleanup_interval_secs: u64,
+
+    #[serde(default = "default_file_backup_max_file_bytes")]
+    pub file_backup_max_file_bytes: usize,
+
+    #[serde(default = "default_file_backup_store_max_bytes")]
+    pub file_backup_store_max_bytes: u64,
+
+    #[serde(default = "default_file_backup_max_entries")]
+    pub file_backup_max_entries: usize,
+
     #[serde(default = "default_terminal_rows")]
     pub terminal_default_rows: u16,
 
@@ -302,6 +320,12 @@ impl Default for RuntimeConfig {
             file_export_link_ttl_secs: default_file_export_link_ttl_secs(),
             file_export_link_single_use: false,
             file_download_timeout_ms: default_file_download_timeout_ms(),
+            file_backup_default_ttl_secs: default_file_backup_ttl_secs(),
+            file_backup_max_ttl_secs: default_file_backup_max_ttl_secs(),
+            file_backup_cleanup_interval_secs: default_file_backup_cleanup_interval_secs(),
+            file_backup_max_file_bytes: default_file_backup_max_file_bytes(),
+            file_backup_store_max_bytes: default_file_backup_store_max_bytes(),
+            file_backup_max_entries: default_file_backup_max_entries(),
             terminal_default_rows: default_terminal_rows(),
             terminal_default_cols: default_terminal_cols(),
             app_success_collapse_ms: default_app_success_collapse_ms(),
@@ -544,6 +568,30 @@ fn default_file_download_timeout_ms() -> u64 {
     30_000
 }
 
+fn default_file_backup_ttl_secs() -> u64 {
+    24 * 60 * 60
+}
+
+fn default_file_backup_max_ttl_secs() -> u64 {
+    FILE_BACKUP_HARD_MAX_TTL_SECS
+}
+
+fn default_file_backup_cleanup_interval_secs() -> u64 {
+    60
+}
+
+fn default_file_backup_max_file_bytes() -> usize {
+    FILE_TRANSFER_HARD_MAX_BYTES
+}
+
+fn default_file_backup_store_max_bytes() -> u64 {
+    1024 * 1024 * 1024
+}
+
+fn default_file_backup_max_entries() -> usize {
+    1024
+}
+
 fn default_terminal_rows() -> u16 {
     30
 }
@@ -570,6 +618,7 @@ fn default_app_job_poll_interval_ms() -> u64 {
 
 pub const FILE_TRANSFER_HARD_MAX_BYTES: usize = 100 * 1024 * 1024;
 pub const FILE_EXPORT_LINK_MAX_TTL_SECS: u64 = 24 * 60 * 60;
+pub const FILE_BACKUP_HARD_MAX_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 
 pub fn default_config_path() -> PathBuf {
     if let Ok(path) = std::env::var("MCP_TARGET_OPS_CONFIG") {

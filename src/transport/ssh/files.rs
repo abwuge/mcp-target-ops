@@ -101,6 +101,37 @@ trap - EXIT HUP INT TERM
     }
 }
 
+pub fn file_mode(
+    sessions: &SshSessionRegistry,
+    target_name: &str,
+    ssh: &SshTargetConfig,
+    path: &str,
+    timeout: Duration,
+) -> Result<Option<u32>> {
+    let output = run_script(
+        sessions,
+        target_name,
+        ssh,
+        r#"stat -c "%a" "$1" 2>/dev/null || stat -f "%Lp" "$1" 2>/dev/null"#,
+        &[path],
+        timeout,
+    )?;
+    if output.exit_code != Some(0) {
+        return Err(Error::Tool(format!(
+            "remote stat failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    u32::from_str_radix(text, 8)
+        .map(Some)
+        .map_err(|err| Error::Tool(format!("invalid remote file mode {text:?}: {err}")))
+}
+
 pub fn file_exists(
     sessions: &SshSessionRegistry,
     target_name: &str,

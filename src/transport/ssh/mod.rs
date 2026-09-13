@@ -2,8 +2,8 @@ mod files;
 mod session;
 
 pub use self::files::{
-    chmod_path, create_directory, file_exists, list_dir, move_path, read_file, remove_file,
-    write_file,
+    chmod_path, create_directory, file_exists, file_mode, list_dir, move_path, read_file,
+    remove_file, write_file,
 };
 pub use self::session::SshSessionRegistry;
 

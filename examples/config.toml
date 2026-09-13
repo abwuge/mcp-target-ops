@@ -52,6 +52,23 @@ file_export_link_single_use = false
 # Timeout used when file_import downloads an HTTPS connector/file reference and
 # the request does not supply its own timeout_ms.
 file_download_timeout_ms = 30000
+# Default lifetime of a managed file_backup snapshot. Backups are stored under
+# server.runtime_dir rather than beside the source file.
+file_backup_default_ttl_secs = 86400
+# Maximum lifetime accepted from a file_backup ttl_secs override. The compiled
+# ceiling is 2592000 seconds (30 days).
+file_backup_max_ttl_secs = 2592000
+# Background cleanup interval for expired backups and store-budget enforcement.
+# Startup and normal tool traffic also perform cleanup as additional safeguards.
+file_backup_cleanup_interval_secs = 60
+# Maximum bytes accepted for one managed backup.
+file_backup_max_file_bytes = 104857600
+# Total on-disk budget for managed backups. When exceeded, the oldest snapshots
+# are evicted first even if their TTL has not elapsed.
+file_backup_store_max_bytes = 1073741824
+# Maximum number of retained snapshots. This bounds empty/tiny-file backups in
+# addition to the byte budget above.
+file_backup_max_entries = 1024
 # Default PTY dimensions used by terminal_open when rows/cols are omitted.
 terminal_default_rows = 30
 terminal_default_cols = 120

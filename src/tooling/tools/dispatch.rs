@@ -8,6 +8,10 @@ use crate::{
     },
     tooling::{
         exec::{self, ExecBatchRequest, ExecRequest},
+        file_backup::{
+            self, FileBackupDeleteRequest, FileBackupListRequest, FileBackupRequest,
+            FileRestoreRequest,
+        },
         file_bridge::{self, FileExportRequest, FileImportRequest},
         fs::{
             self, DirectoryCreateRequest, FileChmodRequest, FileDeleteRequest, FileEditRequest,
@@ -41,6 +45,7 @@ pub fn call_tool_with_context(
     request_id: Option<&Value>,
     caller_key: &str,
 ) -> Result<Value> {
+    let _ = state.backups.maybe_cleanup();
     match name {
         "server_info" => Ok(server_info(&state)),
         "target_list" => Ok(json!({ "targets": state.list_targets() })),
@@ -118,6 +123,22 @@ pub fn call_tool_with_context(
         "file_read" => Ok(serde_json::to_value(fs::read(
             &state,
             parse::<FileReadRequest>(args)?,
+        )?)?),
+        "file_backup" => Ok(serde_json::to_value(file_backup::create(
+            &state,
+            parse::<FileBackupRequest>(args)?,
+        )?)?),
+        "file_backup_list" => Ok(serde_json::to_value(file_backup::list(
+            &state,
+            parse::<FileBackupListRequest>(args)?,
+        )?)?),
+        "file_restore" => Ok(serde_json::to_value(file_backup::restore(
+            &state,
+            parse::<FileRestoreRequest>(args)?,
+        )?)?),
+        "file_backup_delete" => Ok(serde_json::to_value(file_backup::delete(
+            &state,
+            parse::<FileBackupDeleteRequest>(args)?,
         )?)?),
         "file_list" => Ok(serde_json::to_value(fs::list(
             &state,

@@ -6,13 +6,17 @@ use crate::{
         target::{ResolvedTarget, TargetId, TargetSource},
     },
     tooling::{
-        download::DownloadRegistry, job::JobRegistry, result_store::ResultStore,
-        terminal::TerminalRegistry,
+        download::DownloadRegistry, file_backup::FileBackupStore, job::JobRegistry,
+        result_store::ResultStore, terminal::TerminalRegistry,
     },
     transport::ssh::SshSessionRegistry,
 };
 use serde::Serialize;
-use std::{str::FromStr, sync::Mutex, time::SystemTime};
+use std::{
+    str::FromStr,
+    sync::{Arc, Mutex},
+    time::SystemTime,
+};
 
 pub struct AppState {
     pub config: Config,
@@ -22,6 +26,7 @@ pub struct AppState {
     pub jobs: JobRegistry,
     pub results: ResultStore,
     pub downloads: DownloadRegistry,
+    pub backups: Arc<FileBackupStore>,
     pub oauth: Mutex<OAuthState>,
     started_at: SystemTime,
 }
@@ -59,6 +64,11 @@ impl AppState {
             TerminalRegistry::new(config.server.terminal_ring_buffer_bytes, &config.runtime);
         let jobs = JobRegistry::new(config.runtime.clone());
         let downloads = DownloadRegistry::new(&config.server.runtime_dir)?;
+        let backups = Arc::new(FileBackupStore::new(
+            &config.server.runtime_dir,
+            &config.runtime,
+        )?);
+        backups.start_cleanup_worker()?;
 
         Ok(Self {
             ssh_sessions: SshSessionRegistry::new(),
@@ -66,6 +76,7 @@ impl AppState {
             jobs,
             results,
             downloads,
+            backups,
             oauth: Mutex::new(OAuthState::load(config.server.oauth_state_file.clone())?),
             config,
             active_target: Mutex::new(None),

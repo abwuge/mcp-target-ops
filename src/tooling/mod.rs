@@ -4,6 +4,7 @@ mod stream;
 
 pub mod download;
 pub mod exec;
+pub mod file_backup;
 pub mod file_bridge;
 pub mod fs;
 pub mod job;

@@ -20,12 +20,12 @@ SSH 主机上执行命令、管理文件、持续读取后台任务输出，以�
 
 ## 核心能力
 
-- 本机与 SSH 目标共用一套包含 33 个模型可见工具与 2 个 App-only 辅助工具的接口
+- 本机与 SSH 目标共用一套包含 37 个模型可见工具与 2 个 App-only 辅助工具的接口
 - 普通远程命令与文件操作复用持久 OpenSSH worker
 - 支持前台命令，以及可取消、可增量读取输出的后台任务
 - 支持持久 PTY 终端和实时窗口尺寸调整
-- 原子文件写入、精确文本替换、删除预览、SHA-256 比较并交换，以及带回滚的
-  多文件补丁
+- 原子文件写入、精确文本替换、删除预览、SHA-256 比较并交换、带回滚的
+  多文件补丁，以及统一管理且自动过期的文件备份
 - 从文件解析秘密并注入环境变量，秘密值不会出现在 MCP 参数中
 - 支持 ChatGPT/连接器文件导入导出，并限制传输大小
 - 自包含 MCP App：目标/MCP 服务器列表使用紧凑卡片；`exec` 使用非交互式命令
@@ -228,6 +228,12 @@ rewrite_on_start = false
 | `file_export_link_ttl_secs` | `600` | 下载链接默认有效期；硬上限为 86400 秒 |
 | `file_export_link_single_use` | `false` | 首次成功 GET 后是否失效；默认关闭以兼容预取 |
 | `file_download_timeout_ms` | `30000` | HTTPS 连接器文件下载默认超时 |
+| `file_backup_default_ttl_secs` | `86400` | 托管回滚快照默认保留时间（24 小时） |
+| `file_backup_max_ttl_secs` | `2592000` | 单次请求可设置的最大备份保留时间（默认/硬上限 30 天） |
+| `file_backup_cleanup_interval_secs` | `60` | 后台清理间隔；正常工具流量也会节流触发清理作为兜底 |
+| `file_backup_max_file_bytes` | `104857600` | 单个托管备份最大大小 |
+| `file_backup_store_max_bytes` | `1073741824` | 托管备份总磁盘预算；超限优先淘汰最旧快照 |
+| `file_backup_max_entries` | `1024` | 最大保留快照数；同时限制空文件/小文件备份产生的元数据条目 |
 | `terminal_default_rows` | `30` | PTY 默认行数 |
 | `terminal_default_cols` | `120` | PTY 默认列数 |
 | `app_success_collapse_ms` | `3000` | App 成功卡片自动折叠延迟 |
@@ -345,7 +351,7 @@ URL 或秘密值。高级部署仍可使用内联 URL 或文件秘密引用，�
 
 ## 工具列表
 
-Target Ops 当前发布 35 个工具描述：33 个模型可见工具，以及 2 个仅供 App 使用的 `exec_stream` 与 `result_read`。
+Target Ops 当前发布 39 个工具描述：37 个模型可见工具，以及 2 个仅供 App 使用的 `exec_stream` 与 `result_read`。
 
 | 类别 | 工具 |
 | --- | --- |
@@ -353,7 +359,7 @@ Target Ops 当前发布 35 个工具描述：33 个模型可见工具，以及 2
 | 目标 | `target_list`、`target_current`、`target_select`、`target_connect`、`target_disconnect` |
 | 下游 MCP | `mcp_server_list`、`mcp_tools_list`、`mcp_tool_call` |
 | 命令与任务 | `exec`、`exec_batch`、`exec_start`、`job_poll`、`job_output`、`job_wait`、`job_cancel`；仅 App：`exec_stream`、`result_read` |
-| 文件与目录 | `file_read`、`file_list`、`file_find`、`file_edit`、`file_write`、`file_delete`、`file_import`、`file_export`、`file_patch`、`file_move`、`file_chmod`、`directory_create` |
+| 文件与目录 | `file_read`、`file_backup`、`file_backup_list`、`file_restore`、`file_backup_delete`、`file_list`、`file_find`、`file_edit`、`file_write`、`file_delete`、`file_import`、`file_export`、`file_patch`、`file_move`、`file_chmod`、`directory_create` |
 | 终端 | `terminal_open`、`terminal_send`、`terminal_read`、`terminal_resize`、`terminal_close` |
 
 每个工具都声明对象形式的 `outputSchema`，成功结果通过 `structuredContent` 返回，
@@ -422,6 +428,31 @@ MCP 请求参数中；但被启动的命令仍可通过输出环境或主动发�
   section 会被明确拒绝。
 - `file_move` 默认不覆盖；`file_chmod` 和 `directory_create` 使用与其他写操作
   相同的策略。
+
+### 托管回滚快照
+
+在修改配置、编辑文件、重启服务、迁移数据或执行其他有风险的操作前，如果需要临时
+安全副本，应使用 `file_backup`。模型不应再通过 `cp` / `mv` 在原目录创建 `.bak`、
+`.old`、时间戳副本等散装备份；`exec` 的工具描述也会明确把此类工作引导到
+`file_backup`。
+
+托管快照统一保存在 `server.runtime_dir/file-backups/`，不会污染源文件所在目录。
+每份快照记录 target、原始路径、SHA-256、字节数、可获取时的 Unix 权限位、创建/过期
+时间以及可选备注。`file_backup` 默认保留 24 小时，也可按调用请求其他 TTL，但不能
+超过配置的最大值（默认 30 天）。Unix 下备份目录权限为 0700，payload 与元数据文件
+权限为 0600。
+
+即使调用者已经丢失原始工具结果或对话上下文，也可以通过 `file_backup_list` 重新找到
+仍有效的快照。默认返回最新 100 条，可通过 `limit` 调整到最多 200 条，并返回
+`total_matches` 与 `truncated`。`file_restore` 会先验证备份完整性，再恢复到原路径或显式指定的新路径；
+如果目标文件已经存在，必须提供 `expected_current_sha256` 做 CAS 校验，或明确设置
+`overwrite = true`。支持的平台会同时恢复原权限位。`file_backup_delete` 可提前删除单个
+快照，但不会触碰源文件。
+
+过期快照在备份相关操作中会立即视为不可用，并在服务启动时、后台清理线程中（默认每
+60 秒）以及正常工具流量的节流清理中从磁盘删除；同时执行 `file_backup_store_max_bytes` 总容量预算和
+`file_backup_max_entries` 条目数预算，任一超限时即使 TTL 尚未到期也会优先淘汰最旧快照。
+因此不再需要人工整理分散在各项目目录中的备份文件。
 
 ### 终端
 

@@ -76,6 +76,54 @@ fn validate_runtime(config: &Config) -> Result<()> {
         runtime.file_download_timeout_ms,
     )?;
     validate_nonzero(
+        "runtime.file_backup_default_ttl_secs",
+        runtime.file_backup_default_ttl_secs,
+    )?;
+    validate_nonzero(
+        "runtime.file_backup_max_ttl_secs",
+        runtime.file_backup_max_ttl_secs,
+    )?;
+    if runtime.file_backup_default_ttl_secs > runtime.file_backup_max_ttl_secs {
+        return Err(Error::Config(
+            "runtime.file_backup_default_ttl_secs must not exceed runtime.file_backup_max_ttl_secs"
+                .to_string(),
+        ));
+    }
+    if runtime.file_backup_max_ttl_secs > super::FILE_BACKUP_HARD_MAX_TTL_SECS {
+        return Err(Error::Config(format!(
+            "runtime.file_backup_max_ttl_secs must not exceed {}",
+            super::FILE_BACKUP_HARD_MAX_TTL_SECS
+        )));
+    }
+    validate_nonzero(
+        "runtime.file_backup_cleanup_interval_secs",
+        runtime.file_backup_cleanup_interval_secs,
+    )?;
+    validate_nonzero(
+        "runtime.file_backup_max_file_bytes",
+        runtime.file_backup_max_file_bytes,
+    )?;
+    if runtime.file_backup_max_file_bytes > super::FILE_TRANSFER_HARD_MAX_BYTES {
+        return Err(Error::Config(format!(
+            "runtime.file_backup_max_file_bytes must not exceed {}",
+            super::FILE_TRANSFER_HARD_MAX_BYTES
+        )));
+    }
+    validate_nonzero(
+        "runtime.file_backup_store_max_bytes",
+        runtime.file_backup_store_max_bytes,
+    )?;
+    if runtime.file_backup_store_max_bytes < runtime.file_backup_max_file_bytes as u64 {
+        return Err(Error::Config(
+            "runtime.file_backup_store_max_bytes must be at least runtime.file_backup_max_file_bytes"
+                .to_string(),
+        ));
+    }
+    validate_nonzero(
+        "runtime.file_backup_max_entries",
+        runtime.file_backup_max_entries,
+    )?;
+    validate_nonzero(
         "runtime.terminal_default_rows",
         runtime.terminal_default_rows,
     )?;

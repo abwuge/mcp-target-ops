@@ -37,7 +37,7 @@ pub(crate) fn read_bytes(
     }
 }
 
-pub(super) fn write_bytes(
+pub(crate) fn write_bytes(
     state: &AppState,
     target: &TargetId,
     config: &TargetConfig,
@@ -63,7 +63,35 @@ pub(super) fn write_bytes(
     }
 }
 
-pub(super) fn file_exists(
+pub(crate) fn file_mode(
+    state: &AppState,
+    target: &TargetId,
+    config: &TargetConfig,
+    path: &str,
+    timeout: Duration,
+) -> Result<Option<u32>> {
+    match (target, config) {
+        (TargetId::Local, TargetConfig::Local(_)) => {
+            #[cfg(unix)]
+            {
+                Ok(Some(fs::metadata(path)?.permissions().mode() & 0o7777))
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = path;
+                Ok(None)
+            }
+        }
+        (TargetId::Ssh(name), TargetConfig::Ssh(ssh_config)) => {
+            ssh::file_mode(&state.ssh_sessions, name, ssh_config, path, timeout)
+        }
+        _ => Err(Error::Target(format!(
+            "target {target} has mismatched config"
+        ))),
+    }
+}
+
+pub(crate) fn file_exists(
     state: &AppState,
     target: &TargetId,
     config: &TargetConfig,

@@ -37,7 +37,7 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
             required_string("tool", "Downstream MCP tool name."),
             optional_value("arguments", "JSON object passed as downstream tool arguments. Defaults to an empty object.", json!({"type":"object","additionalProperties":true})),
         ])),
-        tool("exec", "Run one non-interactive shell command or script. Long-running executions may be promoted automatically to a background job and return job_id instead of blocking. When that happens, use job_wait to wait once for completion or continue with other work; do not repeatedly poll. Prefer exec_start when a command is known in advance to be long-running or live output matters. Use exec_batch for several short, logically independent commands. Prefer file_read/file_find over cat, sed, or grep when reading known files.", object_schema(vec![
+        tool("exec", "Run one non-interactive shell command or script. Long-running executions may be promoted automatically to a background job and return job_id instead of blocking. When that happens, use job_wait to wait once for completion or continue with other work; do not repeatedly poll. Prefer exec_start when a command is known in advance to be long-running or live output matters. Use exec_batch for several short, logically independent commands. Prefer file_read/file_find over cat, sed, or grep when reading known files. Do not create ad-hoc .bak/.old safety copies with shell commands; use file_backup for managed rollback snapshots.", object_schema(vec![
             optional_string("target", "Target id: local or ssh:<profile>. Omit to use active target."),
             required_string("command", "Shell command or script to execute as one shell unit."),
             optional_string("cwd", "Working directory."),
@@ -91,6 +91,10 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
         // COMPAT(COMPAT-006): Keep the original top-level path/range request shape
         // while newer callers migrate to the files[] batch form.
         tool("file_read", "Read one known file or batch several independent file/range reads in one call. Prefer this over exec with cat/sed when file paths are known. Single-file path mode remains compatible; batch mode uses files[] and keeps per-file failures independent.", file_read_schema()),
+        tool("file_backup", "Create a managed rollback snapshot of one file. Use this instead of cp/mv-based .bak, .old, timestamped, or in-place backup files. Snapshots are centrally tracked under the Target Ops runtime directory, expire automatically, preserve the original mode when available, and can be restored with file_restore.", file_backup_schema()),
+        tool("file_backup_list", "List the newest unexpired managed rollback snapshots for one target, optionally restricted to an exact source path. Results are bounded (100 by default, 200 maximum); expired snapshots are removed automatically.", file_backup_list_schema()),
+        tool("file_restore", "Restore a managed file_backup snapshot to its original path or an explicit destination. Existing destinations require expected_current_sha256 or overwrite=true. The target must match the backup and normal write policy still applies.", file_restore_schema()),
+        tool("file_backup_delete", "Delete one managed rollback snapshot before its TTL expires. This removes only the managed backup; it never deletes the source file.", file_backup_delete_schema()),
         tool("file_list", "List one directory on the explicit target or active target.", object_schema(vec![
             optional_string("target", "Target id. Omit to use active target."),
             required_string("path", "Directory path."),
@@ -305,6 +309,7 @@ fn tool_annotations(name: &str) -> Value {
             | "result_read"
             | "file_read"
             | "file_list"
+            | "file_backup_list"
             | "file_export"
             | "file_find"
             | "terminal_read"
@@ -319,6 +324,8 @@ fn tool_annotations(name: &str) -> Value {
             | "file_edit"
             | "file_write"
             | "file_delete"
+            | "file_restore"
+            | "file_backup_delete"
             | "file_import"
             | "file_patch"
             | "file_move"
@@ -472,6 +479,62 @@ fn file_read_schema() -> Value {
             { "required": ["path"] },
             { "required": ["files"] }
         ],
+        "additionalProperties": false
+    })
+}
+
+fn file_backup_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "target": { "type": "string", "description": "Target id. Omit to use active/default target; backup creation requires file-read permission." },
+            "path": { "type": "string", "description": "Existing file to snapshot." },
+            "ttl_secs": { "type": "integer", "minimum": 1, "maximum": 2592000, "description": "Optional retention lifetime. Defaults to runtime.file_backup_default_ttl_secs and cannot exceed the configured maximum." },
+            "note": { "type": "string", "maxLength": 512, "description": "Optional short reason or checkpoint label, for example 'before service restart'." },
+            "timeout_ms": { "type": "integer", "minimum": 1, "description": "Timeout for remote file access." }
+        },
+        "required": ["path"],
+        "additionalProperties": false
+    })
+}
+
+fn file_backup_list_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "target": { "type": "string", "description": "Target id. Omit to use active/default target." },
+            "path": { "type": "string", "description": "Optional exact original path filter." },
+            "limit": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Maximum newest matching backups to return. Defaults to 100." }
+        },
+        "required": [],
+        "additionalProperties": false
+    })
+}
+
+fn file_restore_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "target": { "type": "string", "description": "Target id. Must match the backup. Writes require an explicit target by default policy." },
+            "backup_id": { "type": "string", "description": "Opaque managed backup id returned by file_backup or file_backup_list." },
+            "destination": { "type": "string", "description": "Optional restore path. Defaults to the backup's original path." },
+            "expected_current_sha256": { "type": "string", "description": "Optional CAS guard for an existing destination. Prefer this over overwrite=true when the current hash is known." },
+            "overwrite": { "type": "boolean", "description": "Allow restoring over an existing destination without a CAS hash. Defaults to false." },
+            "timeout_ms": { "type": "integer", "minimum": 1, "description": "Timeout for remote file access." }
+        },
+        "required": ["backup_id"],
+        "additionalProperties": false
+    })
+}
+
+fn file_backup_delete_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "target": { "type": "string", "description": "Target id. Must match the backup. Writes require an explicit target by default policy." },
+            "backup_id": { "type": "string", "description": "Managed backup id to delete." }
+        },
+        "required": ["backup_id"],
         "additionalProperties": false
     })
 }
@@ -684,7 +747,7 @@ mod tests {
         let tools = list_tools(None);
         let tools = tools.as_array().expect("tool list is an array");
 
-        assert_eq!(tools.len(), 35);
+        assert_eq!(tools.len(), 39);
         for tool in tools {
             let name = tool["name"].as_str().expect("tool has a name");
             assert_eq!(

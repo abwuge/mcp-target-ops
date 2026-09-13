@@ -247,6 +247,58 @@ pub(super) fn output_schema(name: &str) -> Value {
             "required": ["resolved_target", "truncated"],
             "additionalProperties": false
         }),
+        "file_backup" => json!({
+            "type": "object",
+            "properties": {
+                "resolved_target": resolved_target_schema(),
+                "backup": file_backup_entry_schema()
+            },
+            "required": ["resolved_target", "backup"],
+            "additionalProperties": false
+        }),
+        "file_backup_list" => json!({
+            "type": "object",
+            "properties": {
+                "resolved_target": resolved_target_schema(),
+                "backups": {
+                    "type": "array",
+                    "items": file_backup_entry_schema()
+                },
+                "total_matches": { "type": "integer", "minimum": 0 },
+                "truncated": { "type": "boolean" }
+            },
+            "required": ["resolved_target", "backups", "total_matches", "truncated"],
+            "additionalProperties": false
+        }),
+        "file_restore" => json!({
+            "type": "object",
+            "properties": {
+                "resolved_target": resolved_target_schema(),
+                "backup_id": { "type": "string" },
+                "source_path": { "type": "string" },
+                "path": { "type": "string" },
+                "created": { "type": "boolean" },
+                "restored": { "type": "boolean" },
+                "previous_sha256": { "type": "string" },
+                "restored_sha256": { "type": "string" },
+                "bytes": { "type": "integer", "minimum": 0 },
+                "mode": { "type": "string" },
+                "backup_expires_at_unix_secs": { "type": "integer", "minimum": 0 }
+            },
+            "required": ["resolved_target", "backup_id", "source_path", "path", "created", "restored", "restored_sha256", "bytes", "backup_expires_at_unix_secs"],
+            "additionalProperties": false
+        }),
+        "file_backup_delete" => json!({
+            "type": "object",
+            "properties": {
+                "resolved_target": resolved_target_schema(),
+                "backup_id": { "type": "string" },
+                "path": { "type": "string" },
+                "deleted": { "type": "boolean" }
+            },
+            "required": ["resolved_target", "backup_id", "path", "deleted"],
+            "additionalProperties": false
+        }),
         "file_list" => json!({
             "type": "object",
             "properties": {
@@ -548,6 +600,25 @@ fn completed_job_schema() -> Value {
             "stderr_truncated": { "type": "boolean" }
         },
         "required": ["job_id", "target", "command", "status", "elapsed_ms", "timed_out", "stdout_truncated", "stderr_truncated"],
+        "additionalProperties": false
+    })
+}
+
+fn file_backup_entry_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "backup_id": { "type": "string" },
+            "target": { "type": "string" },
+            "path": { "type": "string" },
+            "sha256": { "type": "string" },
+            "bytes": { "type": "integer", "minimum": 0 },
+            "mode": { "type": "string" },
+            "created_at_unix_secs": { "type": "integer", "minimum": 0 },
+            "expires_at_unix_secs": { "type": "integer", "minimum": 0 },
+            "note": { "type": "string" }
+        },
+        "required": ["backup_id", "target", "path", "sha256", "bytes", "created_at_unix_secs", "expires_at_unix_secs"],
         "additionalProperties": false
     })
 }
