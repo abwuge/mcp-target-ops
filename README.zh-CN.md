@@ -385,7 +385,7 @@ scope。
 
 对于模型侧只需要“等后台命令结束后再继续”的工作流，应优先使用 `job_wait`，而不是反复调用 `job_poll` 或 `job_output`。其服务端默认等待窗口与最大等待窗口分别来自 `runtime.job_wait_default_timeout_ms` 和 `runtime.job_wait_max_timeout_ms`，单次调用可以请求更短的等待时间。
 
-所有 Target Ops App 使用统一且可配置的结果卡生命周期。默认情况下成功卡 3 秒后折叠，失败/warning 卡 6 秒后折叠，30 秒后进入释放重 DOM 的 sleep。静态工具结果缓存在 `runtime_dir/results/` 下，不设置 TTL；`runtime.result_cache_max_bytes` 默认 100 MiB，超限时按会话 LRU 从最久未活动的完整会话开始淘汰，新事件会刷新该会话的活动时间。用户重新展开时由仅 App 可见的 `result_read` 使用不可预测的 `result_id` 恢复。长命令卡则从保留的 job output buffer 重新构造。当前不自动请求 iframe teardown，因此历史卡片仍可重新打开。
+所有 Target Ops App 使用统一且可配置的结果卡生命周期。默认情况下成功卡 3 秒后折叠，失败/warning 卡 6 秒后折叠，30 秒后进入释放重 DOM 的 sleep。重新打开已有对话时，历史 App 结果走单独的冷启动路径：bridge 握手前只 hydrate 紧凑标题行，不再预先构建完整命令输出、代码行或 diff DOM；只有用户主动展开卡片时才恢复重内容。同时会识别并抑制宿主在初始化后对同一历史 `result_id` 的重复 replay，避免它再次触发“新结果自动展开”定时器。App 还会使用 `ResizeObserver` 通过 MCP Apps `ui/notifications/size-changed` 主动上报自身实际尺寸，使支持弹性高度的宿主在 bridge 就绪后立即把历史 iframe 收缩到折叠标题行。静态工具结果缓存在 `runtime_dir/results/` 下，不设置 TTL；`runtime.result_cache_max_bytes` 默认 100 MiB，超限时按会话 LRU 从最久未活动的完整会话开始淘汰，新事件会刷新该会话的活动时间。用户重新展开时由仅 App 可见的 `result_read` 使用不可预测的 `result_id` 恢复。长命令卡也只在用户展开后才从保留的 job output buffer 重建。当前不自动请求 iframe teardown，因此历史卡片仍可重新打开。
 
 `exec` 与 `exec_start` 现在共用同一套 `CommandSession`，统一处理进程生命周期、
 stdout/stderr 捕获、超时、取消与增量输出。`exec` 会等待会话结束，并在未显式设置

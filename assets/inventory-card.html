@@ -67,12 +67,13 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
   function setCount(value, enabled = true) { count.textContent = `${value} item${value === 1 ? '' : 's'}`; count.className = `status ${enabled ? 'ok' : 'error'}`; }
   function clearList() { list.replaceChildren(); }
 
-  function renderTargets(targets) {
+  function renderTargets(targets, summaryOnly = false) {
     title.textContent = 'Targets';
     subtitle.textContent = '';
     kind.textContent = 'Inventory';
     setCount(targets.length, targets.some(item => item.enabled !== false));
     clearList();
+    if (summaryOnly) return;
     if (!targets.length) { list.appendChild(element('div', 'notice', 'No targets configured.')); return; }
     for (const item of targets) {
       const row = element('div', 'row'); const top = element('div', 'topline');
@@ -89,12 +90,13 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     }
   }
 
-  function renderServers(servers) {
+  function renderServers(servers, summaryOnly = false) {
     title.textContent = 'MCP servers';
     subtitle.textContent = '';
     kind.textContent = 'Inventory';
     setCount(servers.length, servers.some(item => item.enabled !== false));
     clearList();
+    if (summaryOnly) return;
     if (!servers.length) { list.appendChild(element('div', 'notice', 'No downstream MCP servers configured.')); return; }
     for (const item of servers) {
       const row = element('div', 'row'); const top = element('div', 'topline');
@@ -125,23 +127,97 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     collapseTimer = setTimeout(() => { card.open = false; }, runtimeConfig.successCollapseMs);
     sleepTimer = setTimeout(sleepCard, runtimeConfig.sleepAfterMs);
   }
-  function render(raw, fresh = true) {
+  function render(raw, fresh = true, summaryOnly = false) {
     const data = raw && typeof raw === 'object' ? raw : {};
     if (typeof data.result_id === 'string') resultId = data.result_id;
-    if (Array.isArray(data.targets)) renderTargets(data.targets);
-    else if (Array.isArray(data.servers)) renderServers(data.servers);
-    else { title.textContent = 'Inventory'; subtitle.textContent = ''; kind.textContent = 'Inventory'; count.textContent = '0 items'; count.className = 'status'; clearList(); list.appendChild(element('div', 'notice', 'No inventory data available.')); }
+    if (Array.isArray(data.targets)) renderTargets(data.targets, summaryOnly);
+    else if (Array.isArray(data.servers)) renderServers(data.servers, summaryOnly);
+    else { title.textContent = 'Inventory'; subtitle.textContent = ''; kind.textContent = 'Inventory'; count.textContent = '0 items'; count.className = 'status'; clearList(); if (!summaryOnly) list.appendChild(element('div', 'notice', 'No inventory data available.')); }
+    if (summaryOnly) {
+      card.open = false;
+      list.replaceChildren();
+      sleeping = true;
+      return;
+    }
     if (fresh) scheduleLifecycle(); else scheduleSleepOnly();
   }
 
   let rpcId = 0; const pendingRequests = new Map(); let resultId = null;
+  let legacyInitialHydrated = false;
+  let historicalFallback = null;
+  let suppressHistoricalReplayWithoutId = false;
+  const historicalResultIds = new Set();
+  let bridgeReady = false;
+  let sizeReportScheduled = false;
+  let lastReportedWidth = 0;
+  let lastReportedHeight = 0;
+  let resizeObserver = null;
   const rpcRequest = (method, params) => new Promise((resolve, reject) => { const id = ++rpcId; pendingRequests.set(id, {resolve,reject}); window.parent.postMessage({jsonrpc:'2.0',id,method,params}, '*'); });
   // COMPAT(COMPAT-003): Normalize historical tool-result envelope shapes used by
   // older ChatGPT hosts in addition to structuredContent.
   const toolResultData = result => result?.structuredContent || result?.content?.find?.(item => item?.type === 'json')?.json || result?.content || result || {};
+
+  function scheduleSizeReport() {
+    if (!bridgeReady || sizeReportScheduled) return;
+    sizeReportScheduled = true;
+    window.requestAnimationFrame(() => {
+      sizeReportScheduled = false;
+      const root = document.documentElement;
+      const originalHeight = root.style.height;
+      root.style.height = 'max-content';
+      const height = Math.ceil(root.getBoundingClientRect().height);
+      root.style.height = originalHeight;
+      const width = Math.ceil(window.innerWidth);
+      if (width <= 0 || height <= 0) return;
+      if (width === lastReportedWidth && height === lastReportedHeight) return;
+      lastReportedWidth = width;
+      lastReportedHeight = height;
+      window.parent.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/size-changed', params: { width, height } }, '*');
+    });
+  }
+  function startAutoResize() {
+    bridgeReady = true;
+    scheduleSizeReport();
+    if (typeof ResizeObserver === 'function') {
+      resizeObserver = new ResizeObserver(scheduleSizeReport);
+      resizeObserver.observe(document.documentElement);
+      resizeObserver.observe(document.body);
+    }
+    window.addEventListener('resize', scheduleSizeReport);
+  }
+
+  // COMPAT(COMPAT-003): A saved ChatGPT card can bootstrap through window.openai
+  // and then receive the same result again as a normal MCP Apps notification.
+  function hydrateLegacyInitialResult() {
+    if (legacyInitialHydrated) return true;
+    const raw = window.openai?.toolOutput || window.openai?.toolResponseMetadata?.structuredContent;
+    if (!raw) return false;
+    legacyInitialHydrated = true;
+    const data = toolResultData(raw);
+    if (typeof data?.result_id === 'string') historicalResultIds.add(data.result_id);
+    else { historicalFallback = data; suppressHistoricalReplayWithoutId = true; }
+    render(data, false, true);
+    return true;
+  }
+  function isFreshResultNotification(raw) {
+    const data = toolResultData(raw);
+    if (typeof data?.result_id === 'string' && historicalResultIds.has(data.result_id)) return false;
+    if (!data?.result_id && suppressHistoricalReplayWithoutId) {
+      suppressHistoricalReplayWithoutId = false;
+      return false;
+    }
+    return true;
+  }
+
   async function restoreSleepingCard() {
-    if (!sleeping || !resultId) return;
-    sleeping = false; list.innerHTML = '<div class="notice">Loading result…</div>';
+    if (!sleeping) return;
+    sleeping = false;
+    if (historicalFallback) {
+      render(historicalFallback, false);
+      return;
+    }
+    if (!resultId) { list.innerHTML = '<div class="notice">Result unavailable.</div>'; return; }
+    list.innerHTML = '<div class="notice">Loading result…</div>';
     try { const cached = toolResultData(await rpcRequest('tools/call', { name: 'result_read', arguments: { result_id: resultId } })); if (cached?.found && cached?.data) render(cached.data, false); else list.innerHTML = '<div class="notice">Result expired.</div>'; }
     catch (_) { list.innerHTML = '<div class="notice">Result unavailable.</div>'; }
   }
@@ -153,15 +229,24 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
   });
   // COMPAT(COMPAT-003): Accept content/plain-param result notifications from
   // older hosts until structuredContent is universal.
-  window.addEventListener('message', event => { const msg = event.data; if (msg?.jsonrpc === '2.0' && msg.id !== undefined && pendingRequests.has(msg.id)) { const pending = pendingRequests.get(msg.id); pendingRequests.delete(msg.id); if (msg.error) pending.reject(msg.error); else pending.resolve(msg.result); return; } if (msg?.method === 'ui/notifications/tool-result') render(msg.params?.structuredContent || msg.params?.content || msg.params, true); });
+  window.addEventListener('message', event => {
+    const msg = event.data;
+    if (msg?.jsonrpc === '2.0' && msg.id !== undefined && pendingRequests.has(msg.id)) { const pending = pendingRequests.get(msg.id); pendingRequests.delete(msg.id); if (msg.error) pending.reject(msg.error); else pending.resolve(msg.result); return; }
+    if (msg?.method === 'ui/notifications/tool-result') {
+      const raw = msg.params?.structuredContent || msg.params?.content || msg.params;
+      const data = toolResultData(raw);
+      const fresh = isFreshResultNotification(data);
+      if (fresh) render(data, true);
+      else if (sleeping) render(data, false, true);
+    }
+  });
   async function initializeBridge() {
     await rpcRequest('ui/initialize', { appInfo: { name: 'target-ops-inventory', version: '1.2.0' }, appCapabilities: { tools: {} }, protocolVersion: '2026-01-26' });
     window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/initialized',params:{}}, '*');
-    // COMPAT(COMPAT-003): Older ChatGPT hosts hydrate initial App output through
-    // window.openai instead of replaying the normal MCP Apps result notification.
-    if (window.openai?.toolOutput) render(window.openai.toolOutput, false);
-    else if (window.openai?.toolResponseMetadata?.structuredContent) render(window.openai.toolResponseMetadata.structuredContent, false);
+    hydrateLegacyInitialResult();
+    startAutoResize();
   }
+  hydrateLegacyInitialResult();
   initializeBridge().catch(error => console.error('Failed to initialize MCP Apps bridge:', error));
 })();
 </script>

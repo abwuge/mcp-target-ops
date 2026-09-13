@@ -97,13 +97,14 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     return item.start_line === item.end_line ? `line ${item.start_line}` : `lines ${item.start_line}–${item.end_line}`;
   }
 
-  function renderSingle(data) {
+  function renderSingle(data, summaryOnly = false) {
     const path = data.path || '';
     title.textContent = 'File read';
     pathEl.textContent = path;
     kindEl.textContent = rangeText(data) || 'Read';
     statusEl.textContent = data.truncated ? 'Truncated' : 'Read';
     statusEl.className = `status ${data.truncated ? 'warn' : 'ok'}`;
+    if (summaryOnly) return;
     viewer.innerHTML = lineRows(data.content, data.start_line, data.encoding);
     meta.innerHTML =
       metaRow('target', data.resolved_target?.target) +
@@ -141,7 +142,7 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     return block;
   }
 
-  function renderBatch(data) {
+  function renderBatch(data, summaryOnly = false) {
     const files = Array.isArray(data.files) ? data.files : [];
     const failed = Number.isInteger(data.failed) ? data.failed : files.filter(file => file.success === false).length;
     const succeeded = Number.isInteger(data.succeeded) ? data.succeeded : files.length - failed;
@@ -150,6 +151,7 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     kindEl.textContent = 'Batch read';
     statusEl.textContent = failed ? `${succeeded} read · ${failed} failed` : (data.truncated ? `${succeeded} read · truncated` : `${succeeded} read`);
     statusEl.className = `status ${failed ? 'error' : data.truncated ? 'warn' : 'ok'}`;
+    if (summaryOnly) return;
     viewer.replaceChildren();
     if (!files.length) viewer.innerHTML = '<div class="notice">No file results returned.</div>';
     else files.forEach((item, index) => viewer.appendChild(batchBlock(item, index)));
@@ -178,17 +180,34 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     collapseTimer = setTimeout(() => { card.open = false; }, success ? runtimeConfig.successCollapseMs : runtimeConfig.failureCollapseMs);
     sleepTimer = setTimeout(sleepCard, runtimeConfig.sleepAfterMs);
   }
-  function render(raw, fresh = true) {
+  function render(raw, fresh = true, summaryOnly = false) {
     const data = raw && typeof raw === 'object' ? raw : {};
     if (typeof data.result_id === 'string') resultId = data.result_id;
-    if (Array.isArray(data.files) && Number.isInteger(data.requested_count)) renderBatch(data);
-    else renderSingle(data);
+    if (Array.isArray(data.files) && Number.isInteger(data.requested_count)) renderBatch(data, summaryOnly);
+    else renderSingle(data, summaryOnly);
+    if (summaryOnly) {
+      card.open = false;
+      viewer.replaceChildren();
+      meta.replaceChildren();
+      details.hidden = true;
+      sleeping = true;
+      return;
+    }
     if (fresh) scheduleLifecycle(!(Number.isInteger(data.failed) && data.failed > 0)); else scheduleSleepOnly();
   }
 
   let rpcId = 0;
   const pendingRequests = new Map();
   let resultId = null;
+  let legacyInitialHydrated = false;
+  let historicalFallback = null;
+  let suppressHistoricalReplayWithoutId = false;
+  const historicalResultIds = new Set();
+  let bridgeReady = false;
+  let sizeReportScheduled = false;
+  let lastReportedWidth = 0;
+  let lastReportedHeight = 0;
+  let resizeObserver = null;
   const rpcRequest = (method, params) => new Promise((resolve, reject) => {
     const id = ++rpcId;
     pendingRequests.set(id, { resolve, reject });
@@ -198,9 +217,68 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
   // COMPAT(COMPAT-003): Normalize historical tool-result envelope shapes used by
   // older ChatGPT hosts in addition to structuredContent.
   const toolResultData = result => result?.structuredContent || result?.content?.find?.(item => item?.type === 'json')?.json || result?.content || result || {};
+
+  function scheduleSizeReport() {
+    if (!bridgeReady || sizeReportScheduled) return;
+    sizeReportScheduled = true;
+    window.requestAnimationFrame(() => {
+      sizeReportScheduled = false;
+      const root = document.documentElement;
+      const originalHeight = root.style.height;
+      root.style.height = 'max-content';
+      const height = Math.ceil(root.getBoundingClientRect().height);
+      root.style.height = originalHeight;
+      const width = Math.ceil(window.innerWidth);
+      if (width <= 0 || height <= 0) return;
+      if (width === lastReportedWidth && height === lastReportedHeight) return;
+      lastReportedWidth = width;
+      lastReportedHeight = height;
+      window.parent.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/size-changed', params: { width, height } }, '*');
+    });
+  }
+  function startAutoResize() {
+    bridgeReady = true;
+    scheduleSizeReport();
+    if (typeof ResizeObserver === 'function') {
+      resizeObserver = new ResizeObserver(scheduleSizeReport);
+      resizeObserver.observe(document.documentElement);
+      resizeObserver.observe(document.body);
+    }
+    window.addEventListener('resize', scheduleSizeReport);
+  }
+
+  // COMPAT(COMPAT-003): A saved ChatGPT card can bootstrap through window.openai
+  // and then receive the same result again as a normal MCP Apps notification.
+  function hydrateLegacyInitialResult() {
+    if (legacyInitialHydrated) return true;
+    const raw = window.openai?.toolOutput || window.openai?.toolResponseMetadata?.structuredContent;
+    if (!raw) return false;
+    legacyInitialHydrated = true;
+    const data = toolResultData(raw);
+    if (typeof data?.result_id === 'string') historicalResultIds.add(data.result_id);
+    else { historicalFallback = data; suppressHistoricalReplayWithoutId = true; }
+    render(data, false, true);
+    return true;
+  }
+  function isFreshResultNotification(raw) {
+    const data = toolResultData(raw);
+    if (typeof data?.result_id === 'string' && historicalResultIds.has(data.result_id)) return false;
+    if (!data?.result_id && suppressHistoricalReplayWithoutId) {
+      suppressHistoricalReplayWithoutId = false;
+      return false;
+    }
+    return true;
+  }
+
   async function restoreSleepingCard() {
-    if (!sleeping || !resultId) return;
-    sleeping = false; viewer.innerHTML = '<div class="notice">Loading result…</div>';
+    if (!sleeping) return;
+    sleeping = false;
+    if (historicalFallback) {
+      render(historicalFallback, false);
+      return;
+    }
+    if (!resultId) { viewer.innerHTML = '<div class="notice">Result unavailable.</div>'; return; }
+    viewer.innerHTML = '<div class="notice">Loading result…</div>';
     try { const cached = toolResultData(await rpcRequest('tools/call', { name: 'result_read', arguments: { result_id: resultId } })); if (cached?.found && cached?.data) render(cached.data, false); else viewer.innerHTML = '<div class="notice">Result expired.</div>'; }
     catch (_) { viewer.innerHTML = '<div class="notice">Result unavailable.</div>'; }
   }
@@ -222,7 +300,11 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
       return;
     }
     if (msg?.method === 'ui/notifications/tool-result') {
-      render(msg.params?.structuredContent || msg.params?.content || msg.params);
+      const raw = msg.params?.structuredContent || msg.params?.content || msg.params;
+      const data = toolResultData(raw);
+      const fresh = isFreshResultNotification(data);
+      if (fresh) render(data, true);
+      else if (sleeping) render(data, false, true);
     }
   });
 
@@ -233,11 +315,10 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
       protocolVersion: '2026-01-26',
     });
     window.parent.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/initialized', params: {} }, '*');
-    // COMPAT(COMPAT-003): Older ChatGPT hosts hydrate initial App output through
-    // window.openai instead of replaying the normal MCP Apps result notification.
-    if (window.openai?.toolOutput) render(window.openai.toolOutput, false);
-    else if (window.openai?.toolResponseMetadata?.structuredContent) render(window.openai.toolResponseMetadata.structuredContent, false);
+    hydrateLegacyInitialResult();
+    startAutoResize();
   }
+  hydrateLegacyInitialResult();
   initializeBridge().catch(error => console.error('Failed to initialize MCP Apps bridge:', error));
 })();
 </script>

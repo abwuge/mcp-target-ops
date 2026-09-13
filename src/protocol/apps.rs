@@ -276,7 +276,7 @@ mod tests {
     }
 
     #[test]
-    fn historical_app_cards_boot_collapsed_without_rearming_lifecycle() {
+    fn historical_app_cards_boot_compact_without_rearming_lifecycle() {
         for html in [
             EXEC_TERMINAL_UI_HTML,
             FILE_CHANGE_UI_HTML,
@@ -285,9 +285,29 @@ mod tests {
         ] {
             assert!(!html.contains("class=\"card\" id=\"card\" open"));
             assert!(!html.contains("class=\"card\" id=\"execution\" open"));
-            assert!(html.contains("toolOutput"));
-            assert!(html.contains(", false)"));
-            assert!(html.contains("scheduleSleepOnly"));
+            assert!(html.contains("hydrateLegacyInitialResult"));
+            assert!(html.contains("summaryOnly"));
+            assert!(html.contains("historicalResultIds"));
+            assert!(html.contains("isFreshResultNotification"));
+            assert!(html.contains("else if (sleeping)"));
+            assert!(html.contains("hydrateLegacyInitialResult();\n  initializeBridge().catch"));
+        }
+    }
+
+    #[test]
+    fn apps_report_intrinsic_size_after_bridge_initialization() {
+        for html in [
+            EXEC_TERMINAL_UI_HTML,
+            FILE_CHANGE_UI_HTML,
+            FILE_READ_UI_HTML,
+            INVENTORY_UI_HTML,
+        ] {
+            assert!(html.contains("ui/notifications/size-changed"));
+            assert!(html.contains("ResizeObserver"));
+            assert!(html.contains("requestAnimationFrame"));
+            assert!(html.contains("root.style.height = 'max-content'"));
+            assert!(html.contains("startAutoResize"));
+            assert!(html.contains("ui/notifications/initialized"));
         }
     }
 

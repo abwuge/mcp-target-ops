@@ -172,12 +172,20 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     sleepTimer = window.setTimeout(sleepCard, runtimeConfig.sleepAfterMs);
   }
 
-  function renderSingle(data, toolInput, fresh = true) {
+  function renderSingle(data, toolInput, fresh = true, summaryOnly = false) {
     const commandText = typeof data.command === 'string' && data.command ? data.command : (typeof toolInput?.command === 'string' ? toolInput.command : 'Command unavailable');
     const target = data.resolved_target?.target || data.target || 'target'; const exitCode = data.exit_code; const timedOut = data.timed_out === true;
     const stdoutText = typeof data.stdout === 'string' ? data.stdout : ''; const stderrText = typeof data.stderr === 'string' ? data.stderr : '';
     title.textContent = 'Command result'; pathEl.textContent = commandPreview(commandText); kindEl.textContent = target;
     if (timedOut) status('Timed out', 'warn'); else if (exitCode === 0) status('Exit 0', 'ok'); else if (typeof exitCode === 'number') status(`Exit ${exitCode}`, 'error'); else status('Finished');
+    if (summaryOnly) {
+      execution.open = false;
+      viewer.replaceChildren();
+      meta.replaceChildren();
+      details.hidden = true;
+      sleeping = true;
+      return;
+    }
     viewer.replaceChildren();
     const commandBlock = element('div', 'block'); commandBlock.appendChild(element('div', 'block-label', 'Command')); commandBlock.appendChild(element('pre', 'command', commandText)); viewer.appendChild(commandBlock);
     if (stdoutText) viewer.appendChild(outputDetails('stdout', stdoutText, true, false));
@@ -207,33 +215,104 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     return block;
   }
 
-  function renderBatch(data, fresh = true) {
+  function renderBatch(data, fresh = true, summaryOnly = false) {
     if (fresh && collapseTimer) window.clearTimeout(collapseTimer);
     if (fresh) execution.open = true;
     const results = Array.isArray(data.results) ? data.results : []; const requested = Number.isInteger(data.requested_count) ? data.requested_count : results.length; const executed = Number.isInteger(data.executed_count) ? data.executed_count : results.length; const succeeded = Number.isInteger(data.succeeded) ? data.succeeded : results.filter(item => item.success === true).length; const failed = Number.isInteger(data.failed) ? data.failed : executed - succeeded;
     const target = data.resolved_target?.target || data.target || 'target'; const mode = data.mode === 'parallel' ? 'parallel' : 'sequential';
     title.textContent = `${executed} command${executed === 1 ? '' : 's'}`; pathEl.textContent = `${target} · ${mode}${executed !== requested ? ` · ${executed}/${requested} executed` : ''}`; kindEl.textContent = 'Batch';
     status(failed ? `${succeeded} passed · ${failed} failed` : `${succeeded} passed`, failed ? 'error' : 'ok');
+    if (summaryOnly) {
+      execution.open = false;
+      viewer.replaceChildren();
+      meta.replaceChildren();
+      details.hidden = true;
+      sleeping = true;
+      return;
+    }
     viewer.replaceChildren(); if (!results.length) viewer.appendChild(element('div', 'notice', 'No command results returned.')); else results.forEach(item => viewer.appendChild(renderBatchItem(item, fresh)));
     meta.innerHTML = metaRow('target', target) + metaRow('mode', mode) + metaRow('requested', requested) + metaRow('executed', executed) + metaRow('succeeded', succeeded) + metaRow('failed', failed) + metaRow('timed out', data.timed_out) + metaRow('stopped early', data.stopped_early ? 'yes' : 'no');
     details.hidden = !meta.innerHTML;
     if (fresh) scheduleLifecycle(failed === 0 && !data.timed_out); else scheduleSleepOnly();
   }
 
-  function render(raw, toolInput, fresh = true) { const data = raw && typeof raw === 'object' ? raw : {}; if (Array.isArray(data.results) && ('requested_count' in data || 'executed_count' in data)) renderBatch(data, fresh); else renderSingle(data, toolInput, fresh); }
+  function render(raw, toolInput, fresh = true, summaryOnly = false) { const data = raw && typeof raw === 'object' ? raw : {}; if (Array.isArray(data.results) && ('requested_count' in data || 'executed_count' in data)) renderBatch(data, fresh, summaryOnly); else renderSingle(data, toolInput, fresh, summaryOnly); }
 
   let rpcId = 0; const pendingRequests = new Map();
   // COMPAT(COMPAT-003): Normalize older window.openai bootstrap/input shapes
   // alongside the current MCP Apps notification envelope.
   let currentToolInput = window.openai?.toolInput || null;
   let resultId = null;
+  let legacyInitialHydrated = false;
+  let historicalFallback = null;
+  let suppressHistoricalReplayWithoutId = false;
+  const historicalResultIds = new Set();
+  let bridgeReady = false;
+  let sizeReportScheduled = false;
+  let lastReportedWidth = 0;
+  let lastReportedHeight = 0;
+  let resizeObserver = null;
   let liveStdout = ''; let liveStderr = ''; let stdoutSeq = 0; let stderrSeq = 0; let jobPolling = false;
   const rpcRequest = (method, params) => new Promise((resolve, reject) => { const id = ++rpcId; pendingRequests.set(id, {resolve,reject}); window.parent.postMessage({jsonrpc:'2.0',id,method,params}, '*'); });
   // COMPAT(COMPAT-003): Normalize historical tools/call result envelopes used by
   // older ChatGPT hosts in addition to structuredContent.
   const toolResultData = result => result?.structuredContent || result?.content?.find?.(item => item?.type === 'json')?.json || result?.content || result || {};
 
-  function renderLive(data, toolInput, fresh = true) {
+  function scheduleSizeReport() {
+    if (!bridgeReady || sizeReportScheduled) return;
+    sizeReportScheduled = true;
+    window.requestAnimationFrame(() => {
+      sizeReportScheduled = false;
+      const root = document.documentElement;
+      const originalHeight = root.style.height;
+      root.style.height = 'max-content';
+      const height = Math.ceil(root.getBoundingClientRect().height);
+      root.style.height = originalHeight;
+      const width = Math.ceil(window.innerWidth);
+      if (width <= 0 || height <= 0) return;
+      if (width === lastReportedWidth && height === lastReportedHeight) return;
+      lastReportedWidth = width;
+      lastReportedHeight = height;
+      window.parent.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/size-changed', params: { width, height } }, '*');
+    });
+  }
+  function startAutoResize() {
+    bridgeReady = true;
+    scheduleSizeReport();
+    if (typeof ResizeObserver === 'function') {
+      resizeObserver = new ResizeObserver(scheduleSizeReport);
+      resizeObserver.observe(document.documentElement);
+      resizeObserver.observe(document.body);
+    }
+    window.addEventListener('resize', scheduleSizeReport);
+  }
+
+  // COMPAT(COMPAT-003): Saved ChatGPT cards may bootstrap through window.openai
+  // and then replay the same result after the MCP Apps handshake. Render only a
+  // compact summary before the handshake and never rearm fresh-result expansion
+  // for a replayed historical result.
+  function hydrateLegacyInitialResult() {
+    if (legacyInitialHydrated) return true;
+    const raw = window.openai?.toolOutput || window.openai?.toolResponseMetadata?.structuredContent;
+    if (!raw) return false;
+    legacyInitialHydrated = true;
+    const data = toolResultData(raw);
+    if (typeof data?.result_id === 'string') historicalResultIds.add(data.result_id);
+    else { historicalFallback = raw; suppressHistoricalReplayWithoutId = true; }
+    handleResult(raw, false, true);
+    return true;
+  }
+  function isFreshResultNotification(raw) {
+    const data = toolResultData(raw);
+    if (typeof data?.result_id === 'string' && historicalResultIds.has(data.result_id)) return false;
+    if (!data?.result_id && suppressHistoricalReplayWithoutId) {
+      suppressHistoricalReplayWithoutId = false;
+      return false;
+    }
+    return true;
+  }
+
+  function renderLive(data, toolInput, fresh = true, summaryOnly = false) {
     if (collapseTimer) window.clearTimeout(collapseTimer);
     if (sleepTimer) window.clearTimeout(sleepTimer);
     sleeping = false;
@@ -243,6 +322,14 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     title.textContent = 'Command result'; pathEl.textContent = commandPreview(commandText); kindEl.textContent = target;
     const state = data.status || 'running';
     if (state === 'running') status('Running'); else if (state === 'timed_out') status('Timed out', 'warn'); else if (state === 'completed') status(typeof data.exit_code === 'number' ? `Exit ${data.exit_code}` : 'Completed', 'ok'); else if (state === 'failed') status(typeof data.exit_code === 'number' ? `Exit ${data.exit_code}` : 'Failed', 'error'); else status(state);
+    if (summaryOnly) {
+      execution.open = false;
+      viewer.replaceChildren();
+      meta.replaceChildren();
+      details.hidden = true;
+      sleeping = true;
+      return;
+    }
     viewer.replaceChildren();
     const commandBlock = element('div', 'block'); commandBlock.appendChild(element('div', 'block-label', 'Command')); commandBlock.appendChild(element('pre', 'command', commandText)); viewer.appendChild(commandBlock);
     if (liveStdout) viewer.appendChild(outputDetails('stdout', liveStdout, true, false));
@@ -274,16 +361,23 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     } finally { jobPolling = false; }
   }
 
-  function handleResult(raw, fresh = true) {
+  function handleResult(raw, fresh = true, summaryOnly = false) {
     const data = toolResultData(raw);
     if (typeof data?.result_id === 'string') resultId = data.result_id;
-    if (data?.job_id && data?.status === 'running') pollJob(data, true, fresh);
-    else render(data, currentToolInput, fresh);
+    if (data?.job_id && data?.status === 'running') {
+      if (summaryOnly) renderLive(data, currentToolInput, false, true);
+      else pollJob(data, true, fresh);
+    } else render(data, currentToolInput, fresh, summaryOnly);
   }
 
   async function restoreSleepingCard() {
-    if (!sleeping || !resultId) return;
+    if (!sleeping) return;
     sleeping = false;
+    if (historicalFallback) {
+      handleResult(historicalFallback, false, false);
+      return;
+    }
+    if (!resultId) { viewer.innerHTML = '<div class="notice">Result unavailable.</div>'; return; }
     viewer.innerHTML = '<div class="notice">Loading result…</div>';
     try {
       const cached = toolResultData(await rpcRequest('tools/call', { name: 'result_read', arguments: { result_id: resultId } }));
@@ -304,16 +398,21 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     const msg = event.data;
     if (msg?.jsonrpc === '2.0' && msg.id !== undefined && pendingRequests.has(msg.id)) { const pending = pendingRequests.get(msg.id); pendingRequests.delete(msg.id); if (msg.error) pending.reject(msg.error); else pending.resolve(msg.result); return; }
     if (msg?.method === 'ui/notifications/tool-input') { currentToolInput = msg.params?.arguments || msg.params?.toolInput || msg.params; return; }
-    if (msg?.method === 'ui/notifications/tool-result') { currentToolInput = msg.params?.toolInput || msg.params?.arguments || currentToolInput; handleResult(msg.params?.structuredContent || msg.params?.content || msg.params); }
+    if (msg?.method === 'ui/notifications/tool-result') {
+      currentToolInput = msg.params?.toolInput || msg.params?.arguments || currentToolInput;
+      const raw = msg.params?.structuredContent || msg.params?.content || msg.params;
+      const fresh = isFreshResultNotification(raw);
+      if (fresh) handleResult(raw, true, false);
+      else if (sleeping) handleResult(raw, false, true);
+    }
   });
   async function initializeBridge() {
     await rpcRequest('ui/initialize', { appInfo: { name: 'target-ops-exec-result', version: '1.5.0' }, appCapabilities: { tools: {} }, protocolVersion: '2026-01-26' });
     window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/initialized',params:{}}, '*');
-    // COMPAT(COMPAT-003): Older ChatGPT hosts hydrate initial App output through
-    // window.openai instead of replaying the normal MCP Apps result notification.
-    if (window.openai?.toolOutput) handleResult(window.openai.toolOutput, false);
-    else if (window.openai?.toolResponseMetadata?.structuredContent) handleResult(window.openai.toolResponseMetadata.structuredContent, false);
+    hydrateLegacyInitialResult();
+    startAutoResize();
   }
+  hydrateLegacyInitialResult();
   initializeBridge().catch(error => console.error('Failed to initialize MCP Apps bridge:', error));
 })();
 </script>
