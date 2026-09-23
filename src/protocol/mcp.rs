@@ -225,14 +225,20 @@ fn initialize(state: &AppState, params: Value) -> Result<Value> {
             "version": state.config.server.version.clone(),
         }
     });
-    if let Some(prompt) = state
-        .config
-        .server
-        .startup_prompt
-        .as_deref()
-        .filter(|prompt| !prompt.trim().is_empty())
-    {
-        result["instructions"] = Value::String(prompt.to_string());
+    if let Some(path) = state.config.startup_prompt_file.as_ref() {
+        match std::fs::read_to_string(path) {
+            Ok(prompt) if !prompt.trim().is_empty() => {
+                result["instructions"] = Value::String(prompt);
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(Error::Config(format!(
+                    "failed to read startup prompt file {}: {err}",
+                    path.display()
+                )));
+            }
+        }
     }
     Ok(result)
 }
@@ -444,28 +450,83 @@ mod tests {
     }
 
     #[test]
-    fn initialize_omits_unconfigured_startup_prompt() {
+    fn initialize_omits_absent_startup_prompt_file() {
         let state = test_state();
         let result = initialize(&state, json!({})).unwrap();
         assert!(result.get("instructions").is_none());
     }
 
     #[test]
-    fn initialize_exposes_configured_startup_prompt() {
+    fn initialize_reads_configured_startup_prompt_file() {
         let temp = tempdir().unwrap();
         let path = temp.keep();
+        let prompt_path = path.join("AGENTS.md");
+        std::fs::write(
+            &prompt_path,
+            "Treat this repository like AGENTS.md instructions.\nSecond line.\n",
+        )
+        .unwrap();
+
         let mut config = Config::default();
         config.server.runtime_dir = path.join("runtime");
         config.server.oauth_state_file = None;
-        config.server.startup_prompt =
-            Some("Treat this repository like AGENTS.md instructions.".to_string());
+        config.startup_prompt_file = Some(prompt_path);
         let state = AppState::new(config).unwrap();
 
         let result = initialize(&state, json!({})).unwrap();
         assert_eq!(
             result["instructions"],
-            "Treat this repository like AGENTS.md instructions."
+            "Treat this repository like AGENTS.md instructions.\nSecond line.\n"
         );
+    }
+
+    #[test]
+    fn initialize_omits_empty_startup_prompt_file() {
+        let temp = tempdir().unwrap();
+        let path = temp.keep();
+        let prompt_path = path.join("AGENTS.md");
+        std::fs::write(&prompt_path, " \n\t\n").unwrap();
+
+        let mut config = Config::default();
+        config.server.runtime_dir = path.join("runtime");
+        config.server.oauth_state_file = None;
+        config.startup_prompt_file = Some(prompt_path);
+        let state = AppState::new(config).unwrap();
+
+        let result = initialize(&state, json!({})).unwrap();
+        assert!(result.get("instructions").is_none());
+    }
+
+    #[test]
+    fn initialize_ignores_missing_startup_prompt_file() {
+        let temp = tempdir().unwrap();
+        let path = temp.keep();
+
+        let mut config = Config::default();
+        config.server.runtime_dir = path.join("runtime");
+        config.server.oauth_state_file = None;
+        config.startup_prompt_file = Some(path.join("missing.md"));
+        let state = AppState::new(config).unwrap();
+
+        let result = initialize(&state, json!({})).unwrap();
+        assert!(result.get("instructions").is_none());
+    }
+
+    #[test]
+    fn initialize_errors_when_startup_prompt_file_is_unreadable() {
+        let temp = tempdir().unwrap();
+        let path = temp.keep();
+
+        let mut config = Config::default();
+        config.server.runtime_dir = path.join("runtime");
+        config.server.oauth_state_file = None;
+        config.startup_prompt_file = Some(path.clone());
+        let state = AppState::new(config).unwrap();
+
+        let err = initialize(&state, json!({})).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("failed to read startup prompt file"));
     }
 
     #[test]

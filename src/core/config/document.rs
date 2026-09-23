@@ -157,6 +157,8 @@ pub(super) fn load(path: &Path) -> Result<Config> {
 
     let rendered = document.to_string();
     let mut config: Config = toml::from_str(&rendered)?;
+    let config_dir = path.parent().unwrap_or_else(|| Path::new("."));
+    config.startup_prompt_file = Some(config_dir.join("AGENTS.md"));
     config.ensure_local_target();
     config.validate()?;
 
@@ -338,9 +340,36 @@ mod tests {
         assert!(written.contains("file_backup_max_entries = 1024"));
         assert!(written.contains("default_timeout_ms = 30000"));
         assert!(!written.contains("startup_prompt"));
-        assert_eq!(config.server.startup_prompt, None);
+        assert_eq!(
+            config.startup_prompt_file,
+            Some(path.parent().unwrap().join("AGENTS.md"))
+        );
+        assert!(!path.parent().unwrap().join("AGENTS.md").exists());
         assert!(!written.contains("http_bearer_token"));
         assert!(!written.contains("oauth_authorization_password"));
+    }
+
+    #[test]
+    fn startup_prompt_file_is_fixed_next_to_config_and_preserved() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("nested/config.toml");
+        let agents = temp.path().join("nested/AGENTS.md");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "[server]\nname = \"custom\"\n").unwrap();
+        fs::write(
+            &agents,
+            "# Long startup instructions\nKeep this file untouched.\n",
+        )
+        .unwrap();
+
+        let config = load(&path).unwrap();
+        assert_eq!(config.startup_prompt_file, Some(agents.clone()));
+        assert_eq!(
+            fs::read_to_string(&agents).unwrap(),
+            "# Long startup instructions\nKeep this file untouched.\n"
+        );
+        let written = fs::read_to_string(&path).unwrap();
+        assert!(!written.contains("startup_prompt"));
     }
 
     #[test]

@@ -258,7 +258,6 @@ Safety/protocol ceilings such as the 100 MiB absolute file-transfer maximum rema
 | --- | --- | --- |
 | `name` | `mcp-target-ops` | Name advertised to clients |
 | `version` | Package version | Version advertised to clients |
-| `startup_prompt` | None | Optional MCP initialize instructions, analogous to a global AGENTS.md; omitted entirely unless explicitly configured |
 | `default_target` | None | Fallback target ID when no explicit or active target exists |
 | `terminal_ring_buffer_bytes` | `524288` | Retained output per terminal session |
 | `runtime_dir` | System temp directory + `mcp-target-ops` | Runtime directory created at startup |
@@ -272,6 +271,8 @@ Safety/protocol ceilings such as the 100 MiB absolute file-transfer maximum rema
 | `oauth_access_token_ttl_secs` | `3600` | Access-token lifetime |
 | `oauth_refresh_token_ttl_secs` | `2592000` | Refresh-token lifetime |
 | `oauth_state_file` | `~/.config/mcp-target-ops/oauth-state.json` | Persistent OAuth clients and tokens |
+
+Target Ops also looks for an optional `AGENTS.md` beside the selected main config file (for example `~/.config/mcp-target-ops/AGENTS.md`). If present and non-empty, its complete UTF-8 contents are returned as MCP `initialize.instructions`, giving it the role of a global startup prompt. The file is never generated or modified by Target Ops; if it is absent, no startup instructions are sent.
 
 Deployment-specific values can be supplied by environment variables:
 

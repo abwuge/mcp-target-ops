@@ -28,6 +28,9 @@ pub struct Config {
 
     #[serde(default)]
     pub mcp_servers: BTreeMap<String, McpServerConfig>,
+
+    #[serde(skip)]
+    pub startup_prompt_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,9 +131,6 @@ pub struct ServerConfig {
 
     #[serde(default = "default_version")]
     pub version: String,
-
-    #[serde(default)]
-    pub startup_prompt: Option<String>,
 
     #[serde(default = "default_http_bearer_token")]
     pub http_bearer_token: Option<String>,
@@ -301,6 +301,7 @@ impl Default for Config {
             server: ServerConfig::default(),
             targets,
             mcp_servers: BTreeMap::new(),
+            startup_prompt_file: None,
         }
     }
 }
@@ -350,7 +351,6 @@ impl Default for ServerConfig {
         Self {
             name: default_name(),
             version: default_version(),
-            startup_prompt: None,
             http_bearer_token: default_http_bearer_token(),
             oauth_enabled: default_oauth_enabled(),
             public_base_url: default_public_base_url(),

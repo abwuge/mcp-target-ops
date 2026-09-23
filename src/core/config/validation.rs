@@ -159,7 +159,6 @@ fn validate_server(config: &Config) -> Result<()> {
             "server.runtime_dir must not be empty".to_string(),
         ));
     }
-
     validate_optional_secret(
         "server.http_bearer_token",
         server.http_bearer_token.as_deref(),

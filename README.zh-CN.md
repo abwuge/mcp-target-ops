@@ -249,7 +249,6 @@ rewrite_on_start = false
 | --- | --- | --- |
 | `name` | `mcp-target-ops` | 向客户端公布的服务名 |
 | `version` | 软件包版本 | 向客户端公布的版本 |
-| `startup_prompt` | 无 | 可选 MCP initialize 启动提示词，作用类似全局 AGENTS.md；只有显式配置时才发送 |
 | `default_target` | 无 | 没有显式目标和活动目标时使用的回退目标 |
 | `terminal_ring_buffer_bytes` | `524288` | 每个终端保留的输出大小 |
 | `runtime_dir` | 系统临时目录下的 `mcp-target-ops` | 启动时创建的运行目录 |
@@ -263,6 +262,8 @@ rewrite_on_start = false
 | `oauth_access_token_ttl_secs` | `3600` | 访问令牌有效期 |
 | `oauth_refresh_token_ttl_secs` | `2592000` | 刷新令牌有效期 |
 | `oauth_state_file` | `~/.config/mcp-target-ops/oauth-state.json` | 持久化 OAuth 客户端和令牌 |
+
+Target Ops 还会自动查找主配置文件同目录下的可选 `AGENTS.md`（例如 `~/.config/mcp-target-ops/AGENTS.md`）。如果该文件存在且非空，其完整 UTF-8 内容会作为 MCP `initialize.instructions` 返回，作用相当于全局启动提示词。Target Ops 永远不会自动创建或修改此文件；文件不存在时就不发送启动指令。
 
 部署相关值也可以通过环境变量提供：
 
