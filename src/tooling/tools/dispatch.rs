@@ -5,6 +5,7 @@ use crate::{
         policy,
         state::AppState,
         target::{ResolvedTarget, TargetId, TargetSource},
+        util::sha256_hex,
     },
     tooling::{
         exec::{self, ExecBatchRequest, ExecRequest},
@@ -33,7 +34,7 @@ use crate::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::{str::FromStr, sync::Arc, time::Duration};
+use std::{fs as std_fs, str::FromStr, sync::Arc, time::Duration};
 
 pub fn call_tool_with_context(
     state: Arc<AppState>,
@@ -47,6 +48,7 @@ pub fn call_tool_with_context(
         "server_info" => Ok(server_info(&state)),
         "target_list" => Ok(json!({ "targets": state.list_targets() })),
         "target_current" => Ok(target_current(&state)),
+        "target_instructions" => target_instructions(&state, caller_key),
         "target_select" => target_select(&state, parse(args)?),
         "target_connect" => target_connect(&state, parse(args)?),
         "target_disconnect" => target_disconnect(&state, parse(args)?),
@@ -212,6 +214,50 @@ pub fn call_tool_with_context(
         )?)?)?),
         other => Err(Error::Tool(format!("unknown tool: {other}"))),
     }
+}
+
+fn target_instructions(state: &AppState, caller_key: &str) -> Result<Value> {
+    let Some(path) = state.config.target_instructions_file.as_ref() else {
+        state.mark_target_instructions_loaded(caller_key);
+        return Ok(json!({
+            "found": false,
+            "path": null,
+            "instructions": "",
+            "bytes": 0,
+            "sha256": null
+        }));
+    };
+
+    let instructions = match std_fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            state.mark_target_instructions_loaded(caller_key);
+            return Ok(json!({
+                "found": false,
+                "path": path.display().to_string(),
+                "instructions": "",
+                "bytes": 0,
+                "sha256": null
+            }));
+        }
+        Err(err) => {
+            return Err(Error::Config(format!(
+                "failed to read target instructions file {}: {err}",
+                path.display()
+            )));
+        }
+    };
+
+    let bytes = instructions.len();
+    let sha256 = sha256_hex(instructions.as_bytes());
+    state.mark_target_instructions_loaded(caller_key);
+    Ok(json!({
+        "found": true,
+        "path": path.display().to_string(),
+        "instructions": instructions,
+        "bytes": bytes,
+        "sha256": sha256
+    }))
 }
 
 #[derive(Debug, Deserialize)]

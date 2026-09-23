@@ -214,7 +214,7 @@ fn initialize(state: &AppState, params: Value) -> Result<Value> {
         .and_then(|v| v.as_str())
         .unwrap_or("2025-06-18");
 
-    let mut result = json!({
+    Ok(json!({
         "protocolVersion": requested_protocol,
         "capabilities": {
             "tools": { "listChanged": false },
@@ -224,23 +224,7 @@ fn initialize(state: &AppState, params: Value) -> Result<Value> {
             "name": state.config.server.name.clone(),
             "version": state.config.server.version.clone(),
         }
-    });
-    if let Some(path) = state.config.startup_prompt_file.as_ref() {
-        match std::fs::read_to_string(path) {
-            Ok(prompt) if !prompt.trim().is_empty() => {
-                result["instructions"] = Value::String(prompt);
-            }
-            Ok(_) => {}
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(err) => {
-                return Err(Error::Config(format!(
-                    "failed to read startup prompt file {}: {err}",
-                    path.display()
-                )));
-            }
-        }
-    }
-    Ok(result)
+    }))
 }
 
 fn tools_call(
@@ -257,6 +241,18 @@ fn tools_call(
     }
 
     let params: ToolCallParams = serde_json::from_value(params)?;
+    if requires_target_instructions(&params.name)
+        && state.target_instructions_required(caller_key)?
+    {
+        return Ok(json!({
+            "content": [{
+                "type": "text",
+                "text": "Target operation was not executed. Target-specific AGENTS.md instructions are available for this MCP session. Call target_instructions, read and follow the returned instructions, then retry the original target operation."
+            }],
+            "isError": true
+        }));
+    }
+
     let attach_completed = !matches!(
         params.name.as_str(),
         "job_poll" | "job_output" | "job_wait" | "result_read" | "exec_stream"
@@ -384,6 +380,43 @@ fn tools_call(
     }
 }
 
+fn requires_target_instructions(name: &str) -> bool {
+    matches!(
+        name,
+        "target_connect"
+            | "target_disconnect"
+            | "exec"
+            | "exec_batch"
+            | "exec_start"
+            | "job_poll"
+            | "job_output"
+            | "job_wait"
+            | "job_cancel"
+            | "file_read"
+            | "file_backup"
+            | "file_backup_list"
+            | "file_restore"
+            | "file_backup_delete"
+            | "file_list"
+            | "file_edit"
+            | "file_write"
+            | "file_delete"
+            | "file_import"
+            | "file_export"
+            | "file_transfer"
+            | "file_patch"
+            | "file_find"
+            | "file_move"
+            | "file_chmod"
+            | "directory_create"
+            | "terminal_open"
+            | "terminal_send"
+            | "terminal_read"
+            | "terminal_resize"
+            | "terminal_close"
+    )
+}
+
 fn caches_app_result(name: &str) -> bool {
     matches!(
         name,
@@ -449,84 +482,121 @@ mod tests {
         .unwrap()
     }
 
-    #[test]
-    fn initialize_omits_absent_startup_prompt_file() {
-        let state = test_state();
-        let result = initialize(&state, json!({})).unwrap();
-        assert!(result.get("instructions").is_none());
-    }
-
-    #[test]
-    fn initialize_reads_configured_startup_prompt_file() {
+    fn target_instruction_state() -> (Arc<AppState>, std::path::PathBuf, std::path::PathBuf) {
         let temp = tempdir().unwrap();
-        let path = temp.keep();
-        let prompt_path = path.join("AGENTS.md");
+        let root = temp.keep();
+        let agents = root.join("AGENTS.md");
         std::fs::write(
-            &prompt_path,
-            "Treat this repository like AGENTS.md instructions.\nSecond line.\n",
+            &agents,
+            "RULE-SENTINEL: obey these instructions only when operating a target.\n",
         )
         .unwrap();
 
         let mut config = Config::default();
-        config.server.runtime_dir = path.join("runtime");
+        if let Some(TargetConfig::Local(local)) = config.targets.get_mut("local") {
+            local.enabled = true;
+            local.policy.allow_file_read = true;
+            local.policy.allowed_roots = vec![root.to_string_lossy().to_string()];
+        }
+        config.server.default_target = Some("local".to_string());
         config.server.oauth_state_file = None;
-        config.startup_prompt_file = Some(prompt_path);
-        let state = AppState::new(config).unwrap();
+        config.server.runtime_dir = root.join("runtime");
+        config.target_instructions_file = Some(agents.clone());
+        (Arc::new(AppState::new(config).unwrap()), root, agents)
+    }
 
+    #[test]
+    fn initialize_never_loads_target_instructions() {
+        let (state, _, _) = target_instruction_state();
         let result = initialize(&state, json!({})).unwrap();
-        assert_eq!(
-            result["instructions"],
-            "Treat this repository like AGENTS.md instructions.\nSecond line.\n"
+        assert!(result.get("instructions").is_none());
+    }
+
+    #[test]
+    fn target_operation_is_blocked_until_instructions_are_loaded() {
+        let (state, root, _) = target_instruction_state();
+
+        let blocked = call_tool_for(
+            Arc::clone(&state),
+            "session:a",
+            1,
+            "file_list",
+            json!({ "target": "local", "path": root }),
         );
+        assert_eq!(blocked["result"]["isError"], true);
+        let blocked_text = blocked["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(blocked_text.contains("Call target_instructions"));
+        assert!(!blocked_text.contains("RULE-SENTINEL"));
+
+        let loaded = call_tool_for(
+            Arc::clone(&state),
+            "session:a",
+            2,
+            "target_instructions",
+            json!({}),
+        );
+        assert_eq!(loaded["result"]["isError"], false);
+        assert_eq!(
+            loaded["result"]["structuredContent"]["instructions"],
+            "RULE-SENTINEL: obey these instructions only when operating a target.\n"
+        );
+
+        let allowed = call_tool_for(
+            Arc::clone(&state),
+            "session:a",
+            3,
+            "file_list",
+            json!({ "target": "local", "path": root }),
+        );
+        assert_eq!(allowed["result"]["isError"], false);
+
+        let other_session = call_tool_for(
+            Arc::clone(&state),
+            "session:b",
+            4,
+            "file_list",
+            json!({ "target": "local", "path": root }),
+        );
+        assert_eq!(other_session["result"]["isError"], true);
     }
 
     #[test]
-    fn initialize_omits_empty_startup_prompt_file() {
-        let temp = tempdir().unwrap();
-        let path = temp.keep();
-        let prompt_path = path.join("AGENTS.md");
-        std::fs::write(&prompt_path, " \n\t\n").unwrap();
-
-        let mut config = Config::default();
-        config.server.runtime_dir = path.join("runtime");
-        config.server.oauth_state_file = None;
-        config.startup_prompt_file = Some(prompt_path);
-        let state = AppState::new(config).unwrap();
-
-        let result = initialize(&state, json!({})).unwrap();
-        assert!(result.get("instructions").is_none());
+    fn inventory_tools_do_not_trigger_target_instruction_gate() {
+        let (state, _, _) = target_instruction_state();
+        let result = call_tool_for(state, "session:inventory", 1, "target_list", json!({}));
+        assert_eq!(result["result"]["isError"], false);
     }
 
     #[test]
-    fn initialize_ignores_missing_startup_prompt_file() {
-        let temp = tempdir().unwrap();
-        let path = temp.keep();
+    fn missing_target_instructions_do_not_block_target_operations() {
+        let (state, root, agents) = target_instruction_state();
+        std::fs::remove_file(agents).unwrap();
 
-        let mut config = Config::default();
-        config.server.runtime_dir = path.join("runtime");
-        config.server.oauth_state_file = None;
-        config.startup_prompt_file = Some(path.join("missing.md"));
-        let state = AppState::new(config).unwrap();
-
-        let result = initialize(&state, json!({})).unwrap();
-        assert!(result.get("instructions").is_none());
+        let result = call_tool_for(
+            state,
+            "session:missing",
+            1,
+            "file_list",
+            json!({ "target": "local", "path": root }),
+        );
+        assert_eq!(result["result"]["isError"], false);
     }
 
     #[test]
-    fn initialize_errors_when_startup_prompt_file_is_unreadable() {
-        let temp = tempdir().unwrap();
-        let path = temp.keep();
-
+    fn target_instructions_reports_unreadable_source() {
+        let (_state, root, _) = target_instruction_state();
         let mut config = Config::default();
-        config.server.runtime_dir = path.join("runtime");
         config.server.oauth_state_file = None;
-        config.startup_prompt_file = Some(path.clone());
-        let state = AppState::new(config).unwrap();
+        config.server.runtime_dir = root.join("runtime2");
+        config.target_instructions_file = Some(root.clone());
+        let state = Arc::new(AppState::new(config).unwrap());
 
-        let err = initialize(&state, json!({})).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("failed to read startup prompt file"));
+        let result = call_tool_for(state, "session:error", 1, "target_instructions", json!({}));
+        assert_eq!(result["result"]["isError"], true);
+        assert!(result["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("failed to read target instructions file"));
     }
 
     #[test]

@@ -86,9 +86,9 @@ app_job_poll_interval_ms = 180
 [server]
 # Server name advertised in the MCP initialize response.
 name = "mcp-target-ops"
-# Optional startup instructions live in AGENTS.md beside this config file.
-# Target Ops reads that file as MCP initialize.instructions when it exists and
-# never creates or modifies it automatically.
+# Optional target-operation instructions live in AGENTS.md beside this config.
+# They are loaded lazily through target_instructions only when a model actually
+# starts using local/SSH target tools; Target Ops never creates or modifies it.
 # Fallback target used only when a call has neither an explicit target argument
 # nor a session-scoped target selected with target_select. It is not itself the
 # active target.

@@ -20,7 +20,7 @@ SSH 主机上执行命令、管理文件、持续读取后台任务输出，以�
 
 ## 核心能力
 
-- 本机与 SSH 目标共用一套包含 38 个模型可见工具与 2 个 App-only 辅助工具的接口
+- 本机与 SSH 目标共用一套包含 39 个模型可见工具与 2 个 App-only 辅助工具的接口
 - 普通远程命令与文件操作复用持久 OpenSSH worker
 - 支持前台命令，以及可取消、可增量读取输出的后台任务
 - 支持持久 PTY 终端和实时窗口尺寸调整
@@ -263,7 +263,7 @@ rewrite_on_start = false
 | `oauth_refresh_token_ttl_secs` | `2592000` | 刷新令牌有效期 |
 | `oauth_state_file` | `~/.config/mcp-target-ops/oauth-state.json` | 持久化 OAuth 客户端和令牌 |
 
-Target Ops 还会自动查找主配置文件同目录下的可选 `AGENTS.md`（例如 `~/.config/mcp-target-ops/AGENTS.md`）。如果该文件存在且非空，其完整 UTF-8 内容会作为 MCP `initialize.instructions` 返回，作用相当于全局启动提示词。Target Ops 永远不会自动创建或修改此文件；文件不存在时就不发送启动指令。
+Target Ops 还会自动查找主配置文件同目录下的可选 `AGENTS.md`（例如 `~/.config/mcp-target-ops/AGENTS.md`），但**不会在 MCP initialize 阶段加载它**。当该文件存在且非空时，第一次真正会触达本机/SSH target 的工具调用会先被一个很短的 preflight 提示拦截；模型必须随后调用 `target_instructions`，该工具才会返回 `AGENTS.md` 的完整 UTF-8 内容，并把它标记为本 MCP 会话已加载，然后模型再重试原 target 操作。`target_list` 等纯 inventory 查询以及普通网页对话不会加载该文件。Target Ops 永远不会自动创建或修改此文件。
 
 部署相关值也可以通过环境变量提供：
 
@@ -353,12 +353,12 @@ URL 或秘密值。高级部署仍可使用内联 URL 或文件秘密引用，�
 
 ## 工具列表
 
-Target Ops 当前发布 40 个工具描述：38 个模型可见工具，以及 2 个仅供 App 使用的 `exec_stream` 与 `result_read`。
+Target Ops 当前发布 41 个工具描述：39 个模型可见工具，以及 2 个仅供 App 使用的 `exec_stream` 与 `result_read`。
 
 | 类别 | 工具 |
 | --- | --- |
 | 服务 | `server_info` |
-| 目标 | `target_list`、`target_current`、`target_select`、`target_connect`、`target_disconnect` |
+| 目标 | `target_list`、`target_current`、`target_instructions`、`target_select`、`target_connect`、`target_disconnect` |
 | 下游 MCP | `mcp_server_list`、`mcp_tools_list`、`mcp_tool_call` |
 | 命令与任务 | `exec`、`exec_batch`、`exec_start`、`job_poll`、`job_output`、`job_wait`、`job_cancel`；仅 App：`exec_stream`、`result_read` |
 | 文件与目录 | `file_read`、`file_backup`、`file_backup_list`、`file_restore`、`file_backup_delete`、`file_list`、`file_find`、`file_edit`、`file_write`、`file_delete`、`file_import`、`file_export`、`file_transfer`、`file_patch`、`file_move`、`file_chmod`、`directory_create` |

@@ -30,7 +30,7 @@ pub struct Config {
     pub mcp_servers: BTreeMap<String, McpServerConfig>,
 
     #[serde(skip)]
-    pub startup_prompt_file: Option<PathBuf>,
+    pub target_instructions_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -301,7 +301,7 @@ impl Default for Config {
             server: ServerConfig::default(),
             targets,
             mcp_servers: BTreeMap::new(),
-            startup_prompt_file: None,
+            target_instructions_file: None,
         }
     }
 }

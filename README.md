@@ -23,7 +23,7 @@ for reviewing file changes.
 
 ## Highlights
 
-- One interface for local and SSH targets: 38 model-facing tools plus two App-only helpers
+- One interface for local and SSH targets: 39 model-facing tools plus two App-only helpers
 - Persistent OpenSSH workers for remote file operations
 - Live foreground command output plus cancellable background jobs with incremental output
 - Persistent PTY terminals with live resize support
@@ -272,7 +272,7 @@ Safety/protocol ceilings such as the 100 MiB absolute file-transfer maximum rema
 | `oauth_refresh_token_ttl_secs` | `2592000` | Refresh-token lifetime |
 | `oauth_state_file` | `~/.config/mcp-target-ops/oauth-state.json` | Persistent OAuth clients and tokens |
 
-Target Ops also looks for an optional `AGENTS.md` beside the selected main config file (for example `~/.config/mcp-target-ops/AGENTS.md`). If present and non-empty, its complete UTF-8 contents are returned as MCP `initialize.instructions`, giving it the role of a global startup prompt. The file is never generated or modified by Target Ops; if it is absent, no startup instructions are sent.
+Target Ops also looks for an optional `AGENTS.md` beside the selected main config file (for example `~/.config/mcp-target-ops/AGENTS.md`). It is **not** loaded during MCP initialization. When a non-empty file exists, the first tool call that would actually touch a configured local/SSH target is blocked with a short preflight message. The model must then call `target_instructions`, which returns the complete UTF-8 file contents and marks those instructions as loaded for that MCP session; the original target operation can then be retried. Inventory-only tools such as `target_list` and ordinary conversation do not load the file. The file is never generated or modified by Target Ops.
 
 Deployment-specific values can be supplied by environment variables:
 
@@ -369,12 +369,12 @@ advanced deployments; see the example configuration.
 
 ## Tool catalog
 
-Target Ops publishes 40 tool descriptors: 38 model-facing tools and two App-only helpers, `exec_stream` and `result_read`.
+Target Ops publishes 41 tool descriptors: 39 model-facing tools and two App-only helpers, `exec_stream` and `result_read`.
 
 | Area | Tools |
 | --- | --- |
 | Server | `server_info` |
-| Targets | `target_list`, `target_current`, `target_select`, `target_connect`, `target_disconnect` |
+| Targets | `target_list`, `target_current`, `target_instructions`, `target_select`, `target_connect`, `target_disconnect` |
 | Downstream MCP | `mcp_server_list`, `mcp_tools_list`, `mcp_tool_call` |
 | Commands and jobs | `exec`, `exec_batch`, `exec_start`, `job_poll`, `job_output`, `job_wait`, `job_cancel`; App-only: `exec_stream`, `result_read` |
 | Files and directories | `file_read`, `file_backup`, `file_backup_list`, `file_restore`, `file_backup_delete`, `file_list`, `file_find`, `file_edit`, `file_write`, `file_delete`, `file_import`, `file_export`, `file_transfer`, `file_patch`, `file_move`, `file_chmod`, `directory_create` |

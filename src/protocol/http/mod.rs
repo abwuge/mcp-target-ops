@@ -96,7 +96,11 @@ fn handle_request(state: Arc<AppState>, mut request: Request) -> Result<()> {
                 None => respond_empty(request, 202),
             }
         }
-        (Method::Delete, MCP_PATH) => respond_empty(request, 204),
+        (Method::Delete, MCP_PATH) => {
+            let caller_key = auth::caller_key(&request);
+            state.clear_target_instructions_for_caller(&caller_key);
+            respond_empty(request, 204)
+        }
         (Method::Get, MCP_PATH) => respond_json(
             request,
             405,

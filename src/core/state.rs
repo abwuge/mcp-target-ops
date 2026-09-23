@@ -13,6 +13,8 @@ use crate::{
 };
 use serde::Serialize;
 use std::{
+    collections::HashSet,
+    fs,
     str::FromStr,
     sync::{Arc, Mutex},
     time::SystemTime,
@@ -28,6 +30,7 @@ pub struct AppState {
     pub downloads: DownloadRegistry,
     pub backups: Arc<FileBackupStore>,
     pub oauth: Mutex<OAuthState>,
+    target_instruction_sessions: Mutex<HashSet<String>>,
     started_at: SystemTime,
 }
 
@@ -80,12 +83,50 @@ impl AppState {
             oauth: Mutex::new(OAuthState::load(config.server.oauth_state_file.clone())?),
             config,
             active_target: Mutex::new(None),
+            target_instruction_sessions: Mutex::new(HashSet::new()),
             started_at: SystemTime::now(),
         })
     }
 
     pub fn started_at(&self) -> SystemTime {
         self.started_at
+    }
+
+    pub fn target_instructions_required(&self, caller_key: &str) -> Result<bool> {
+        if self
+            .target_instruction_sessions
+            .lock()
+            .unwrap()
+            .contains(caller_key)
+        {
+            return Ok(false);
+        }
+
+        let Some(path) = self.config.target_instructions_file.as_ref() else {
+            return Ok(false);
+        };
+        match fs::metadata(path) {
+            Ok(metadata) => Ok(metadata.len() > 0),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(err) => Err(Error::Config(format!(
+                "failed to inspect target instructions file {}: {err}",
+                path.display()
+            ))),
+        }
+    }
+
+    pub fn mark_target_instructions_loaded(&self, caller_key: &str) {
+        self.target_instruction_sessions
+            .lock()
+            .unwrap()
+            .insert(caller_key.to_string());
+    }
+
+    pub fn clear_target_instructions_for_caller(&self, caller_key: &str) {
+        self.target_instruction_sessions
+            .lock()
+            .unwrap()
+            .remove(caller_key);
     }
 
     pub fn resolve_target(&self, requested: Option<&str>) -> Result<(TargetId, TargetSource)> {

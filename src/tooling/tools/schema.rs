@@ -35,6 +35,18 @@ pub(super) fn output_schema(name: &str) -> Value {
             "required": ["active_target"],
             "additionalProperties": false
         }),
+        "target_instructions" => json!({
+            "type": "object",
+            "properties": {
+                "found": { "type": "boolean" },
+                "path": nullable_string_schema(),
+                "instructions": { "type": "string" },
+                "bytes": { "type": "integer", "minimum": 0 },
+                "sha256": nullable_string_schema()
+            },
+            "required": ["found", "path", "instructions", "bytes", "sha256"],
+            "additionalProperties": false
+        }),
         "target_select" => json!({
             "type": "object",
             "properties": {
