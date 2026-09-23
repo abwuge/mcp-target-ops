@@ -190,7 +190,10 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
   // and then receive the same result again as a normal MCP Apps notification.
   function hydrateLegacyInitialResult() {
     if (legacyInitialHydrated) return true;
-    const raw = window.openai?.toolOutput || window.openai?.toolResponseMetadata?.structuredContent;
+    const raw = window.openai?.toolOutput
+      || window.openai?.toolResponseMetadata?.mcp_tool_result
+      || window.openai?.toolResponseMetadata?.call_tool_result
+      || window.openai?.toolResponseMetadata?.structuredContent;
     if (!raw) return false;
     legacyInitialHydrated = true;
     const data = toolResultData(raw);

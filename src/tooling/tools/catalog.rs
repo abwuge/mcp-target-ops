@@ -168,6 +168,7 @@ fn tool(
 
     if matches!(name, "target_list" | "mcp_server_list") {
         meta.insert("ui".to_string(), json!({ "resourceUri": INVENTORY_UI_URI }));
+        meta.insert("openai/widgetAccessible".to_string(), Value::Bool(true));
         meta.insert(
             "openai/outputTemplate".to_string(),
             Value::String(INVENTORY_UI_URI.to_string()),
@@ -229,6 +230,7 @@ fn tool(
 
     if name == "file_read" {
         meta.insert("ui".to_string(), json!({ "resourceUri": FILE_READ_UI_URI }));
+        meta.insert("openai/widgetAccessible".to_string(), Value::Bool(true));
         meta.insert(
             "openai/outputTemplate".to_string(),
             Value::String(FILE_READ_UI_URI.to_string()),
@@ -251,6 +253,7 @@ fn tool(
             "ui".to_string(),
             json!({ "resourceUri": FILE_CHANGE_UI_URI }),
         );
+        meta.insert("openai/widgetAccessible".to_string(), Value::Bool(true));
         meta.insert(
             "openai/outputTemplate".to_string(),
             Value::String(FILE_CHANGE_UI_URI.to_string()),

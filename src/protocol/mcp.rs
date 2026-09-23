@@ -389,7 +389,6 @@ fn requires_target_instructions(name: &str) -> bool {
             | "exec_batch"
             | "exec_start"
             | "job_poll"
-            | "job_output"
             | "job_wait"
             | "job_cancel"
             | "file_read"

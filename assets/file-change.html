@@ -277,7 +277,10 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
   // so opening an old conversation never rearms the fresh-result expansion timer.
   function hydrateLegacyInitialResult() {
     if (legacyInitialHydrated) return true;
-    const raw = window.openai?.toolOutput || window.openai?.toolResponseMetadata?.structuredContent;
+    const raw = window.openai?.toolOutput
+      || window.openai?.toolResponseMetadata?.mcp_tool_result
+      || window.openai?.toolResponseMetadata?.call_tool_result
+      || window.openai?.toolResponseMetadata?.structuredContent;
     if (!raw) return false;
     legacyInitialHydrated = true;
     const data = toolResultData(raw);

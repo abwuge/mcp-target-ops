@@ -293,7 +293,10 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
   // for a replayed historical result.
   function hydrateLegacyInitialResult() {
     if (legacyInitialHydrated) return true;
-    const raw = window.openai?.toolOutput || window.openai?.toolResponseMetadata?.structuredContent;
+    const raw = window.openai?.toolOutput
+      || window.openai?.toolResponseMetadata?.mcp_tool_result
+      || window.openai?.toolResponseMetadata?.call_tool_result
+      || window.openai?.toolResponseMetadata?.structuredContent;
     if (!raw) return false;
     legacyInitialHydrated = true;
     const data = toolResultData(raw);
@@ -346,7 +349,9 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     if (reset) { liveStdout = ''; liveStderr = ''; stdoutSeq = 0; stderrSeq = 0; }
     try {
       while (true) {
-        const result = toolResultData(await rpcRequest('tools/call', { name: 'job_output', arguments: { job_id: startData.job_id, stdout_since_seq: stdoutSeq, stderr_since_seq: stderrSeq } }));
+        const response = await rpcRequest('tools/call', { name: 'job_output', arguments: { job_id: startData.job_id, stdout_since_seq: stdoutSeq, stderr_since_seq: stderrSeq } });
+        if (response?.isError) throw new Error('job_output failed');
+        const result = toolResultData(response);
         if (typeof result.stdout === 'string') liveStdout += result.stdout;
         if (typeof result.stderr === 'string') liveStderr += result.stderr;
         if (Number.isInteger(result.stdout_next_seq)) stdoutSeq = result.stdout_next_seq;
