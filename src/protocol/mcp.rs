@@ -214,7 +214,7 @@ fn initialize(state: &AppState, params: Value) -> Result<Value> {
         .and_then(|v| v.as_str())
         .unwrap_or("2025-06-18");
 
-    Ok(json!({
+    let mut result = json!({
         "protocolVersion": requested_protocol,
         "capabilities": {
             "tools": { "listChanged": false },
@@ -224,7 +224,17 @@ fn initialize(state: &AppState, params: Value) -> Result<Value> {
             "name": state.config.server.name.clone(),
             "version": state.config.server.version.clone(),
         }
-    }))
+    });
+    if let Some(prompt) = state
+        .config
+        .server
+        .startup_prompt
+        .as_deref()
+        .filter(|prompt| !prompt.trim().is_empty())
+    {
+        result["instructions"] = Value::String(prompt.to_string());
+    }
+    Ok(result)
 }
 
 fn tools_call(
@@ -431,6 +441,31 @@ mod tests {
         )
         .unwrap()
         .unwrap()
+    }
+
+    #[test]
+    fn initialize_omits_unconfigured_startup_prompt() {
+        let state = test_state();
+        let result = initialize(&state, json!({})).unwrap();
+        assert!(result.get("instructions").is_none());
+    }
+
+    #[test]
+    fn initialize_exposes_configured_startup_prompt() {
+        let temp = tempdir().unwrap();
+        let path = temp.keep();
+        let mut config = Config::default();
+        config.server.runtime_dir = path.join("runtime");
+        config.server.oauth_state_file = None;
+        config.server.startup_prompt =
+            Some("Treat this repository like AGENTS.md instructions.".to_string());
+        let state = AppState::new(config).unwrap();
+
+        let result = initialize(&state, json!({})).unwrap();
+        assert_eq!(
+            result["instructions"],
+            "Treat this repository like AGENTS.md instructions."
+        );
     }
 
     #[test]

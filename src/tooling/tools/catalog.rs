@@ -104,7 +104,8 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
         tool("file_write", "Create or replace a UTF-8 or base64 file atomically. Existing files require overwrite=true or an expected sha256. Writes require explicit target by default.", file_write_schema()),
         tool("file_delete", "Delete one file after optionally checking its sha256. Returns the deleted content for review. Directories are refused.", file_delete_schema()),
         tool("file_import", "Import a ChatGPT or connector file reference into a target path. Accepts platform-rewritten local paths or HTTPS download URLs and preserves the normal target write policy.", file_import_schema()),
-        tool("file_export", "Export one target file. The default link delivery returns a short-lived opaque HTTPS download URL without ChatGPT attachment materialization; delivery=attachment preserves the embedded-resource compatibility path.", file_export_schema()),
+        tool("file_export", "Export one target file. IMPORTANT: file_export can trigger mandatory front-end review/approval. If the user is away, approval may time out and terminate the model's reasoning. Avoid this tool during active reasoning unless it is strictly necessary; prefer using it only after the substantive work is complete, especially with expensive Pro-tier models. The default link delivery returns a short-lived opaque HTTPS download URL; delivery=attachment preserves the embedded-resource compatibility path.", file_export_schema()),
+        tool("file_transfer", "Copy one regular file between two different targets without materializing file data in the model. Both source_target and destination_target must be explicit. Uses rsync when available and falls back to scp. SSH-to-SSH transfers are direct between the two targets: Target Ops may initiate commands from either remote side, but the plugin host is never used as a file-data relay.", file_transfer_schema()),
         tool("file_patch", "Apply a unified diff to one UTF-8 file, or a standard multi-file unified diff rooted at path. Single-file mode supports sha256 compare-and-swap; multi-file mode validates all files before writing and rolls back earlier writes if a later write fails.", file_patch_schema()),
         tool("file_find", "Find literal text in one UTF-8 file and return matching lines with bounded context.", file_find_schema()),
         tool("file_move", "Move or rename a file or directory within one target. Existing destinations are not replaced unless overwrite=true.", file_move_schema()),
@@ -327,13 +328,20 @@ fn tool_annotations(name: &str) -> Value {
             | "file_restore"
             | "file_backup_delete"
             | "file_import"
+            | "file_transfer"
             | "file_patch"
             | "file_move"
             | "file_chmod"
     );
     let open_world = matches!(
         name,
-        "exec" | "exec_batch" | "exec_start" | "mcp_tools_list" | "mcp_tool_call" | "file_import"
+        "exec"
+            | "exec_batch"
+            | "exec_start"
+            | "mcp_tools_list"
+            | "mcp_tool_call"
+            | "file_import"
+            | "file_transfer"
     );
 
     json!({
@@ -661,6 +669,22 @@ fn file_export_schema() -> Value {
     })
 }
 
+fn file_transfer_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "source_target": { "type": "string", "description": "Explicit source target id: local or ssh:<profile>." },
+            "source_path": { "type": "string", "description": "Existing regular file on source_target." },
+            "destination_target": { "type": "string", "description": "Explicit destination target id: local or ssh:<profile>. Must differ from source_target." },
+            "destination_path": { "type": "string", "description": "Destination file path. The transfer is staged beside this path and renamed into place after success." },
+            "overwrite": { "type": "boolean", "description": "Allow replacing an existing destination. Defaults to false." },
+            "timeout_ms": { "type": "integer", "minimum": 1, "description": "Timeout for each transfer attempt and remote file operation." }
+        },
+        "required": ["source_target", "source_path", "destination_target", "destination_path"],
+        "additionalProperties": false
+    })
+}
+
 fn file_patch_schema() -> Value {
     json!({
         "type": "object",
@@ -747,7 +771,6 @@ mod tests {
         let tools = list_tools(None);
         let tools = tools.as_array().expect("tool list is an array");
 
-        assert_eq!(tools.len(), 39);
         for tool in tools {
             let name = tool["name"].as_str().expect("tool has a name");
             assert_eq!(

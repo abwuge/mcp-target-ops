@@ -1,4 +1,3 @@
-pub mod actions;
 pub mod apps;
 mod html;
 pub mod http;

@@ -2,8 +2,8 @@ mod files;
 mod session;
 
 pub use self::files::{
-    chmod_path, create_directory, file_exists, file_mode, list_dir, move_path, read_file,
-    remove_file, write_file,
+    chmod_path, create_directory, file_exists, file_mode, is_regular_file, list_dir, move_path,
+    read_file, remove_file, write_file,
 };
 pub use self::session::SshSessionRegistry;
 
@@ -12,6 +12,46 @@ use crate::{
     tooling::exec::RawExecOutput,
 };
 use std::{collections::BTreeMap, path::Path, time::Duration};
+
+pub fn rsync_shell_command(
+    sessions: &SshSessionRegistry,
+    target_name: &str,
+    ssh: &SshTargetConfig,
+    timeout: Duration,
+) -> Result<String> {
+    let control_path = sessions.ensure_control_master(target_name, ssh, timeout)?;
+    let mut parts = vec!["ssh".to_string()];
+    parts.extend(client_args(ssh, control_path.as_deref()));
+    Ok(parts
+        .iter()
+        .map(|part| shell_quote(part))
+        .collect::<Vec<_>>()
+        .join(" "))
+}
+
+pub fn scp_client_args(
+    sessions: &SshSessionRegistry,
+    target_name: &str,
+    ssh: &SshTargetConfig,
+    timeout: Duration,
+) -> Result<Vec<String>> {
+    let control_path = sessions.ensure_control_master(target_name, ssh, timeout)?;
+    let mut args = Vec::new();
+    if let Some(control_path) = control_path {
+        args.push("-o".to_string());
+        args.push(format!("ControlPath={}", control_path.display()));
+        args.push("-o".to_string());
+        args.push("ControlMaster=no".to_string());
+    }
+    args.push("-P".to_string());
+    args.push(ssh.port.to_string());
+    if let Some(identity_file) = &ssh.identity_file {
+        args.push("-i".to_string());
+        args.push(identity_file.display().to_string());
+    }
+    args.extend(ssh.extra_args.clone());
+    Ok(args)
+}
 
 pub fn connect(
     sessions: &SshSessionRegistry,
@@ -102,7 +142,7 @@ pub fn base_args(ssh: &SshTargetConfig) -> Vec<String> {
     args
 }
 
-pub(super) fn run_script(
+pub(crate) fn run_script(
     sessions: &SshSessionRegistry,
     target_name: &str,
     ssh: &SshTargetConfig,

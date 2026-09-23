@@ -157,6 +157,31 @@ pub fn file_exists(
     }
 }
 
+pub fn is_regular_file(
+    sessions: &SshSessionRegistry,
+    target_name: &str,
+    ssh: &SshTargetConfig,
+    path: &str,
+    timeout: Duration,
+) -> Result<bool> {
+    let output = run_script(
+        sessions,
+        target_name,
+        ssh,
+        r#"if [ -f "$1" ]; then exit 0; else exit 1; fi"#,
+        &[path],
+        timeout,
+    )?;
+    match output.exit_code {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => Err(Error::Tool(format!(
+            "remote file type check failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ))),
+    }
+}
+
 pub fn move_path(
     sessions: &SshSessionRegistry,
     target_name: &str,

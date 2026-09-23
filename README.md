@@ -10,10 +10,10 @@ local machine or configured SSH hosts. Every target has its own permissions,
 filesystem roots, timeouts, and output limits.
 
 It can run over stdio for local clients or HTTP for remote MCP clients and
-ChatGPT. HTTP mode also includes OAuth, a bounded GPT Actions REST facade,
-ChatGPT file import/export metadata, compact inventory cards for targets and
-downstream MCP servers, a non-interactive command-result MCP App for `exec`, and
-a human-readable MCP App for reviewing file changes.
+ChatGPT. HTTP mode also includes OAuth, ChatGPT file import/export metadata,
+compact inventory cards for targets and downstream MCP servers, a
+non-interactive command-result MCP App for `exec`, and a human-readable MCP App
+for reviewing file changes.
 
 > [!CAUTION]
 > Target Ops can execute commands and modify files. Keep the local target
@@ -23,7 +23,7 @@ a human-readable MCP App for reviewing file changes.
 
 ## Highlights
 
-- One interface for local and SSH targets: 37 model-facing tools plus two App-only helpers
+- One interface for local and SSH targets: 38 model-facing tools plus two App-only helpers
 - Persistent OpenSSH workers for remote file operations
 - Live foreground command output plus cancellable background jobs with incremental output
 - Persistent PTY terminals with live resize support
@@ -37,7 +37,6 @@ a human-readable MCP App for reviewing file changes.
 - Allowlisted downstream Streamable HTTP MCP gateway
 - Stdio and HTTP transports, static bearer authentication, OAuth 2.0 with PKCE,
   and persistent rotating refresh tokens
-- Generated OpenAPI 3.1 document for a deliberately small GPT Actions surface
 
 ## Architecture
 
@@ -47,7 +46,7 @@ MCP / ChatGPT client
         ├── stdio ─────────────────────────────┐
         └── HTTP + bearer or OAuth ────────────┤
                                                ▼
-                                      MCP / Actions layer
+                                           MCP layer
                                                │
                               target resolution and policy checks
                                                │
@@ -78,9 +77,9 @@ the system's security and dependency model:
 - `core` owns configuration invariants, target identity, policy, OAuth state,
   and process-scoped registries. It does not know HTTP routes or remote shell
   syntax.
-- `protocol` translates MCP, HTTP, OAuth, and GPT Actions requests into the
-  existing operation layer. Routing, authorization-page rendering, form
-  decoding, response generation, and OpenAPI generation are separate modules.
+- `protocol` translates MCP, HTTP, and OAuth requests into the existing
+  operation layer. Routing, authorization-page rendering, form decoding, and
+  response generation are separate modules.
 - `tooling` owns operation semantics and performs target/policy checks before
   reaching a backend. Request/response types and multi-file patch parsing are
   separated from the file-operation implementation.
@@ -97,7 +96,8 @@ the current trust boundary. A future native SSH/SFTP implementation can replace
 ## Requirements
 
 - Rust stable, including `rustfmt` and `clippy`, when building from source
-- The system `ssh` executable for SSH targets
+- The system `ssh` and `scp` executables for SSH targets; `rsync` is used
+  preferentially for cross-target file transfers when available
 - A POSIX-compatible remote shell and common tools such as `cat`, `mktemp`,
   `mv`, `rm`, `chmod`, `mkdir`, and `stat`
 - An HTTPS reverse proxy for remotely exposed HTTP deployments
@@ -258,11 +258,12 @@ Safety/protocol ceilings such as the 100 MiB absolute file-transfer maximum rema
 | --- | --- | --- |
 | `name` | `mcp-target-ops` | Name advertised to clients |
 | `version` | Package version | Version advertised to clients |
+| `startup_prompt` | None | Optional MCP initialize instructions, analogous to a global AGENTS.md; omitted entirely unless explicitly configured |
 | `default_target` | None | Fallback target ID when no explicit or active target exists |
 | `terminal_ring_buffer_bytes` | `524288` | Retained output per terminal session |
 | `runtime_dir` | System temp directory + `mcp-target-ops` | Runtime directory created at startup |
 | `http_bearer_token` | None | Static bearer token for protected HTTP routes |
-| `public_base_url` | None | Exact external HTTPS origin used in metadata and OpenAPI |
+| `public_base_url` | None | Exact external HTTPS origin used in OAuth metadata, export links, and MCP App widget metadata |
 | `oauth_enabled` | `false` | Enable the embedded OAuth authorization server |
 | `oauth_authorization_password` | None | Optional password gate on the authorization page |
 | `oauth_scopes` | `["mcp:tools"]` | Scopes advertised and validated by OAuth |
@@ -367,7 +368,7 @@ advanced deployments; see the example configuration.
 
 ## Tool catalog
 
-Target Ops publishes 39 tool descriptors: 37 model-facing tools and two App-only helpers, `exec_stream` and `result_read`.
+Target Ops publishes 40 tool descriptors: 38 model-facing tools and two App-only helpers, `exec_stream` and `result_read`.
 
 | Area | Tools |
 | --- | --- |
@@ -375,7 +376,7 @@ Target Ops publishes 39 tool descriptors: 37 model-facing tools and two App-only
 | Targets | `target_list`, `target_current`, `target_select`, `target_connect`, `target_disconnect` |
 | Downstream MCP | `mcp_server_list`, `mcp_tools_list`, `mcp_tool_call` |
 | Commands and jobs | `exec`, `exec_batch`, `exec_start`, `job_poll`, `job_output`, `job_wait`, `job_cancel`; App-only: `exec_stream`, `result_read` |
-| Files and directories | `file_read`, `file_backup`, `file_backup_list`, `file_restore`, `file_backup_delete`, `file_list`, `file_find`, `file_edit`, `file_write`, `file_delete`, `file_import`, `file_export`, `file_patch`, `file_move`, `file_chmod`, `directory_create` |
+| Files and directories | `file_read`, `file_backup`, `file_backup_list`, `file_restore`, `file_backup_delete`, `file_list`, `file_find`, `file_edit`, `file_write`, `file_delete`, `file_import`, `file_export`, `file_transfer`, `file_patch`, `file_move`, `file_chmod`, `directory_create` |
 | Terminals | `terminal_open`, `terminal_send`, `terminal_read`, `terminal_resize`, `terminal_close` |
 
 Every tool declares an object `outputSchema`, returns successful data through
@@ -455,6 +456,12 @@ command can still reveal it by printing or transmitting its environment.
   sections are intentionally rejected.
 - `file_move` does not overwrite by default; `file_chmod` and
   `directory_create` use the same write policy as other mutations.
+- `file_transfer` copies one regular file between two explicit, different
+  targets. It prefers `rsync` and falls back to `scp`. For SSH-to-SSH copies,
+  the file data travels directly between the two target machines: Target Ops
+  tries source-side push and destination-side pull, and never stages the file on
+  the plugin host. At least one remote side must therefore be able to
+  authenticate non-interactively to the other for a direct SSH-to-SSH copy.
 
 ### Managed rollback snapshots
 
@@ -503,6 +510,13 @@ remain process-local.
 `file_import` accepts a ChatGPT or connector file parameter after runtime
 rewriting to a mounted local path or HTTPS file reference. It writes through the
 normal atomic/CAS policy. HTTPS redirects are disabled.
+
+> [!WARNING]
+> `file_export` may require mandatory front-end review/approval. If the user is
+> away from the client, the approval can time out and terminate an in-progress
+> model run. Models should avoid `file_export` during substantive reasoning
+> unless it is necessary, and should prefer using it only after the main work is
+> complete—especially for expensive Pro-tier model runs.
 
 `file_export` defaults to `delivery = "link"`. After the normal target read-policy
 check, the server stages a private copy under `runtime_dir/downloads/`, assigns a
@@ -611,32 +625,11 @@ state.
 | `GET /downloads/<token>` | Temporary `file_export` download addressed by its opaque token |
 | `POST /` or `POST /mcp` | MCP JSON-RPC; protected when auth is configured |
 | `DELETE /mcp` | Acknowledge MCP session close; protected when auth is configured |
-| `GET /openapi.json` | Public GPT Actions OpenAPI 3.1 document |
-| `/actions/v1/*` | Protected bounded GPT Actions facade |
 | `/.well-known/oauth-protected-resource` | OAuth resource metadata when OAuth is enabled |
 | `/.well-known/oauth-authorization-server` | OAuth authorization metadata when enabled |
 | `GET|POST /oauth/authorize` | Authorization page, approval, and denial |
 | `POST /oauth/token` | Authorization-code and refresh-token exchange |
 | `POST /oauth/register` | Dynamic client registration when enabled |
-
-### GPT Actions facade
-
-The Actions API deliberately exposes only six operations and requires an
-explicit target for every host operation.
-
-| Operation ID | Endpoint | Consequential |
-| --- | --- | --- |
-| `listTargets` | `GET /actions/v1/targets` | No |
-| `executeCommand` | `POST /actions/v1/commands/execute` | Yes |
-| `readFile` | `POST /actions/v1/files/read` | No |
-| `listDirectory` | `POST /actions/v1/directories/list` | No |
-| `previewFileEdits` | `POST /actions/v1/files/edits/preview` | No |
-| `applyFileEdits` | `POST /actions/v1/files/edits/apply` | Yes |
-
-The facade applies tighter bounds than the MCP tools: a 64 KiB request body,
-30-second operation timeout, 24 KiB command output, 32 KiB file reads and diffs,
-100 returned directory entries, and a 90,000-character final response ceiling.
-Applying edits also requires `expected_sha256`.
 
 Bearer authentication represents one shared service identity. It is not a
 multi-user authorization system and does not add per-user target permissions.
@@ -706,8 +699,6 @@ src/core/
   state.rs               process-scoped registries and target resolution
 
 src/protocol/
-  actions/mod.rs         bounded GPT Actions routing and response limits
-  actions/openapi.rs     OpenAPI generation derived from the MCP catalog
   apps.rs                MCP App resource metadata
   html.rs                shared HTML escaping
   http/mod.rs            HTTP routing and public endpoint discovery
@@ -728,6 +719,7 @@ src/tooling/
   fs/types.rs            file request and response types
   fs/patch_format.rs     multi-file unified-diff parsing and path checks
   file_bridge.rs         ChatGPT and connector transfer bridge
+  file_transfer.rs       direct cross-target rsync/scp transfer
   terminal.rs            persistent PTY sessions
   mcp_client.rs          allowlisted downstream MCP client
   secret.rs              file-backed secret resolution

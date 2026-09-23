@@ -337,6 +337,8 @@ mod tests {
         assert!(written.contains("file_backup_store_max_bytes = 1073741824"));
         assert!(written.contains("file_backup_max_entries = 1024"));
         assert!(written.contains("default_timeout_ms = 30000"));
+        assert!(!written.contains("startup_prompt"));
+        assert_eq!(config.server.startup_prompt, None);
         assert!(!written.contains("http_bearer_token"));
         assert!(!written.contains("oauth_authorization_password"));
     }

@@ -13,6 +13,7 @@ use crate::{
             FileRestoreRequest,
         },
         file_bridge::{self, FileExportRequest, FileImportRequest},
+        file_transfer::{self, FileTransferRequest},
         fs::{
             self, DirectoryCreateRequest, FileChmodRequest, FileDeleteRequest, FileEditRequest,
             FileFindRequest, FileListRequest, FileMoveRequest, FilePatchRequest, FileReadRequest,
@@ -33,10 +34,6 @@ use crate::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{str::FromStr, sync::Arc, time::Duration};
-
-pub fn call_tool(state: Arc<AppState>, name: &str, args: Value) -> Result<Value> {
-    call_tool_with_context(state, name, args, None, "direct")
-}
 
 pub fn call_tool_with_context(
     state: Arc<AppState>,
@@ -163,6 +160,10 @@ pub fn call_tool_with_context(
         "file_export" => Ok(serde_json::to_value(file_bridge::export(
             &state,
             parse::<FileExportRequest>(args)?,
+        )?)?),
+        "file_transfer" => Ok(serde_json::to_value(file_transfer::transfer(
+            &state,
+            parse::<FileTransferRequest>(args)?,
         )?)?),
         "file_patch" => Ok(serde_json::to_value(fs::patch(
             &state,

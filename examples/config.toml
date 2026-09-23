@@ -86,6 +86,10 @@ app_job_poll_interval_ms = 180
 [server]
 # Server name advertised in the MCP initialize response.
 name = "mcp-target-ops"
+# Optional startup instructions returned as MCP initialize.instructions. This is
+# intentionally absent by default and is never auto-created during config merge;
+# use it like a global AGENTS.md for model-side operating guidance.
+# startup_prompt = "Prefer structured file tools over shell text processing."
 # Fallback target used only when a call has neither an explicit target argument
 # nor a session-scoped target selected with target_select. It is not itself the
 # active target.
@@ -98,13 +102,12 @@ terminal_ring_buffer_bytes = 524288
 runtime_dir = "/tmp/mcp-target-ops"
 
 # Optional static HTTP bearer authentication. Prefer MCP_TARGET_OPS_HTTP_TOKEN
-# instead of storing the token here. This is the simplest mode for a private
-# GPT Action or another single-service client.
+# instead of storing the token here.
 # http_bearer_token = "change-me"
 #
-# Exact public HTTPS origin used by OAuth metadata, generated download links, the
-# GPT Actions OpenAPI document, and the ChatGPT MCP App widget domain. Do not
-# include a trailing slash. You may also use MCP_TARGET_OPS_PUBLIC_BASE_URL.
+# Exact public HTTPS origin used by OAuth metadata, generated download links, and
+# the ChatGPT MCP App widget domain. Do not include a trailing slash. You may
+# also use MCP_TARGET_OPS_PUBLIC_BASE_URL.
 # public_base_url = "https://mcp.example.com"
 #
 # Enable the embedded OAuth authorization server for remote MCP / ChatGPT Apps.

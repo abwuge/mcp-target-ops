@@ -129,6 +129,9 @@ pub struct ServerConfig {
     #[serde(default = "default_version")]
     pub version: String,
 
+    #[serde(default)]
+    pub startup_prompt: Option<String>,
+
     #[serde(default = "default_http_bearer_token")]
     pub http_bearer_token: Option<String>,
 
@@ -347,6 +350,7 @@ impl Default for ServerConfig {
         Self {
             name: default_name(),
             version: default_version(),
+            startup_prompt: None,
             http_bearer_token: default_http_bearer_token(),
             oauth_enabled: default_oauth_enabled(),
             public_base_url: default_public_base_url(),

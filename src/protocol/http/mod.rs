@@ -13,7 +13,7 @@ use crate::{
         error::{Error, Result},
         state::AppState,
     },
-    protocol::{actions, mcp},
+    protocol::mcp,
 };
 use rand::{rngs::OsRng, RngCore};
 use serde_json::{json, Value};
@@ -65,10 +65,6 @@ fn handle_request(state: Arc<AppState>, mut request: Request) -> Result<()> {
         return response::respond_unauthorized(&state, request);
     }
 
-    if actions::is_action_path(&path) {
-        return actions::handle_request(state, request, method, &path);
-    }
-
     match (method, path.as_str()) {
         // COMPAT(COMPAT-008): Keep accepting POST / for older clients that were
         // configured with the public origin before /mcp became canonical.
@@ -116,9 +112,7 @@ fn handle_request(state: Arc<AppState>, mut request: Request) -> Result<()> {
                 "error": "not found",
                 "endpoints": [
                     "GET /health",
-                    "GET /openapi.json",
-                    "POST /mcp",
-                    "GET|POST /actions/v1/*"
+                    "POST /mcp"
                 ]
             }),
         ),
@@ -158,7 +152,6 @@ fn is_public_endpoint(method: &Method, path: &str) -> bool {
         (Method::Get, "/")
             | (Method::Get, FAVICON_PATH)
             | (Method::Get, "/health")
-            | (Method::Get, actions::OPENAPI_PATH)
             | (Method::Get, PROTECTED_RESOURCE_METADATA_PATH)
             | (Method::Get, AUTHORIZATION_SERVER_METADATA_PATH)
             | (Method::Get, AUTHORIZE_PATH)
@@ -197,8 +190,6 @@ fn handle_public_request(
                         "health": endpoint(&base_url, "/health"),
                         "favicon": endpoint(&base_url, FAVICON_PATH),
                         "mcp": endpoint(&base_url, MCP_PATH),
-                        "openapi_schema": endpoint(&base_url, actions::OPENAPI_PATH),
-                        "actions_prefix": endpoint(&base_url, actions::ACTIONS_PREFIX),
                         "oauth_protected_resource": endpoint(&base_url, PROTECTED_RESOURCE_METADATA_PATH),
                         "oauth_authorization_server": endpoint(&base_url, AUTHORIZATION_SERVER_METADATA_PATH)
                     }
@@ -215,11 +206,6 @@ fn handle_public_request(
                 "oauth_enabled": state.config.server.oauth_enabled,
             }),
         ),
-        (Method::Get, actions::OPENAPI_PATH) => {
-            let base_url = public_base_url(&state, &request);
-            let document = actions::openapi_document(&state, &base_url);
-            respond_json(request, 200, document)
-        }
         (Method::Get, PROTECTED_RESOURCE_METADATA_PATH)
         | (Method::Get, AUTHORIZATION_SERVER_METADATA_PATH)
         | (Method::Get, AUTHORIZE_PATH)
@@ -285,19 +271,17 @@ fn request_path(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{is_public_endpoint, APP_ICON, DOWNLOAD_PREFIX, FAVICON_PATH};
-    use crate::protocol::actions;
     use tiny_http::Method;
 
     #[test]
-    fn actions_schema_is_public_but_actions_require_http_auth() {
+    fn public_http_surface_is_limited_to_mcp_support_endpoints() {
         assert!(is_public_endpoint(&Method::Get, FAVICON_PATH));
-        assert!(is_public_endpoint(&Method::Get, actions::OPENAPI_PATH));
         assert!(is_public_endpoint(
             &Method::Get,
             &format!("{DOWNLOAD_PREFIX}{}", "a".repeat(64))
         ));
+        assert!(!is_public_endpoint(&Method::Get, "/openapi.json"));
         assert!(!is_public_endpoint(&Method::Get, "/actions/v1/targets"));
-        assert!(!is_public_endpoint(&Method::Post, "/actions/v1/files/read"));
     }
 
     #[test]

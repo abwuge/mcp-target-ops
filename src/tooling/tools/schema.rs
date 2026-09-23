@@ -422,6 +422,21 @@ pub(super) fn output_schema(name: &str) -> Value {
             "required": ["resolved_target", "path", "delivery"],
             "additionalProperties": false
         }),
+        "file_transfer" => json!({
+            "type": "object",
+            "properties": {
+                "source_target": { "type": "string" },
+                "source_path": { "type": "string" },
+                "destination_target": { "type": "string" },
+                "destination_path": { "type": "string" },
+                "method": { "type": "string", "enum": ["rsync", "scp"] },
+                "direction": { "type": "string", "enum": ["push", "pull"] },
+                "direct": { "type": "boolean" },
+                "transferred": { "type": "boolean" }
+            },
+            "required": ["source_target", "source_path", "destination_target", "destination_path", "method", "direction", "direct", "transferred"],
+            "additionalProperties": false
+        }),
         "file_patch" => json!({
             "type": "object",
             "properties": {

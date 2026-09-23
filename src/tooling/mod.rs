@@ -6,6 +6,7 @@ pub mod download;
 pub mod exec;
 pub mod file_backup;
 pub mod file_bridge;
+pub mod file_transfer;
 pub mod fs;
 pub mod job;
 pub mod mcp_client;

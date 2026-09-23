@@ -9,9 +9,9 @@ SSH 主机上执行命令、管理文件、持续读取后台任务输出，以�
 每个目标都可以独立配置权限、可访问目录、超时时间与输出上限。
 
 它既可以通过 stdio 服务本地 MCP 客户端，也可以通过 HTTP 服务远程 MCP
-客户端与 ChatGPT。HTTP 模式还内置 OAuth、受严格限制的 GPT Actions REST
-接口、ChatGPT 文件导入/导出元数据、用于目标与下游 MCP 服务器列表的紧凑卡片、
-用于 `exec` 的非交互式命令结果 MCP App，以及用于直观审阅文件变更的 MCP App。
+客户端与 ChatGPT。HTTP 模式还内置 OAuth、ChatGPT 文件导入/导出元数据、用于
+目标与下游 MCP 服务器列表的紧凑卡片、用于 `exec` 的非交互式命令结果 MCP App，
+以及用于直观审阅文件变更的 MCP App。
 
 > [!CAUTION]
 > Target Ops 能够执行命令和修改文件。除非确有需要，否则应保持本机目标禁用；
@@ -20,7 +20,7 @@ SSH 主机上执行命令、管理文件、持续读取后台任务输出，以�
 
 ## 核心能力
 
-- 本机与 SSH 目标共用一套包含 37 个模型可见工具与 2 个 App-only 辅助工具的接口
+- 本机与 SSH 目标共用一套包含 38 个模型可见工具与 2 个 App-only 辅助工具的接口
 - 普通远程命令与文件操作复用持久 OpenSSH worker
 - 支持前台命令，以及可取消、可增量读取输出的后台任务
 - 支持持久 PTY 终端和实时窗口尺寸调整
@@ -34,7 +34,6 @@ SSH 主机上执行命令、管理文件、持续读取后台任务输出，以�
 - 仅允许访问预先配置服务器的下游 Streamable HTTP MCP 网关
 - 同时支持 stdio、HTTP、静态 Bearer Token、PKCE OAuth 2.0，以及持久化的
   轮换刷新令牌
-- 自动生成 OpenAPI 3.1 文档，GPT Actions 仅暴露精简且受限的接口面
 
 ## 架构
 
@@ -44,7 +43,7 @@ MCP / ChatGPT 客户端
         ├── stdio ─────────────────────────────┐
         └── HTTP + Bearer 或 OAuth ────────────┤
                                                ▼
-                                        MCP / Actions 层
+                                             MCP 层
                                                │
                                       目标解析与策略检查
                                                │
@@ -73,8 +72,8 @@ MCP / ChatGPT 客户端
 
 - `core` 负责配置不变量、目标身份、策略、OAuth 状态和进程级注册表，不感知 HTTP
   路由或远程 shell 语法。
-- `protocol` 把 MCP、HTTP、OAuth 和 GPT Actions 请求转换为既有操作；路由、授权
-  页面渲染、表单解码、响应生成与 OpenAPI 生成分别位于独立模块。
+- `protocol` 把 MCP、HTTP 和 OAuth 请求转换为既有操作；路由、授权页面渲染、
+  表单解码与响应生成分别位于独立模块。
 - `tooling` 负责操作语义，并在接触后端前完成目标解析与策略检查；文件请求/响应
   类型和多文件补丁解析已与文件操作实现分离。
 - `transport` 负责 OpenSSH 进程行为；持久 worker 生命周期与 POSIX 远程文件协议
@@ -88,7 +87,8 @@ SSH/SFTP，只需替换 `transport/ssh`，无需改变 MCP 工具或策略语义
 ## 运行要求
 
 - 从源码编译时需要 Rust stable，以及 `rustfmt`、`clippy`
-- 使用 SSH 目标时需要系统中的 `ssh` 可执行文件
+- 使用 SSH 目标时需要系统中的 `ssh` 与 `scp` 可执行文件；跨 target 文件传输在
+  可用时优先使用 `rsync`
 - 远程环境应具有兼容 POSIX 的 shell，以及 `cat`、`mktemp`、`mv`、`rm`、
   `chmod`、`mkdir`、`stat` 等常用工具
 - 对公网发布 HTTP 服务时需要 HTTPS 反向代理
@@ -249,11 +249,12 @@ rewrite_on_start = false
 | --- | --- | --- |
 | `name` | `mcp-target-ops` | 向客户端公布的服务名 |
 | `version` | 软件包版本 | 向客户端公布的版本 |
+| `startup_prompt` | 无 | 可选 MCP initialize 启动提示词，作用类似全局 AGENTS.md；只有显式配置时才发送 |
 | `default_target` | 无 | 没有显式目标和活动目标时使用的回退目标 |
 | `terminal_ring_buffer_bytes` | `524288` | 每个终端保留的输出大小 |
 | `runtime_dir` | 系统临时目录下的 `mcp-target-ops` | 启动时创建的运行目录 |
 | `http_bearer_token` | 无 | 保护 HTTP 路由的静态 Bearer Token |
-| `public_base_url` | 无 | 用于元数据与 OpenAPI 的外部 HTTPS 源站地址 |
+| `public_base_url` | 无 | 用于 OAuth 元数据、导出链接与 MCP App widget 元数据的外部 HTTPS 源站地址 |
 | `oauth_enabled` | `false` | 启用内置 OAuth 授权服务器 |
 | `oauth_authorization_password` | 无 | 授权页的可选密码门禁 |
 | `oauth_scopes` | `["mcp:tools"]` | OAuth 公布并校验的 scope |
@@ -351,7 +352,7 @@ URL 或秘密值。高级部署仍可使用内联 URL 或文件秘密引用，�
 
 ## 工具列表
 
-Target Ops 当前发布 39 个工具描述：37 个模型可见工具，以及 2 个仅供 App 使用的 `exec_stream` 与 `result_read`。
+Target Ops 当前发布 40 个工具描述：38 个模型可见工具，以及 2 个仅供 App 使用的 `exec_stream` 与 `result_read`。
 
 | 类别 | 工具 |
 | --- | --- |
@@ -359,7 +360,7 @@ Target Ops 当前发布 39 个工具描述：37 个模型可见工具，以及 2
 | 目标 | `target_list`、`target_current`、`target_select`、`target_connect`、`target_disconnect` |
 | 下游 MCP | `mcp_server_list`、`mcp_tools_list`、`mcp_tool_call` |
 | 命令与任务 | `exec`、`exec_batch`、`exec_start`、`job_poll`、`job_output`、`job_wait`、`job_cancel`；仅 App：`exec_stream`、`result_read` |
-| 文件与目录 | `file_read`、`file_backup`、`file_backup_list`、`file_restore`、`file_backup_delete`、`file_list`、`file_find`、`file_edit`、`file_write`、`file_delete`、`file_import`、`file_export`、`file_patch`、`file_move`、`file_chmod`、`directory_create` |
+| 文件与目录 | `file_read`、`file_backup`、`file_backup_list`、`file_restore`、`file_backup_delete`、`file_list`、`file_find`、`file_edit`、`file_write`、`file_delete`、`file_import`、`file_export`、`file_transfer`、`file_patch`、`file_move`、`file_chmod`、`directory_create` |
 | 终端 | `terminal_open`、`terminal_send`、`terminal_read`、`terminal_resize`、`terminal_close` |
 
 每个工具都声明对象形式的 `outputSchema`，成功结果通过 `structuredContent` 返回，
@@ -428,6 +429,10 @@ MCP 请求参数中；但被启动的命令仍可通过输出环境或主动发�
   section 会被明确拒绝。
 - `file_move` 默认不覆盖；`file_chmod` 和 `directory_create` 使用与其他写操作
   相同的策略。
+- `file_transfer` 用于在两个显式且不同的 target 之间复制一个普通文件。优先使用
+  `rsync`，不可用时回退到 `scp`。SSH→SSH 时文件数据只在两台 target 之间直传：
+  Target Ops 会尝试源端 push 与目标端 pull，但绝不会在插件 host 上落地中转文件。
+  因此至少要有一台远端能够无交互地认证到另一台远端。
 
 ### 托管回滚快照
 
@@ -466,6 +471,11 @@ MCP 请求参数中；但被启动的命令仍可通过输出环境或主动发�
 
 `file_import` 接受经运行时重写后的 ChatGPT/连接器文件参数，可以是已挂载本地
 路径或 HTTPS 文件引用，并通过普通原子/CAS 写入策略落盘；HTTPS 重定向被禁用。
+
+> [!WARNING]
+> `file_export` 可能触发前端强制审核/授权。用户不在客户端前时，授权容易超时，
+> 从而中断正在进行的模型思考。除非确有必要，模型应避免在主要推理过程中调用
+> `file_export`，优先等主体工作完成后再调用；对于昂贵的 Pro 级模型尤其如此。
 
 `file_export` 默认使用 `delivery = "link"`。通过普通目标读取策略检查后，服务会把
 文件暂存到 `runtime_dir/downloads/`，生成 256-bit 加密随机不透明 token，并返回
@@ -565,30 +575,11 @@ oauth_state_file = "/home/me/.config/mcp-target-ops/oauth-state.json"
 | `GET /downloads/<token>` | 由不透明 token 定位的临时 `file_export` 下载 |
 | `POST /` 或 `POST /mcp` | MCP JSON-RPC；配置认证后受保护 |
 | `DELETE /mcp` | 确认关闭 MCP session；配置认证后受保护 |
-| `GET /openapi.json` | 公开 GPT Actions OpenAPI 3.1 文档 |
-| `/actions/v1/*` | 受保护且严格限额的 GPT Actions 接口 |
 | `/.well-known/oauth-protected-resource` | 启用 OAuth 时的资源元数据 |
 | `/.well-known/oauth-authorization-server` | 启用 OAuth 时的授权服务器元数据 |
 | `GET|POST /oauth/authorize` | 授权页面，以及批准或拒绝请求 |
 | `POST /oauth/token` | 授权码与刷新令牌交换 |
 | `POST /oauth/register` | 启用时的动态客户端注册 |
-
-### GPT Actions 接口
-
-Actions API 仅暴露六个操作，并要求每个主机操作都显式指定目标。
-
-| Operation ID | 端点 | Consequential |
-| --- | --- | --- |
-| `listTargets` | `GET /actions/v1/targets` | 否 |
-| `executeCommand` | `POST /actions/v1/commands/execute` | 是 |
-| `readFile` | `POST /actions/v1/files/read` | 否 |
-| `listDirectory` | `POST /actions/v1/directories/list` | 否 |
-| `previewFileEdits` | `POST /actions/v1/files/edits/preview` | 否 |
-| `applyFileEdits` | `POST /actions/v1/files/edits/apply` | 是 |
-
-该接口比 MCP 工具应用更严格的限制：请求体 64 KiB、操作超时 30 秒、命令输出
-24 KiB、文件读取和 diff 32 KiB、目录最多返回 100 项、最终响应最多 90,000 个
-字符。应用修改时还必须提供 `expected_sha256`。
 
 Bearer 身份验证只代表一个共享服务身份，不是多用户授权系统，也不会额外提供按
 用户划分的目标权限。
@@ -653,8 +644,6 @@ src/core/
   state.rs               进程内注册表与目标解析
 
 src/protocol/
-  actions/mod.rs         受限 GPT Actions 路由与响应限额
-  actions/openapi.rs     从 MCP 工具目录派生 OpenAPI 文档
   apps.rs                MCP App 资源元数据
   html.rs                共用 HTML 转义
   http/mod.rs            HTTP 路由与公开端点发现
@@ -675,6 +664,7 @@ src/tooling/
   fs/types.rs            文件请求与响应类型
   fs/patch_format.rs     多文件 unified diff 解析与路径校验
   file_bridge.rs         ChatGPT 与连接器文件桥
+  file_transfer.rs       target 间直连 rsync/scp 传输
   terminal.rs            持久 PTY 终端
   mcp_client.rs          白名单下游 MCP 客户端
   secret.rs              文件秘密解析
