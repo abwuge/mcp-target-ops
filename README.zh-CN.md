@@ -239,7 +239,7 @@ rewrite_on_start = false
 | `app_success_collapse_ms` | `3000` | App 成功卡片自动折叠延迟 |
 | `app_failure_collapse_ms` | `6000` | App 失败/warning 卡片自动折叠延迟 |
 | `app_sleep_after_ms` | `30000` | 折叠卡片释放重 DOM、转入可恢复 sleep 的延迟 |
-| `app_job_poll_interval_ms` | `180` | App 刷新后台任务输出的间隔 |
+| `app_job_poll_interval_ms` | `1000` | App 收到任务输出响应后，到下一次轮询的等待时间 |
 
 100 MiB 文件传输绝对上限等安全/协议硬限制仍编译在程序中，不作为普通可调配置开放。
 
@@ -383,7 +383,7 @@ scope。
 管道或控制流等 shell 状态，应继续使用 `exec`；若只是为了减少工具调用而批量进行互不
 依赖的检查，应优先使用 `exec_batch`，而不是用 shell 分隔符强行拼接。
 
-`exec`、`exec_batch` 与 `exec_start` 都绑定到稳定的 `ui://target-ops/exec-terminal/v1.html` MCP App。同步 `exec` 保持为短命令路径并正常等待最终结果；预计运行超过几秒，或实时输出有价值时，应优先使用 `exec_start`。它会立即返回 job id，因此 App 可以按 `runtime.app_job_poll_interval_ms` 配置的间隔调用 `job_output` 获取 stdout/stderr 增量，不会再被同步父调用阻塞。ANSI SGR 颜色/样式会被安全渲染。
+`exec`、`exec_batch` 与 `exec_start` 都绑定到稳定的 `ui://target-ops/exec-terminal/v1.html` MCP App。同步 `exec` 保持为短命令路径并正常等待最终结果；预计运行超过几秒，或实时输出有价值时，应优先使用 `exec_start`。它会立即返回 job id，因此 App 可以调用 `job_output` 获取 stdout/stderr 增量，不会再被同步父调用阻塞。每次响应返回后，App 等待 `runtime.app_job_poll_interval_ms`（默认 1 秒）再发出下一次请求，不会并发堆积轮询。宿主调度、网络延迟和命令自身的输出缓冲都可能让可见更新慢于这个间隔。ANSI SGR 颜色/样式会被安全渲染。
 
 对于模型侧只需要“等后台命令结束后再继续”的工作流，应优先使用 `job_wait`，而不是反复调用 `job_poll` 或 `job_output`。其服务端默认等待窗口与最大等待窗口分别来自 `runtime.job_wait_default_timeout_ms` 和 `runtime.job_wait_max_timeout_ms`，单次调用可以请求更短的等待时间。
 

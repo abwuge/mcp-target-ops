@@ -248,7 +248,7 @@ Process-wide runtime behavior lives under `[runtime]`:
 | `app_success_collapse_ms` | `3000` | App card auto-collapse delay after success |
 | `app_failure_collapse_ms` | `6000` | App card auto-collapse delay after failure/warning |
 | `app_sleep_after_ms` | `30000` | Delay before a collapsed App discards heavy DOM and relies on result restoration |
-| `app_job_poll_interval_ms` | `180` | App-side background job output refresh interval |
+| `app_job_poll_interval_ms` | `1000` | Delay after each App job output response before polling again |
 
 Safety/protocol ceilings such as the 100 MiB absolute file-transfer maximum remain compiled hard limits rather than ordinary configuration knobs.
 
@@ -401,7 +401,7 @@ result per command. Sequential batches may stop on the first failure. Use
 or control flow; use `exec_batch` for unrelated inspections instead of joining
 them with shell separators.
 
-`exec`, `exec_batch`, and `exec_start` bind to the stable `ui://target-ops/exec-terminal/v1.html` MCP App. Synchronous `exec` remains the short-command path and returns its final result normally. For commands likely to run more than a few seconds, or whenever live output matters, prefer `exec_start`: it returns a job ID immediately, allowing the App to poll `job_output` at the `runtime.app_job_poll_interval_ms` interval without being blocked by the parent tool call. ANSI SGR color/style sequences are rendered safely instead of being shown as raw escape codes.
+`exec`, `exec_batch`, and `exec_start` bind to the stable `ui://target-ops/exec-terminal/v1.html` MCP App. Synchronous `exec` remains the short-command path and returns its final result normally. For commands likely to run more than a few seconds, or whenever live output matters, prefer `exec_start`: it returns a job ID immediately, allowing the App to poll `job_output` without being blocked by the parent tool call. After each response, the App waits `runtime.app_job_poll_interval_ms` (default 1 second) before requesting more output. Requests do not overlap; host scheduling, network latency, and command output buffering can make visible updates less frequent. ANSI SGR color/style sequences are rendered safely instead of being shown as raw escape codes.
 
 For model-side workflows that only need to continue after a background command finishes, prefer `job_wait` over repeated `job_poll` or `job_output` calls. Its server-side default and cap come from `runtime.job_wait_default_timeout_ms` and `runtime.job_wait_max_timeout_ms`, and a call may request a shorter window.
 

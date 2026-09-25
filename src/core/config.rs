@@ -627,7 +627,7 @@ fn default_app_sleep_after_ms() -> u64 {
 }
 
 fn default_app_job_poll_interval_ms() -> u64 {
-    180
+    1000
 }
 
 pub const FILE_TRANSFER_HARD_MAX_BYTES: usize = 100 * 1024 * 1024;

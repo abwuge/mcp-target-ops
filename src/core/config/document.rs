@@ -85,8 +85,9 @@ app_success_collapse_ms = 3000
 app_failure_collapse_ms = 6000
 # Delay before a collapsed App releases heavy DOM and relies on cached restore.
 app_sleep_after_ms = 30000
-# Refresh interval used by the command App when reading exec_start job output.
-app_job_poll_interval_ms = 180
+# Delay after each job_output response before the command App polls again.
+# Host/network latency adds to this delay; it is not a guaranteed refresh rate.
+app_job_poll_interval_ms = 1000
 
 [server]
 # Server name advertised during MCP initialize.
