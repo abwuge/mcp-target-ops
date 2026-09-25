@@ -117,6 +117,8 @@ pub struct JobWaitResponse {
     #[serde(flatten)]
     pub output: JobOutputResponse,
     pub wait_timed_out: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_action: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -444,8 +446,12 @@ impl JobRegistry {
         if output.eof {
             self.mark_delivered(&output.job_id, caller_key)?;
         }
+        let wait_timed_out = !completed && !output.eof;
         Ok(JobWaitResponse {
-            wait_timed_out: !completed && !output.eof,
+            wait_timed_out,
+            next_action: wait_timed_out.then_some(
+                "The wait window expired, but the job is still running. Consider giving the user a brief progress update based on the current status and available output before calling job_wait again, so the interface does not appear unresponsive.",
+            ),
             output,
         })
     }
