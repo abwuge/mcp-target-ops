@@ -216,7 +216,13 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
 
   // COMPAT(COMPAT-003): Normalize historical tool-result envelope shapes used by
   // older ChatGPT hosts in addition to structuredContent.
-  const toolResultData = result => result?.structuredContent || result?.content?.find?.(item => item?.type === 'json')?.json || result?.content || result || {};
+  function toolResultData(result) {
+    if (result?.structuredContent) return result.structuredContent;
+    // A file result's string content is the file body, not a result envelope.
+    if (typeof result?.content === 'string') return result;
+    const content = result?.content ?? result;
+    return content?.find?.(item => item?.type === 'json')?.json || content || {};
+  }
 
   function scheduleSizeReport() {
     if (!bridgeReady || sizeReportScheduled) return;
@@ -303,7 +309,7 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
       return;
     }
     if (msg?.method === 'ui/notifications/tool-result') {
-      const raw = msg.params?.structuredContent || msg.params?.content || msg.params;
+      const raw = msg.params;
       const data = toolResultData(raw);
       const fresh = isFreshResultNotification(data);
       if (fresh) render(data, true);

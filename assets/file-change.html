@@ -53,6 +53,7 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
 .gutter { padding: 0 7px; text-align: right; user-select: none; color: var(--muted); border-right: 1px solid color-mix(in srgb, currentColor 8%, transparent); }
 .code { padding: 0 10px; white-space: pre; }
 .notice { padding: 14px 12px; color: var(--muted); }
+.notice.error { color: var(--error); background: var(--error-bg); }
 .details { border-top: 1px solid var(--border); }
 .details summary { cursor: pointer; padding: 8px 12px; font-size: 12px; user-select: none; color: var(--muted); }
 .meta { padding: 0 12px 10px; display: grid; gap: 4px; }
@@ -97,18 +98,37 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
 
   function parseHunkHeader(line) {
     const match = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
-    return match ? { oldStart: Number(match[1]), newStart: Number(match[3]) } : null;
+    return match ? {
+      oldStart: Number(match[1]), oldCount: Number(match[2] ?? 1),
+      newStart: Number(match[3]), newCount: Number(match[4] ?? 1),
+    } : null;
   }
 
   function renderDiff(diffText) {
     const lines = String(diffText || '').split('\n');
     let oldNo = 0;
     let newNo = 0;
+    let oldRemaining = 0;
+    let newRemaining = 0;
     let html = '';
     let pendingOldPath = '';
     let currentPath = '';
 
     for (const line of lines) {
+      // Inside a hunk, --- / +++ can be ordinary removed / added text.
+      if (oldRemaining > 0 || newRemaining > 0) {
+        if (line.startsWith('-')) {
+          html += lineRow(oldNo++, '', line.slice(1), 'removed');
+          oldRemaining--;
+        } else if (line.startsWith('+')) {
+          html += lineRow('', newNo++, line.slice(1), 'added');
+          newRemaining--;
+        } else if (line.startsWith(' ')) {
+          html += lineRow(oldNo++, newNo++, line.slice(1));
+          oldRemaining--; newRemaining--;
+        }
+        continue;
+      }
       if (line.startsWith('diff --git ')) continue;
       if (line.startsWith('index ')) continue;
       if (line.startsWith('--- ')) {
@@ -130,16 +150,10 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
       if (hunk) {
         oldNo = hunk.oldStart;
         newNo = hunk.newStart;
+        oldRemaining = hunk.oldCount;
+        newRemaining = hunk.newCount;
         html += `<div class="code-line hunk">Changed lines ${oldNo} → ${newNo}</div>`;
         continue;
-      }
-      if (line === '\\ No newline at end of file' || line === '') continue;
-      if (line.startsWith('-')) {
-        html += lineRow(oldNo++, '', line.slice(1), 'removed');
-      } else if (line.startsWith('+')) {
-        html += lineRow('', newNo++, line.slice(1), 'added');
-      } else if (line.startsWith(' ')) {
-        html += lineRow(oldNo++, newNo++, line.slice(1));
       }
     }
 
@@ -156,7 +170,12 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
 
   function render(raw, fresh = true, summaryOnly = false) {
     const data = raw && typeof raw === 'object' ? raw : {};
+    if (fresh) {
+      resultId = null;
+      historicalFallback = typeof data.result_id === 'string' ? null : data;
+    }
     if (typeof data.result_id === 'string') resultId = data.result_id;
+    const failed = data.isError === true;
     const target = data.resolved_target?.target || data.target;
     const files = Array.isArray(data.files) ? data.files : [];
     const paths = files.length ? files.map(item => item.path).filter(Boolean) : [data.path || data.destination].filter(Boolean);
@@ -168,8 +187,8 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     pathEl.textContent = paths.length > 1 ? paths.join(' · ') : primaryPath;
     kindEl.textContent = label;
     kindEl.className = `kind ${kind === 'renamed' ? 'modified' : kind}`;
-    statusEl.textContent = data.written === false ? 'Preview' : (data.changed === false ? 'No change' : 'Applied');
-    statusEl.className = `status ${data.written === false ? 'warn' : data.changed === false ? '' : 'ok'}`.trim();
+    statusEl.textContent = failed ? 'Failed' : data.changed === false ? 'No change' : data.written === false ? 'Preview' : 'Applied';
+    statusEl.className = `status ${failed ? 'error' : data.changed === false ? '' : data.written === false ? 'warn' : 'ok'}`.trim();
 
     if (summaryOnly) {
       card.open = false;
@@ -180,7 +199,12 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
       return;
     }
 
-    if ((kind === 'added' || kind === 'deleted') && typeof data.content === 'string') {
+    if (failed) {
+      const error = Array.isArray(data.content)
+        ? data.content.filter(item => item?.type === 'text').map(item => item.text).join('\n')
+        : '';
+      viewer.innerHTML = `<div class="notice error">${esc(error || 'File change failed.')}</div>`;
+    } else if ((kind === 'added' || kind === 'deleted') && typeof data.content === 'string') {
       renderFull(data.content, kind, data.encoding);
     } else if (typeof data.diff === 'string' && data.diff) {
       renderDiff(data.diff);
@@ -200,7 +224,7 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
       metaRow('old sha', data.old_sha256) +
       metaRow('new sha', data.new_sha256);
     details.hidden = !meta.innerHTML;
-    if (fresh) scheduleLifecycle(true); else scheduleSleepOnly();
+    if (fresh) scheduleLifecycle(!failed); else scheduleSleepOnly();
   }
 
   const runtimeConfig = __TARGET_OPS_RUNTIME_CONFIG__;
@@ -240,7 +264,14 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
 
   // COMPAT(COMPAT-003): Normalize historical tool-result envelope shapes used by
   // older ChatGPT hosts in addition to structuredContent.
-  const toolResultData = result => result?.structuredContent || result?.content?.find?.(item => item?.type === 'json')?.json || result?.content || result || {};
+  function toolResultData(result) {
+    if (result?.isError === true) return result;
+    if (result?.structuredContent) return result.structuredContent;
+    // Added/deleted file content is the body, not a result envelope.
+    if (typeof result?.content === 'string') return result;
+    const content = result?.content ?? result;
+    return content?.find?.(item => item?.type === 'json')?.json || content || {};
+  }
 
   function scheduleSizeReport() {
     if (!bridgeReady || sizeReportScheduled) return;
@@ -294,7 +325,7 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     if (typeof data?.result_id === 'string' && historicalResultIds.has(data.result_id)) return false;
     if (!data?.result_id && suppressHistoricalReplayWithoutId) {
       suppressHistoricalReplayWithoutId = false;
-      return false;
+      return JSON.stringify(data) !== JSON.stringify(historicalFallback);
     }
     return true;
   }
@@ -330,7 +361,7 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
       return;
     }
     if (msg?.method === 'ui/notifications/tool-result') {
-      const raw = msg.params?.structuredContent || msg.params?.content || msg.params;
+      const raw = msg.params;
       const data = toolResultData(raw);
       const fresh = isFreshResultNotification(data);
       if (fresh) render(data, true);
