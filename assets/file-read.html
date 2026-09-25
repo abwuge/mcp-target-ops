@@ -44,11 +44,13 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
 .file-state { flex: 0 0 auto; color: var(--muted); }
 .file-state.error { color: var(--error); }
 .file-state.warn { color: var(--warning); }
-.file-body { border-top: 1px solid color-mix(in srgb, currentColor 8%, transparent); }
-.code-line { display: grid; grid-template-columns: 52px max-content; width: max-content; min-width: 100%; min-height: 20px; font: 12px/20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.file-body { overflow-x: auto; border-top: 1px solid color-mix(in srgb, currentColor 8%, transparent); }
+/* Size the whole code surface once so every row paints the same scroll width. */
+.code-table { width: max-content; min-width: 100%; }
+.code-line { display: grid; grid-template-columns: 52px max-content; min-height: 20px; font: 12px/20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .gutter { padding: 0 7px; text-align: right; user-select: none; color: var(--muted); border-right: 1px solid color-mix(in srgb, currentColor 8%, transparent); }
 .code { padding: 0 10px; white-space: pre; }
-.notice { padding: 14px 12px; color: var(--muted); }
+.notice { overflow-wrap: anywhere; padding: 14px 12px; color: var(--muted); }
 .notice.error { color: var(--error); background: var(--error-bg); }
 .details { border-top: 1px solid var(--border); }
 .details summary { cursor: pointer; padding: 8px 12px; font-size: 12px; user-select: none; color: var(--muted); }
@@ -83,12 +85,12 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
   const metaRow = (label, value) => value === undefined || value === null || value === '' ? '' : `<div class="meta-row"><div class="meta-label">${esc(label)}</div><div class="meta-value">${esc(value)}</div></div>`;
 
   function lineRows(content, startLine, encoding) {
-    if (encoding === 'base64') return `<div class="notice">Binary content shown as base64.</div><div class="code-line"><span class="gutter"></span><span class="code">${esc(content || '')}</span></div>`;
+    if (encoding === 'base64') return `<div class="notice">Binary content shown as base64.</div><div class="code-table"><div class="code-line"><span class="gutter"></span><span class="code">${esc(content || '')}</span></div></div>`;
     const lines = String(content ?? '').split('\n');
     if (lines.length && lines[lines.length - 1] === '') lines.pop();
     const first = Number.isInteger(startLine) ? startLine : 1;
     if (!lines.length) return '<div class="notice">File or selected range is empty.</div>';
-    return lines.map((line, index) => `<div class="code-line"><span class="gutter">${first + index}</span><span class="code">${esc(line)}</span></div>`).join('');
+    return '<div class="code-table">' + lines.map((line, index) => `<div class="code-line"><span class="gutter">${first + index}</span><span class="code">${esc(line)}</span></div>`).join('') + '</div>';
   }
 
   function rangeText(item) {

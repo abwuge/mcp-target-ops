@@ -55,7 +55,7 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
 .batch-item[open] > summary::before { transform: rotate(90deg); }
 .output { margin: 0; padding: 0 10px 9px 22px; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .stderr .block-label { color: var(--error); }
-.notice { padding: 14px 12px; color: var(--muted); }
+.notice { overflow-wrap: anywhere; padding: 14px 12px; color: var(--muted); }
 .notice.error { color: var(--error); background: var(--error-bg); }
 .notice.warn { color: var(--warning); background: var(--warn-bg); }
 .batch-item > summary { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; gap: 6px; align-items: center; padding: 7px 10px; font: 11px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }

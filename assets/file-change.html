@@ -44,7 +44,9 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
 .viewer { max-height: 480px; overflow: auto; background: color-mix(in srgb, currentColor 2%, transparent); }
 .file-block + .file-block { border-top: 1px solid var(--border); }
 .file-label { position: sticky; top: 0; z-index: 2; padding: 6px 10px; border-bottom: 1px solid var(--border); background: Canvas; font: 11px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; opacity: .78; }
-.code-line { display: grid; grid-template-columns: 42px 42px max-content; width: max-content; min-width: 100%; min-height: 20px; font: 12px/20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+/* Size the whole code surface once so every row paints the same scroll width. */
+.code-table { width: max-content; min-width: 100%; }
+.code-line { display: grid; grid-template-columns: 42px 42px max-content; min-height: 20px; font: 12px/20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .code-line.added { background: var(--add-bg); }
 .code-line.removed { background: var(--del-bg); }
 .code-line.added .gutter { background: var(--add-strong); }
@@ -52,7 +54,7 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
 .code-line.hunk { display: block; padding: 3px 10px; background: var(--hunk-bg); color: var(--muted); font: 11px/18px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .gutter { padding: 0 7px; text-align: right; user-select: none; color: var(--muted); border-right: 1px solid color-mix(in srgb, currentColor 8%, transparent); }
 .code { padding: 0 10px; white-space: pre; }
-.notice { padding: 14px 12px; color: var(--muted); }
+.notice { overflow-wrap: anywhere; padding: 14px 12px; color: var(--muted); }
 .notice.error { color: var(--error); background: var(--error-bg); }
 .details { border-top: 1px solid var(--border); }
 .details summary { cursor: pointer; padding: 8px 12px; font-size: 12px; user-select: none; color: var(--muted); }
@@ -93,7 +95,7 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     const binary = encoding === 'base64';
     let html = binary ? `<div class="notice">Binary file content shown as base64.</div>` : '';
     html += lines.map((line, i) => lineRow(kind === 'deleted' ? i + 1 : '', kind === 'added' ? i + 1 : '', line, cls)).join('');
-    viewer.innerHTML = html;
+    viewer.innerHTML = `<div class="code-table">${html}</div>`;
   }
 
   function parseHunkHeader(line) {
@@ -157,7 +159,7 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
       }
     }
 
-    viewer.innerHTML = html || '<div class="notice">No textual differences.</div>';
+    viewer.innerHTML = html ? `<div class="code-table">${html}</div>` : '<div class="notice">No textual differences.</div>';
   }
 
   function inferKind(data) {
