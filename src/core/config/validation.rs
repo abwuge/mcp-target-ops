@@ -20,10 +20,6 @@ fn validate_runtime(config: &Config) -> Result<()> {
     )?;
     validate_nonzero("runtime.max_retained_jobs", runtime.max_retained_jobs)?;
     validate_nonzero(
-        "runtime.max_retained_foreground_execs",
-        runtime.max_retained_foreground_execs,
-    )?;
-    validate_nonzero(
         "runtime.exec_auto_background_after_ms",
         runtime.exec_auto_background_after_ms,
     )?;

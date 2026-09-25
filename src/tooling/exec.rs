@@ -9,7 +9,6 @@ use crate::{
     tooling::job::{AdaptiveExecOutput, ExecStartRequest},
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::{collections::BTreeMap, thread, time::Instant};
 
 const MAX_BATCH_COMMANDS: usize = 32;
@@ -135,7 +134,6 @@ pub struct RawExecOutput {
 pub fn run_with_context(
     state: &AppState,
     req: ExecRequest,
-    request_id: Option<&Value>,
     caller_key: &str,
 ) -> Result<ExecResponse> {
     let command = req.command.clone();
@@ -150,7 +148,7 @@ pub fn run_with_context(
 
     match state
         .jobs
-        .run_adaptive(state, request, request_id, caller_key)?
+        .run_adaptive(state, request, caller_key)?
     {
         AdaptiveExecOutput::Completed(output) => Ok(ExecResponse {
             command,
@@ -200,7 +198,6 @@ fn run_to_completion(state: &AppState, req: ExecRequest) -> Result<ExecResponse>
             max_output_bytes: req.max_output_bytes,
             secret_env: req.secret_env,
         },
-        None,
     )?;
     Ok(ExecResponse {
         command,

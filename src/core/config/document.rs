@@ -32,9 +32,6 @@ rewrite_on_start = true
 result_cache_max_bytes = 104857600
 # Maximum number of background job entries retained in memory.
 max_retained_jobs = 128
-# Maximum number of foreground exec sessions retained for MCP App attachment and
-# incremental-output compatibility.
-max_retained_foreground_execs = 64
 # Foreground wait before an ordinary exec is promoted to the same running command
 # as a background job. Explicit per-call timeout_ms remains authoritative.
 exec_auto_background_after_ms = 5000

@@ -11,7 +11,6 @@ use crate::{
     transport::ssh,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::{
     collections::{BTreeMap, HashMap},
     process::Command,
@@ -23,7 +22,6 @@ use std::{
 };
 
 static JOB_COUNTER: AtomicU64 = AtomicU64::new(1);
-static EXEC_COUNTER: AtomicU64 = AtomicU64::new(1);
 #[derive(Debug, Clone, Copy)]
 enum SessionTimeoutPolicy {
     ForegroundDefault,
@@ -133,52 +131,6 @@ pub struct JobCancelResponse {
     pub status: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct ExecStreamRequest {
-    #[serde(default)]
-    pub session_id: Option<String>,
-    #[serde(default)]
-    pub request_id: Option<Value>,
-    #[serde(default)]
-    pub target: Option<String>,
-    #[serde(default)]
-    pub command: Option<String>,
-    #[serde(default)]
-    pub cwd: Option<String>,
-    #[serde(default)]
-    pub stdout_since_seq: Option<u64>,
-    #[serde(default)]
-    pub stderr_since_seq: Option<u64>,
-    #[serde(default)]
-    pub max_bytes: Option<usize>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ExecStreamResponse {
-    pub attached: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub status: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub exit_code: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub elapsed_ms: Option<u64>,
-    pub stdout_from_seq: u64,
-    pub stdout_next_seq: u64,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub stdout: String,
-    pub stdout_truncated: bool,
-    pub stderr_from_seq: u64,
-    pub stderr_next_seq: u64,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub stderr: String,
-    pub stderr_truncated: bool,
-    pub eof: bool,
-}
-
 #[derive(Debug)]
 pub struct ForegroundOutput {
     pub resolved_target: ResolvedTarget,
@@ -228,19 +180,8 @@ struct JobEntry {
     delivered: bool,
 }
 
-struct ForegroundSession {
-    session: Arc<CommandSession>,
-    request_key: Option<String>,
-    requested_target: Option<String>,
-    command: String,
-    cwd: Option<String>,
-    order: u64,
-    claimed: bool,
-}
-
 pub struct JobRegistry {
     sessions: Mutex<HashMap<String, JobEntry>>,
-    foreground: Mutex<HashMap<String, ForegroundSession>>,
     runtime: RuntimeConfig,
 }
 
@@ -248,7 +189,6 @@ impl JobRegistry {
     pub fn new(runtime: RuntimeConfig) -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
-            foreground: Mutex::new(HashMap::new()),
             runtime,
         }
     }
@@ -257,24 +197,9 @@ impl JobRegistry {
         &self,
         state: &AppState,
         req: ExecStartRequest,
-        request_id: Option<&Value>,
     ) -> Result<ForegroundOutput> {
         let (resolved_target, session) =
             self.create_session(state, &req, SessionTimeoutPolicy::ForegroundDefault)?;
-        let order = EXEC_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let id = format!("exec_{order}");
-        self.insert_foreground(
-            id,
-            ForegroundSession {
-                session: Arc::clone(&session),
-                request_key: request_id.map(request_key).transpose()?,
-                requested_target: req.target.clone(),
-                command: req.command.clone(),
-                cwd: req.cwd.clone(),
-                order,
-                claimed: false,
-            },
-        );
         let snapshot = session.wait();
         Ok(ForegroundOutput {
             resolved_target,
@@ -291,13 +216,11 @@ impl JobRegistry {
         &self,
         state: &AppState,
         req: ExecStartRequest,
-        request_id: Option<&Value>,
         caller_key: &str,
     ) -> Result<AdaptiveExecOutput> {
         self.run_adaptive_with_threshold(
             state,
             req,
-            request_id,
             caller_key,
             Duration::from_millis(self.runtime.exec_auto_background_after_ms),
         )
@@ -307,30 +230,13 @@ impl JobRegistry {
         &self,
         state: &AppState,
         req: ExecStartRequest,
-        request_id: Option<&Value>,
         caller_key: &str,
         threshold: Duration,
     ) -> Result<AdaptiveExecOutput> {
         let (resolved_target, session) =
             self.create_session(state, &req, SessionTimeoutPolicy::DefaultBefore(threshold))?;
-        let order = EXEC_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let foreground_id = format!("exec_{order}");
-        self.insert_foreground(
-            foreground_id.clone(),
-            ForegroundSession {
-                session: Arc::clone(&session),
-                request_key: request_id.map(request_key).transpose()?,
-                requested_target: req.target.clone(),
-                command: req.command.clone(),
-                cwd: req.cwd.clone(),
-                order,
-                claimed: false,
-            },
-        );
-
         if session.wait_for_eof(Some(threshold)) {
             let snapshot = session.snapshot();
-            self.foreground.lock().unwrap().remove(&foreground_id);
             return Ok(AdaptiveExecOutput::Completed(ForegroundOutput {
                 resolved_target,
                 exit_code: snapshot.exit_code,
@@ -342,7 +248,6 @@ impl JobRegistry {
             }));
         }
 
-        self.foreground.lock().unwrap().remove(&foreground_id);
         let order = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
         let job_id = format!("job_{order}");
         self.insert(
@@ -559,95 +464,6 @@ impl JobRegistry {
         })
     }
 
-    pub fn stream(&self, req: ExecStreamRequest) -> Result<ExecStreamResponse> {
-        let stdout_from_seq = req.stdout_since_seq.unwrap_or(0);
-        let stderr_from_seq = req.stderr_since_seq.unwrap_or(0);
-        let max_bytes = req
-            .max_bytes
-            .unwrap_or(self.runtime.stream_default_max_bytes)
-            .clamp(1, self.runtime.stream_max_bytes);
-        let mut foreground = self.foreground.lock().unwrap();
-        let session_id = if let Some(session_id) = req.session_id.as_deref() {
-            foreground
-                .contains_key(session_id)
-                .then(|| session_id.to_string())
-        } else if let Some(request_id) = req.request_id.as_ref() {
-            let key = request_key(request_id)?;
-            foreground
-                .iter()
-                .filter(|(_, entry)| entry.request_key.as_deref() == Some(key.as_str()))
-                .max_by_key(|(_, entry)| entry.order)
-                .map(|(id, _)| id.clone())
-        } else {
-            // COMPAT(COMPAT-005): Older hosts may omit the original tools/call
-            // request id, so fall back to a one-time target/command/cwd match.
-            let command = req.command.as_deref().ok_or_else(|| {
-                Error::Tool("exec_stream requires session_id, request_id, or command".to_string())
-            })?;
-            let id = foreground
-                .iter()
-                .filter(|(_, entry)| {
-                    !entry.claimed
-                        && entry.command == command
-                        && entry.cwd.as_deref() == req.cwd.as_deref()
-                        && entry.requested_target.as_deref() == req.target.as_deref()
-                })
-                .max_by_key(|(_, entry)| entry.order)
-                .map(|(id, _)| id.clone());
-            if let Some(id) = id.as_deref() {
-                if let Some(entry) = foreground.get_mut(id) {
-                    entry.claimed = true;
-                }
-            }
-            id
-        };
-
-        let Some(session_id) = session_id else {
-            return Ok(ExecStreamResponse {
-                attached: false,
-                session_id: None,
-                target: None,
-                status: None,
-                exit_code: None,
-                elapsed_ms: None,
-                stdout_from_seq,
-                stdout_next_seq: stdout_from_seq,
-                stdout: String::new(),
-                stdout_truncated: false,
-                stderr_from_seq,
-                stderr_next_seq: stderr_from_seq,
-                stderr: String::new(),
-                stderr_truncated: false,
-                eof: false,
-            });
-        };
-
-        let entry = foreground
-            .get(&session_id)
-            .expect("matched foreground session remains registered");
-        let delta = entry
-            .session
-            .output_since(stdout_from_seq, stderr_from_seq, max_bytes);
-        let status = entry.session.status_snapshot();
-        Ok(ExecStreamResponse {
-            attached: true,
-            session_id: Some(session_id),
-            target: Some(entry.session.target.to_string()),
-            status: Some(entry.session.state().to_string()),
-            exit_code: status.exit_code,
-            elapsed_ms: Some(status.elapsed_ms),
-            stdout_from_seq: delta.stdout_from_seq,
-            stdout_next_seq: delta.stdout_next_seq,
-            stdout: String::from_utf8_lossy(&delta.stdout).to_string(),
-            stdout_truncated: delta.stdout_truncated,
-            stderr_from_seq: delta.stderr_from_seq,
-            stderr_next_seq: delta.stderr_next_seq,
-            stderr: String::from_utf8_lossy(&delta.stderr).to_string(),
-            stderr_truncated: delta.stderr_truncated,
-            eof: delta.eof,
-        })
-    }
-
     pub fn ids(&self) -> Vec<String> {
         self.sessions.lock().unwrap().keys().cloned().collect()
     }
@@ -731,34 +547,6 @@ impl JobRegistry {
         }
         sessions.insert(id, entry);
     }
-
-    fn insert_foreground(&self, id: String, entry: ForegroundSession) {
-        let mut foreground = self.foreground.lock().unwrap();
-        if foreground.len() >= self.runtime.max_retained_foreground_execs {
-            foreground.retain(|_, entry| !entry.session.status_snapshot().finished);
-        }
-        if foreground.len() >= self.runtime.max_retained_foreground_execs {
-            if let Some(oldest) = foreground
-                .iter()
-                .filter(|(_, entry)| entry.session.status_snapshot().finished)
-                .min_by_key(|(_, entry)| entry.order)
-                .map(|(id, _)| id.clone())
-            {
-                foreground.remove(&oldest);
-            }
-        }
-        foreground.insert(id, entry);
-    }
-}
-
-fn request_key(request_id: &Value) -> Result<String> {
-    match request_id {
-        Value::String(value) => Ok(format!("string:{value}")),
-        Value::Number(value) => Ok(format!("number:{value}")),
-        _ => Err(Error::Tool(
-            "MCP tool request id must be a string or number".to_string(),
-        )),
-    }
 }
 
 fn command_for_target(
@@ -820,7 +608,7 @@ pub(crate) fn local_shell_command(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{config::Config, state::AppState, util::shell_quote};
+    use crate::core::{config::Config, state::AppState};
     use tempfile::tempdir;
 
     fn test_state() -> AppState {
@@ -835,93 +623,6 @@ mod tests {
         config.server.oauth_state_file = None;
         config.server.runtime_dir = path.join("runtime");
         AppState::new(config).unwrap()
-    }
-
-    #[test]
-    fn foreground_stream_can_attach_and_read_incremental_output() {
-        let state = Arc::new(test_state());
-        let control = tempdir().unwrap();
-        let release = control.path().join("release");
-        let command = format!(
-            "printf first; while [ ! -f {} ]; do sleep 0.01; done; printf second",
-            shell_quote(&release.to_string_lossy())
-        );
-        let request = ExecStartRequest {
-            target: Some("local".into()),
-            command: command.clone(),
-            cwd: None,
-            timeout_ms: Some(5000),
-            max_output_bytes: None,
-            secret_env: BTreeMap::new(),
-        };
-        let worker_state = Arc::clone(&state);
-        let worker = std::thread::spawn(move || {
-            worker_state
-                .jobs
-                .run_foreground(
-                    &worker_state,
-                    request,
-                    Some(&Value::String("stream-test".into())),
-                )
-                .unwrap()
-        });
-
-        let mut first = None;
-        for _ in 0..200 {
-            let response = state
-                .jobs
-                .stream(ExecStreamRequest {
-                    session_id: None,
-                    request_id: Some(Value::String("stream-test".into())),
-                    target: Some("local".into()),
-                    command: Some(command.clone()),
-                    cwd: None,
-                    stdout_since_seq: None,
-                    stderr_since_seq: None,
-                    max_bytes: None,
-                })
-                .unwrap();
-            if response.attached && response.stdout.contains("first") {
-                first = Some(response);
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let first = first.expect("foreground stream attaches and exposes first chunk");
-        let session_id = first.session_id.clone().expect("stream session id");
-        assert!(!first.eof, "command must still be waiting for release");
-
-        std::fs::write(&release, b"go").unwrap();
-        let mut stdout_seq = first.stdout_next_seq;
-        let mut stderr_seq = first.stderr_next_seq;
-        let mut saw_second = false;
-        for _ in 0..200 {
-            let response = state
-                .jobs
-                .stream(ExecStreamRequest {
-                    session_id: Some(session_id.clone()),
-                    request_id: None,
-                    target: None,
-                    command: None,
-                    cwd: None,
-                    stdout_since_seq: Some(stdout_seq),
-                    stderr_since_seq: Some(stderr_seq),
-                    max_bytes: None,
-                })
-                .unwrap();
-            assert!(response.attached);
-            saw_second |= response.stdout.contains("second");
-            stdout_seq = response.stdout_next_seq;
-            stderr_seq = response.stderr_next_seq;
-            if saw_second || response.eof {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        assert!(saw_second, "incremental stream exposes second chunk");
-
-        let foreground = worker.join().unwrap();
-        assert_eq!(foreground.stdout, b"firstsecond");
     }
 
     #[test]
@@ -951,7 +652,6 @@ mod tests {
                     max_output_bytes: None,
                     secret_env: BTreeMap::new(),
                 },
-                None,
             )
             .unwrap();
         assert!(output.timed_out);
@@ -969,10 +669,7 @@ mod tests {
             max_output_bytes: None,
             secret_env: BTreeMap::new(),
         };
-        let foreground = state
-            .jobs
-            .run_foreground(&state, request.clone(), None)
-            .unwrap();
+        let foreground = state.jobs.run_foreground(&state, request.clone()).unwrap();
         assert_eq!(foreground.stdout, b"onetwo");
         let started = state.jobs.start(&state, request).unwrap();
         while state
@@ -1089,7 +786,6 @@ mod tests {
                     max_output_bytes: None,
                     secret_env: BTreeMap::new(),
                 },
-                None,
                 "caller-a",
                 Duration::from_millis(15),
             )
@@ -1142,7 +838,6 @@ mod tests {
                     max_output_bytes: None,
                     secret_env: BTreeMap::new(),
                 },
-                None,
                 "caller-a",
                 Duration::from_millis(10),
             )

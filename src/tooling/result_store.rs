@@ -13,9 +13,6 @@ use std::{
 
 const SESSIONS_DIR: &str = "sessions";
 const ACTIVITY_FILE: &str = ".activity";
-// COMPAT(COMPAT-002): Flat result files from the pre-session cache layout remain
-// readable and share one synthetic activity marker until that migration path is removed.
-const LEGACY_ACTIVITY_FILE: &str = ".legacy-activity";
 
 #[derive(Debug, Serialize)]
 pub struct ResultReadResponse {
@@ -27,18 +24,17 @@ pub struct ResultReadResponse {
 #[derive(Debug, Clone)]
 struct ResultLocation {
     path: PathBuf,
-    session_bucket: Option<String>,
+    session_bucket: String,
 }
 
 struct SessionUsage {
-    session_bucket: Option<String>,
+    session_bucket: String,
     bytes: u64,
     result_ids: Vec<String>,
     fallback_activity: SystemTime,
 }
 
 pub struct ResultStore {
-    dir: PathBuf,
     sessions_dir: PathBuf,
     max_bytes: u64,
     index: Mutex<HashMap<String, ResultLocation>>,
@@ -55,8 +51,7 @@ impl ResultStore {
             ))
         })?;
         let store = Self {
-            index: Mutex::new(scan_index(&dir, &sessions_dir)?),
-            dir,
+            index: Mutex::new(scan_index(&sessions_dir)?),
             sessions_dir,
             max_bytes,
         };
@@ -89,7 +84,7 @@ impl ResultStore {
             result_id.clone(),
             ResultLocation {
                 path,
-                session_bucket: Some(bucket),
+                session_bucket: bucket,
             },
         );
         self.cleanup()?;
@@ -138,17 +133,18 @@ impl ResultStore {
     }
 
     fn touch_location(&self, location: &ResultLocation) -> Result<()> {
-        if let Some(bucket) = location.session_bucket.as_deref() {
-            touch_activity(&self.sessions_dir.join(bucket).join(ACTIVITY_FILE))
-        } else {
-            touch_activity(&self.dir.join(LEGACY_ACTIVITY_FILE))
-        }
+        touch_activity(
+            &self
+                .sessions_dir
+                .join(&location.session_bucket)
+                .join(ACTIVITY_FILE),
+        )
     }
 
     fn cleanup(&self) -> Result<()> {
         let mut index = self.index.lock().unwrap();
         let mut stale = Vec::new();
-        let mut groups: HashMap<Option<String>, SessionUsage> = HashMap::new();
+        let mut groups: HashMap<String, SessionUsage> = HashMap::new();
         let mut total = 0_u64;
 
         for (result_id, location) in index.iter() {
@@ -196,10 +192,10 @@ impl ResultStore {
     }
 
     fn activity_time(&self, usage: &SessionUsage) -> SystemTime {
-        let activity_path = match usage.session_bucket.as_deref() {
-            Some(bucket) => self.sessions_dir.join(bucket).join(ACTIVITY_FILE),
-            None => self.dir.join(LEGACY_ACTIVITY_FILE),
-        };
+        let activity_path = self
+            .sessions_dir
+            .join(&usage.session_bucket)
+            .join(ACTIVITY_FILE);
         fs::metadata(activity_path)
             .and_then(|metadata| metadata.modified())
             .unwrap_or(usage.fallback_activity)
@@ -210,24 +206,11 @@ impl ResultStore {
         usage: &SessionUsage,
         index: &mut HashMap<String, ResultLocation>,
     ) -> Result<()> {
-        if let Some(bucket) = usage.session_bucket.as_deref() {
-            let path = self.sessions_dir.join(bucket);
-            match fs::remove_dir_all(path) {
-                Ok(()) => {}
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                Err(err) => return Err(err.into()),
-            }
-        } else {
-            for result_id in &usage.result_ids {
-                if let Some(location) = index.get(result_id) {
-                    match fs::remove_file(&location.path) {
-                        Ok(()) => {}
-                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                        Err(err) => return Err(err.into()),
-                    }
-                }
-            }
-            let _ = fs::remove_file(self.dir.join(LEGACY_ACTIVITY_FILE));
+        let path = self.sessions_dir.join(&usage.session_bucket);
+        match fs::remove_dir_all(path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
         }
         for result_id in &usage.result_ids {
             index.remove(result_id);
@@ -236,27 +219,8 @@ impl ResultStore {
     }
 }
 
-fn scan_index(dir: &Path, sessions_dir: &Path) -> Result<HashMap<String, ResultLocation>> {
+fn scan_index(sessions_dir: &Path) -> Result<HashMap<String, ResultLocation>> {
     let mut index = HashMap::new();
-    // COMPAT(COMPAT-002): Index legacy runtime/results/*.json files written before
-    // the session-scoped layout so old conversation cards can still restore them.
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if !path.is_file() || path.extension().and_then(|value| value.to_str()) != Some("json") {
-            continue;
-        }
-        if let Some(result_id) = result_id_from_path(&path) {
-            index.insert(
-                result_id,
-                ResultLocation {
-                    path,
-                    session_bucket: None,
-                },
-            );
-        }
-    }
-
     for session in fs::read_dir(sessions_dir)? {
         let session = session?;
         let session_path = session.path();
@@ -278,7 +242,7 @@ fn scan_index(dir: &Path, sessions_dir: &Path) -> Result<HashMap<String, ResultL
                     result_id,
                     ResultLocation {
                         path,
-                        session_bucket: Some(bucket.clone()),
+                        session_bucket: bucket.clone(),
                     },
                 );
             }
@@ -398,20 +362,13 @@ mod tests {
     }
 
     #[test]
-    fn legacy_flat_cache_remains_readable_without_ttl() {
+    fn session_cache_survives_restart() {
         let temp = tempdir().unwrap();
-        let result_dir = temp.path().join("results");
-        fs::create_dir_all(&result_dir).unwrap();
-        let result_id = "0123456789abcdef0123456789abcdef";
-        fs::write(
-            result_dir.join(format!("{result_id}.json")),
-            serde_json::to_vec(&json!({"legacy":true})).unwrap(),
-        )
-        .unwrap();
-
         let store = ResultStore::new(temp.path(), 100 * 1024 * 1024).unwrap();
-        let result = store.read_for_caller("session:new", result_id).unwrap();
-        assert!(result.found);
-        assert_eq!(result.data, Some(json!({"legacy":true})));
+        let data = json!({"stdout": "saved"});
+        let id = store.store("session:a", &data).unwrap();
+        drop(store);
+        let store = ResultStore::new(temp.path(), 100 * 1024 * 1024).unwrap();
+        assert_eq!(store.read(&id).unwrap().data, Some(data));
     }
 }

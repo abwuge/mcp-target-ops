@@ -14,7 +14,7 @@ Options:
   -V, --version        Print version information
   -h, --help           Print this help
 
-Long options also accept --config=PATH, --http=ADDR, and --http-addr=ADDR.
+Long options also accept --config=PATH and --http=ADDR.
 Without --config, MCP_TARGET_OPS_CONFIG or ~/.config/mcp-target-ops/config.toml is used. If the selected file does not exist, it is generated from the built-in template."#;
 
 struct Args {
@@ -53,12 +53,7 @@ fn parse_args() -> Args {
             parsed.config_path = Some(PathBuf::from(value));
             continue;
         }
-        // COMPAT(COMPAT-007): --http-addr is the older spelling retained for
-        // existing service files and scripts; --http is the canonical flag.
-        if let Some(value) = arg
-            .strip_prefix("--http=")
-            .or_else(|| arg.strip_prefix("--http-addr="))
-        {
+        if let Some(value) = arg.strip_prefix("--http=") {
             parsed.http_addr = Some(value.to_string());
             continue;
         }
@@ -67,9 +62,7 @@ fn parse_args() -> Args {
             "--config" | "-c" => {
                 parsed.config_path = Some(PathBuf::from(next_arg(&mut args, &arg)));
             }
-            "--http" | "--http-addr" => {
-                // COMPAT(COMPAT-007): Keep the spaced --http-addr form in sync
-                // with the =value alias above until the old CLI spelling is retired.
+            "--http" => {
                 parsed.http_addr = Some(next_arg(&mut args, &arg));
             }
             "--help" | "-h" => {

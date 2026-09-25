@@ -162,7 +162,6 @@ fn handle_request(
         ) })),
         "tools/call" => tools_call(
             state,
-            id.as_ref(),
             request.params.unwrap_or_else(|| json!({})),
             caller_key,
         ),
@@ -227,12 +226,7 @@ fn initialize(state: &AppState, params: Value) -> Result<Value> {
     }))
 }
 
-fn tools_call(
-    state: Arc<AppState>,
-    request_id: Option<&Value>,
-    params: Value,
-    caller_key: &str,
-) -> Result<Value> {
+fn tools_call(state: Arc<AppState>, params: Value, caller_key: &str) -> Result<Value> {
     #[derive(Deserialize)]
     struct ToolCallParams {
         name: String,
@@ -255,13 +249,12 @@ fn tools_call(
 
     let attach_completed = !matches!(
         params.name.as_str(),
-        "job_poll" | "job_output" | "job_wait" | "result_read" | "exec_stream"
+        "job_poll" | "job_output" | "job_wait" | "result_read"
     );
     match tools::call_tool_with_context(
         Arc::clone(&state),
         &params.name,
         params.arguments.unwrap_or_else(|| json!({})),
-        request_id,
         caller_key,
     ) {
         Ok(mut value) => {

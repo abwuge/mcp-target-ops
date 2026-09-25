@@ -259,6 +259,8 @@ fn transfer_local_ssh(
         destination.clone(),
     ];
 
+    // COMPAT(COMPAT-010): rsync is optional on supported transfer hosts; use
+    // scp when it is missing or lacks the required options.
     match run_process("rsync", &rsync_args, timeout) {
         Ok(output) if !output.timed_out && output.exit_code == Some(0) => {
             return Ok(("rsync".to_string(), direction.to_string(), true));
@@ -314,6 +316,8 @@ fn transfer_ssh_to_ssh_direct(
 ) -> Result<(String, String, bool)> {
     let mut failures = Vec::new();
 
+    // COMPAT(COMPAT-010): Keep scp attempts while supported hosts may lack
+    // usable rsync. Push/pull selection separately handles route availability.
     for (method, direction) in [
         ("rsync", "push"),
         ("rsync", "pull"),

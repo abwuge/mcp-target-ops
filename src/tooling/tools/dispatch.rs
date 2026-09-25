@@ -21,8 +21,7 @@ use crate::{
             FileWriteRequest,
         },
         job::{
-            ExecStartRequest, ExecStreamRequest, JobCancelRequest, JobOutputRequest,
-            JobPollRequest, JobWaitRequest,
+            ExecStartRequest, JobCancelRequest, JobOutputRequest, JobPollRequest, JobWaitRequest,
         },
         mcp_client,
         terminal::{
@@ -40,7 +39,6 @@ pub fn call_tool_with_context(
     state: Arc<AppState>,
     name: &str,
     args: Value,
-    request_id: Option<&Value>,
     caller_key: &str,
 ) -> Result<Value> {
     let _ = state.backups.maybe_cleanup();
@@ -71,20 +69,12 @@ pub fn call_tool_with_context(
         "exec" => Ok(serde_json::to_value(exec::run_with_context(
             &state,
             parse::<ExecRequest>(args)?,
-            request_id,
             caller_key,
         )?)?),
         "exec_batch" => Ok(serde_json::to_value(exec::run_batch(
             &state,
             parse::<ExecBatchRequest>(args)?,
         )?)?),
-        "exec_stream" => {
-            Ok(serde_json::to_value(state.jobs.stream(parse::<
-                ExecStreamRequest,
-            >(
-                args
-            )?)?)?)
-        }
         "result_read" => {
             let result_id = args
                 .get("result_id")

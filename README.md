@@ -25,7 +25,7 @@ for reviewing file changes.
 
 - One interface for local and SSH targets: 39 model-facing tools plus two App-only helpers
 - Persistent OpenSSH workers for remote file operations
-- Live foreground command output plus cancellable background jobs with incremental output
+- Foreground commands plus cancellable background jobs with live incremental output
 - Persistent PTY terminals with live resize support
 - Atomic file writes, exact edits, deletion previews, SHA-256 compare-and-swap,
   validated multi-file patches with rollback, and centrally managed expiring file backups
@@ -199,7 +199,7 @@ mcp-target-ops [--config PATH] [--http ADDR]
 | Option | Meaning |
 | --- | --- |
 | `-c`, `--config PATH`, `--config=PATH` | TOML configuration path |
-| `--http ADDR`, `--http-addr ADDR` | Listen over HTTP instead of stdio (`--http-addr` is a compatibility alias; see `COMPAT-007`) |
+| `--http ADDR` | Listen over HTTP instead of stdio |
 | `-V`, `--version` | Print the package version |
 | `-h`, `--help` | Print usage information |
 
@@ -226,7 +226,6 @@ Process-wide runtime behavior lives under `[runtime]`:
 | --- | ---: | --- |
 | `result_cache_max_bytes` | `104857600` | Total session-aware App result cache budget; oldest inactive sessions are evicted first |
 | `max_retained_jobs` | `128` | In-memory background job entries retained by the process |
-| `max_retained_foreground_execs` | `64` | Foreground exec sessions retained for App attachment |
 | `exec_auto_background_after_ms` | `5000` | Promote an adaptive `exec` to a background job after this foreground window |
 | `stream_default_max_bytes` | `65536` | Default incremental stream/read chunk bound |
 | `stream_max_bytes` | `524288` | Maximum incremental stream/read chunk bound |
@@ -369,14 +368,14 @@ advanced deployments; see the example configuration.
 
 ## Tool catalog
 
-Target Ops publishes 41 tool descriptors: 39 model-facing tools and two App-only helpers, `exec_stream` and `result_read`.
+Target Ops publishes 40 tool descriptors: 39 model-facing tools and one App-only helper, `result_read`.
 
 | Area | Tools |
 | --- | --- |
 | Server | `server_info` |
 | Targets | `target_list`, `target_current`, `target_instructions`, `target_select`, `target_connect`, `target_disconnect` |
 | Downstream MCP | `mcp_server_list`, `mcp_tools_list`, `mcp_tool_call` |
-| Commands and jobs | `exec`, `exec_batch`, `exec_start`, `job_poll`, `job_output`, `job_wait`, `job_cancel`; App-only: `exec_stream`, `result_read` |
+| Commands and jobs | `exec`, `exec_batch`, `exec_start`, `job_poll`, `job_output`, `job_wait`, `job_cancel`; App-only: `result_read` |
 | Files and directories | `file_read`, `file_backup`, `file_backup_list`, `file_restore`, `file_backup_delete`, `file_list`, `file_find`, `file_edit`, `file_write`, `file_delete`, `file_import`, `file_export`, `file_transfer`, `file_patch`, `file_move`, `file_chmod`, `directory_create` |
 | Terminals | `terminal_open`, `terminal_send`, `terminal_read`, `terminal_resize`, `terminal_close` |
 
@@ -411,7 +410,7 @@ All Target Ops Apps use the same configurable result-card lifecycle. The default
 process lifecycle, stdout/stderr capture, timeout, cancellation, and incremental
 output. `exec` waits for the session and uses the target policy's default timeout
 when none is supplied; `exec_start` returns a job ID immediately and has no
-runtime timeout unless one is requested. Current ChatGPT hosts serialize App-originated tool calls behind an in-flight synchronous `exec`, so live UI output is intentionally implemented through `exec_start` rather than foreground `exec_stream` polling. Child stdin is disconnected from the
+runtime timeout unless one is requested. Live UI output uses `job_output` polling for background jobs started by `exec_start` or promoted from `exec`. Child stdin is disconnected from the
 MCP control stream. SSH command sessions still use dedicated local OpenSSH child
 processes for independent lifecycle, streaming, timeout, and cancellation, but
 those clients multiplex over a per-target OpenSSH ControlMaster when

@@ -54,9 +54,6 @@ pub struct RuntimeConfig {
     #[serde(default = "default_max_retained_jobs")]
     pub max_retained_jobs: usize,
 
-    #[serde(default = "default_max_retained_foreground_execs")]
-    pub max_retained_foreground_execs: usize,
-
     #[serde(default = "default_exec_auto_background_after_ms")]
     pub exec_auto_background_after_ms: u64,
 
@@ -319,7 +316,6 @@ impl Default for RuntimeConfig {
         Self {
             result_cache_max_bytes: default_result_cache_max_bytes(),
             max_retained_jobs: default_max_retained_jobs(),
-            max_retained_foreground_execs: default_max_retained_foreground_execs(),
             exec_auto_background_after_ms: default_exec_auto_background_after_ms(),
             stream_default_max_bytes: default_stream_default_max_bytes(),
             stream_max_bytes: default_stream_max_bytes(),
@@ -540,10 +536,6 @@ fn default_result_cache_max_bytes() -> u64 {
 
 fn default_max_retained_jobs() -> usize {
     128
-}
-
-fn default_max_retained_foreground_execs() -> usize {
-    64
 }
 
 fn default_exec_auto_background_after_ms() -> u64 {

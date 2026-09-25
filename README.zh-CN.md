@@ -188,7 +188,7 @@ mcp-target-ops [--config PATH] [--http ADDR]
 | 参数 | 含义 |
 | --- | --- |
 | `-c`、`--config PATH`、`--config=PATH` | TOML 配置路径 |
-| `--http ADDR`、`--http-addr ADDR` | 使用 HTTP 而非 stdio（`--http-addr` 为兼容别名，见 `COMPAT-007`） |
+| `--http ADDR` | 使用 HTTP 而非 stdio |
 | `-V`、`--version` | 输出程序版本 |
 | `-h`、`--help` | 输出帮助信息 |
 
@@ -217,7 +217,6 @@ rewrite_on_start = false
 | --- | ---: | --- |
 | `result_cache_max_bytes` | `104857600` | App 会话结果缓存总预算；超限时优先淘汰最久未活动的完整会话 |
 | `max_retained_jobs` | `128` | 进程内保留的后台任务条目数 |
-| `max_retained_foreground_execs` | `64` | 为 App 附着保留的前台 exec 会话数 |
 | `exec_auto_background_after_ms` | `5000` | 自适应 `exec` 在前台等待多久后自动转后台 |
 | `stream_default_max_bytes` | `65536` | 增量流/读取的默认单次字节上限 |
 | `stream_max_bytes` | `524288` | 增量流/读取允许的最大单次字节上限 |
@@ -353,14 +352,14 @@ URL 或秘密值。高级部署仍可使用内联 URL 或文件秘密引用，�
 
 ## 工具列表
 
-Target Ops 当前发布 41 个工具描述：39 个模型可见工具，以及 2 个仅供 App 使用的 `exec_stream` 与 `result_read`。
+Target Ops 当前发布 40 个工具描述：39 个模型可见工具，以及 1 个仅供 App 使用的 `result_read`。
 
 | 类别 | 工具 |
 | --- | --- |
 | 服务 | `server_info` |
 | 目标 | `target_list`、`target_current`、`target_instructions`、`target_select`、`target_connect`、`target_disconnect` |
 | 下游 MCP | `mcp_server_list`、`mcp_tools_list`、`mcp_tool_call` |
-| 命令与任务 | `exec`、`exec_batch`、`exec_start`、`job_poll`、`job_output`、`job_wait`、`job_cancel`；仅 App：`exec_stream`、`result_read` |
+| 命令与任务 | `exec`、`exec_batch`、`exec_start`、`job_poll`、`job_output`、`job_wait`、`job_cancel`；仅 App：`result_read` |
 | 文件与目录 | `file_read`、`file_backup`、`file_backup_list`、`file_restore`、`file_backup_delete`、`file_list`、`file_find`、`file_edit`、`file_write`、`file_delete`、`file_import`、`file_export`、`file_transfer`、`file_patch`、`file_move`、`file_chmod`、`directory_create` |
 | 终端 | `terminal_open`、`terminal_send`、`terminal_read`、`terminal_resize`、`terminal_close` |
 
@@ -392,7 +391,7 @@ scope。
 `exec` 与 `exec_start` 现在共用同一套 `CommandSession`，统一处理进程生命周期、
 stdout/stderr 捕获、超时、取消与增量输出。`exec` 会等待会话结束，并在未显式设置
 超时时继续使用目标策略的默认 timeout；`exec_start` 会立即返回任务 ID，未指定时不
-设置运行时 timeout。当前 ChatGPT Host 会把 App 发起的工具调用排在正在执行的同步 `exec` 之后，因此实时 UI 输出明确通过 `exec_start` 实现，而不再依赖前台 `exec_stream` 轮询。子进程 stdin 与 MCP 控制流隔离。SSH 命令会话使用独立 OpenSSH
+设置运行时 timeout。实时 UI 通过 `job_output` 轮询后台任务的输出，任务可以由 `exec_start` 启动或由 `exec` 转入后台。子进程 stdin 与 MCP 控制流隔离。SSH 命令会话使用独立 OpenSSH
 进程；远程文件操作继续复用每个目标的持久 SSH worker。
 
 两个命令工具都支持 `secret_env`。值可以来自纯文本文件，也可以来自 TOML/JSON

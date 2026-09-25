@@ -46,18 +46,6 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
             optional_integer("max_output_bytes", "Maximum bytes to return for stdout and stderr."),
             optional_value("secret_env", "Map environment variable names to server-side secret references.", secret_env_schema()),
         ])),
-        // COMPAT(COMPAT-005): target/command/cwd remain in exec_stream only for
-        // hosts that cannot expose the original tools/call request id to the App.
-        tool("exec_stream", "Read incremental output from the foreground exec session associated with this App view.", object_schema(vec![
-            optional_string("session_id", "Foreground exec session id returned by a previous exec_stream call."),
-            optional_value("request_id", "Original MCP tools/call JSON-RPC id used to attach this App to its exact exec session.", json!({"type":["string","number"]})),
-            optional_string("target", "Original exec target argument; compatibility fallback when request_id is unavailable."),
-            optional_string("command", "Original exec command; compatibility fallback when request_id is unavailable."),
-            optional_string("cwd", "Original exec working directory; compatibility fallback when request_id is unavailable."),
-            optional_integer("stdout_since_seq", "Last stdout sequence already consumed."),
-            optional_integer("stderr_since_seq", "Last stderr sequence already consumed."),
-            optional_integer("max_bytes", "Maximum bytes to return from each stream."),
-        ])),
         tool("result_read", "Reload a cached tool result for a sleeping App view.", object_schema(vec![
             required_string("result_id", "Opaque result id returned with the original App-backed tool result."),
         ])),
@@ -188,7 +176,7 @@ fn tool(
         );
     }
 
-    if matches!(name, "exec_stream" | "result_read") {
+    if name == "result_read" {
         meta.insert("ui".to_string(), json!({ "visibility": ["app"] }));
         meta.insert("openai/widgetAccessible".to_string(), Value::Bool(true));
         meta.insert(
@@ -311,7 +299,6 @@ fn tool_annotations(name: &str) -> Value {
             | "job_poll"
             | "job_output"
             | "job_wait"
-            | "exec_stream"
             | "result_read"
             | "file_read"
             | "file_list"
@@ -835,18 +822,16 @@ mod tests {
     }
 
     #[test]
-    fn exec_stream_is_app_only_and_exec_widget_can_call_tools() {
+    fn result_read_is_app_only_and_exec_widget_can_call_tools() {
         let tools = list_tools(None);
         let tools = tools.as_array().unwrap();
-        for name in ["exec_stream", "result_read"] {
-            let tool = tools
-                .iter()
-                .find(|tool| tool["name"] == name)
-                .expect("app-only tool");
-            assert_eq!(tool["_meta"]["ui"]["visibility"], json!(["app"]));
-            assert_eq!(tool["_meta"]["openai/visibility"], "private");
-            assert_eq!(tool["_meta"]["openai/widgetAccessible"], true);
-        }
+        let tool = tools
+            .iter()
+            .find(|tool| tool["name"] == "result_read")
+            .expect("app-only tool");
+        assert_eq!(tool["_meta"]["ui"]["visibility"], json!(["app"]));
+        assert_eq!(tool["_meta"]["openai/visibility"], "private");
+        assert_eq!(tool["_meta"]["openai/widgetAccessible"], true);
 
         for name in ["exec", "exec_start", "job_output"] {
             let tool = tools
