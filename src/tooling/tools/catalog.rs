@@ -1,7 +1,4 @@
-use super::{
-    schema::output_schema, EXEC_TERMINAL_UI_URI, FILE_CHANGE_UI_URI, FILE_READ_UI_URI,
-    INVENTORY_UI_URI,
-};
+use super::{schema::output_schema, PANEL_UI_URI};
 use serde_json::{json, Value};
 
 pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
@@ -22,6 +19,13 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
     };
 
     json!([
+        tool("panel_open", "Use this to open the shared operation panel once per conversation, before operations when live progress matters or after operations to review results. Subsequent commands, file reads/changes and inventory calls update the same panel automatically. Do not call again for each operation; call again only if the user wants to reopen the panel. Requires host conversation metadata or an initialized MCP session.", object_schema(vec![])),
+        tool("panel_read", "Refresh the existing operation panel without rendering another UI. App-only, read-only; does not acknowledge completed jobs.", object_schema(vec![
+            required_string("panel_id", "Panel id from panel_open."),
+            optional_string("generation", "Generation from the last refresh; detects a recreated panel after eviction."),
+            optional_integer("after", "Last version received; omit or use zero to restore the retained history."),
+            optional_string("result_id", "Load details for an operation in this panel."),
+        ])),
         tool("server_info", "Return server configuration summary and active target state.", object_schema(vec![])),
         tool("target_list", "List configured local and SSH targets, including policy summaries and active marker.", object_schema(vec![])),
         tool("target_current", "Return the currently selected active target, if any.", object_schema(vec![])),
@@ -134,6 +138,25 @@ fn tool(
     output_schema: Value,
     security_schemes: Option<&Value>,
 ) -> Value {
+    let description = if matches!(
+        name,
+        "exec"
+            | "exec_batch"
+            | "exec_start"
+            | "file_read"
+            | "file_write"
+            | "file_edit"
+            | "file_delete"
+            | "file_import"
+            | "file_patch"
+            | "file_move"
+            | "target_list"
+            | "mcp_server_list"
+    ) {
+        format!("{description} For visual results, open panel_open once per conversation and reuse that panel for subsequent operations.")
+    } else {
+        description.to_string()
+    };
     let mut descriptor = json!({
         "name": name,
         "description": description,
@@ -155,12 +178,7 @@ fn tool(
     }
 
     if matches!(name, "target_list" | "mcp_server_list") {
-        meta.insert("ui".to_string(), json!({ "resourceUri": INVENTORY_UI_URI }));
         meta.insert("openai/widgetAccessible".to_string(), Value::Bool(true));
-        meta.insert(
-            "openai/outputTemplate".to_string(),
-            Value::String(INVENTORY_UI_URI.to_string()),
-        );
         let (invoking, invoked) = if name == "target_list" {
             ("Listing targets…", "Targets listed")
         } else {
@@ -176,7 +194,12 @@ fn tool(
         );
     }
 
-    if name == "result_read" {
+    if name == "panel_open" {
+        meta.insert("ui".into(), json!({"resourceUri": PANEL_UI_URI}));
+        meta.insert("openai/outputTemplate".into(), json!(PANEL_UI_URI));
+        meta.insert("openai/widgetAccessible".into(), json!(true));
+    }
+    if matches!(name, "result_read" | "panel_read") {
         meta.insert("ui".to_string(), json!({ "visibility": ["app"] }));
         meta.insert("openai/widgetAccessible".to_string(), Value::Bool(true));
         meta.insert(
@@ -186,15 +209,7 @@ fn tool(
     }
 
     if matches!(name, "exec" | "exec_batch" | "exec_start") {
-        meta.insert(
-            "ui".to_string(),
-            json!({ "resourceUri": EXEC_TERMINAL_UI_URI }),
-        );
         meta.insert("openai/widgetAccessible".to_string(), Value::Bool(true));
-        meta.insert(
-            "openai/outputTemplate".to_string(),
-            Value::String(EXEC_TERMINAL_UI_URI.to_string()),
-        );
         let (invoking, invoked) = if name == "exec_batch" {
             ("Running command batch…", "Command batch finished")
         } else if name == "exec_start" {
@@ -217,12 +232,7 @@ fn tool(
     }
 
     if name == "file_read" {
-        meta.insert("ui".to_string(), json!({ "resourceUri": FILE_READ_UI_URI }));
         meta.insert("openai/widgetAccessible".to_string(), Value::Bool(true));
-        meta.insert(
-            "openai/outputTemplate".to_string(),
-            Value::String(FILE_READ_UI_URI.to_string()),
-        );
         meta.insert(
             "openai/toolInvocation/invoking".to_string(),
             Value::String("Reading file…".to_string()),
@@ -237,15 +247,7 @@ fn tool(
         name,
         "file_edit" | "file_write" | "file_delete" | "file_import" | "file_patch" | "file_move"
     ) {
-        meta.insert(
-            "ui".to_string(),
-            json!({ "resourceUri": FILE_CHANGE_UI_URI }),
-        );
         meta.insert("openai/widgetAccessible".to_string(), Value::Bool(true));
-        meta.insert(
-            "openai/outputTemplate".to_string(),
-            Value::String(FILE_CHANGE_UI_URI.to_string()),
-        );
         meta.insert(
             "openai/toolInvocation/invoking".to_string(),
             Value::String("Applying file change…".to_string()),
@@ -290,7 +292,9 @@ fn tool(
 fn tool_annotations(name: &str) -> Value {
     let read_only = matches!(
         name,
-        "server_info"
+        "panel_open"
+            | "panel_read"
+            | "server_info"
             | "target_list"
             | "target_current"
             | "target_instructions"
@@ -759,6 +763,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn only_panel_open_renders_a_widget() {
+        let tools = list_tools(None);
+        let rendered: Vec<_> = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|t| t["_meta"]["ui"]["resourceUri"].is_string())
+            .collect();
+        assert_eq!(rendered.len(), 1);
+        assert_eq!(rendered[0]["name"], "panel_open");
+        assert_eq!(rendered[0]["_meta"]["ui"]["resourceUri"], PANEL_UI_URI);
+        let read = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "panel_read")
+            .unwrap();
+        assert_eq!(read["_meta"]["ui"]["visibility"], json!(["app"]));
+        assert_eq!(read["annotations"]["readOnlyHint"], true);
+    }
+
+    #[test]
     fn every_tool_declares_an_object_output_schema() {
         let tools = list_tools(None);
         let tools = tools.as_array().expect("tool list is an array");
@@ -789,15 +815,15 @@ mod tests {
                 .iter()
                 .find(|tool| tool["name"] == name)
                 .expect("list tool");
-            assert_eq!(tool["_meta"]["ui"]["resourceUri"], INVENTORY_UI_URI);
-            assert_eq!(tool["_meta"]["openai/outputTemplate"], INVENTORY_UI_URI);
+            assert!(tool["_meta"]["ui"]["resourceUri"].is_null());
+            assert!(tool["_meta"]["openai/outputTemplate"].is_null());
             assert_eq!(tool["_meta"]["openai/toolInvocation/invoking"], invoking);
             assert_eq!(tool["_meta"]["openai/toolInvocation/invoked"], invoked);
         }
     }
 
     #[test]
-    fn file_read_binds_read_app_resource() {
+    fn file_read_returns_data_without_rendering() {
         let tools = list_tools(None);
         let file_read = tools
             .as_array()
@@ -806,11 +832,8 @@ mod tests {
             .find(|tool| tool["name"] == "file_read")
             .expect("file_read tool");
 
-        assert_eq!(file_read["_meta"]["ui"]["resourceUri"], FILE_READ_UI_URI);
-        assert_eq!(
-            file_read["_meta"]["openai/outputTemplate"],
-            FILE_READ_UI_URI
-        );
+        assert!(file_read["_meta"]["ui"]["resourceUri"].is_null());
+        assert!(file_read["_meta"]["openai/outputTemplate"].is_null());
         assert_eq!(
             file_read["_meta"]["openai/toolInvocation/invoking"],
             "Reading file…"
@@ -843,7 +866,7 @@ mod tests {
     }
 
     #[test]
-    fn exec_tools_bind_command_result_app_resource() {
+    fn exec_tools_return_data_without_rendering() {
         let tools = list_tools(None);
         let tools = tools.as_array().unwrap();
 
@@ -860,8 +883,8 @@ mod tests {
                 .iter()
                 .find(|tool| tool["name"] == name)
                 .expect("exec tool");
-            assert_eq!(tool["_meta"]["ui"]["resourceUri"], EXEC_TERMINAL_UI_URI);
-            assert_eq!(tool["_meta"]["openai/outputTemplate"], EXEC_TERMINAL_UI_URI);
+            assert!(tool["_meta"]["ui"]["resourceUri"].is_null());
+            assert!(tool["_meta"]["openai/outputTemplate"].is_null());
             assert_eq!(tool["_meta"]["openai/toolInvocation/invoking"], invoking);
             assert_eq!(tool["_meta"]["openai/toolInvocation/invoked"], invoked);
         }

@@ -1,7 +1,7 @@
 use crate::{
     core::config::RuntimeConfig,
     tooling::tools::{
-        EXEC_TERMINAL_UI_URI, FILE_CHANGE_UI_URI, FILE_READ_UI_URI, INVENTORY_UI_URI,
+        EXEC_TERMINAL_UI_URI, FILE_CHANGE_UI_URI, FILE_READ_UI_URI, INVENTORY_UI_URI, PANEL_UI_URI,
     },
 };
 use serde_json::{json, Value};
@@ -23,7 +23,17 @@ struct AppResource {
     prefers_border: bool,
 }
 
-const RESOURCES: [AppResource; 4] = [
+// COMPAT(COMPAT-012): Keep the four historical resources readable for saved cards.
+const RESOURCES: [AppResource; 5] = [
+    AppResource {
+        uri: PANEL_UI_URI,
+        name: "target-ops-panel",
+        title: "Target Ops operation panel",
+        description: "Shared operation history and live command output for this conversation.",
+        widget_description: "One operation panel for the conversation. Later operations appear here automatically; do not open a new panel for each tool call.",
+        html: include_str!("../../assets/panel.html"),
+        prefers_border: true,
+    },
     AppResource {
         uri: EXEC_TERMINAL_UI_URI,
         name: "target-ops-exec-result",
@@ -130,6 +140,59 @@ fn render_app_html(html: &str, runtime: &RuntimeConfig) -> String {
         "sleepAfterMs": runtime.app_sleep_after_ms,
         "jobPollIntervalMs": runtime.app_job_poll_interval_ms,
     });
+    let mut html = html.to_string();
+    if html.contains("__PANEL_RENDERERS__") {
+        let mut templates = String::new();
+        let mut scripts = String::from("globalThis.targetOpsRenderers = {};\n");
+        for (name, source) in [
+            ("exec-terminal", EXEC_TERMINAL_UI_HTML),
+            ("file-read", FILE_READ_UI_HTML),
+            ("file-change", FILE_CHANGE_UI_HTML),
+            ("inventory-card", INVENTORY_UI_HTML),
+        ] {
+            let style = source
+                .split_once("<style>")
+                .unwrap()
+                .1
+                .split_once("</style>")
+                .unwrap()
+                .0;
+            let body = source
+                .split_once("<body>")
+                .unwrap()
+                .1
+                .split_once("<script>")
+                .unwrap()
+                .0;
+            // In the shared panel the outer result is a fixed detail view, not an accordion.
+            let body = body
+                .replacen("<details class=\"card\"", "<section class=\"card\"", 1)
+                .replacen("<summary class=\"head\"", "<div class=\"head\"", 1)
+                .replacen("</summary>", "</div>", 1);
+            let body = if let Some(end) = body.rfind("</details>") {
+                format!(
+                    "{}</section>{}",
+                    &body[..end],
+                    &body[end + "</details>".len()..]
+                )
+            } else {
+                body
+            };
+            let script = source
+                .split_once("<script>")
+                .unwrap()
+                .1
+                .split_once("</script>")
+                .unwrap()
+                .0;
+            let style = style.replace(":root", ":host");
+            templates.push_str(&format!("<template id=\"{name}\"><style>{style}\n:host {{ display:block; }} .card {{ border:0; border-radius:0; }} .head {{ padding:0 0 12px; flex-wrap:wrap; }} .file {{ flex-basis:100%; }} .path {{ white-space:pre-wrap; overflow-wrap:anywhere; }} .viewer {{ max-height:none; }} .details {{ margin-top:8px; }}</style>{body}</template>"));
+            scripts.push_str(script);
+        }
+        html = html
+            .replace("__PANEL_TEMPLATES__", &templates)
+            .replace("__PANEL_RENDERERS__", &scripts);
+    }
     html.replace("__TARGET_OPS_RUNTIME_CONFIG__", &config.to_string())
 }
 
@@ -142,7 +205,7 @@ mod tests {
         let widget_domain = "https://mcp.example.com";
         let listed = list_resources(Some(widget_domain));
         let resources = listed["resources"].as_array().expect("resources array");
-        assert_eq!(resources.len(), 4);
+        assert_eq!(resources.len(), 5);
 
         let exec_result = resources
             .iter()

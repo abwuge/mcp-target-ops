@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root { color-scheme: light dark; font: 13px/1.45 ui-sans-serif, system-ui, sans-serif; --border: color-mix(in srgb, currentColor 16%, transparent); --muted: color-mix(in srgb, currentColor 58%, transparent); }
+* { box-sizing: border-box; }
+body { margin: 0; padding: 10px; background: transparent; color: inherit; }
+.panel { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+h1 { font: inherit; font-weight: 650; margin: 0; flex: 1; }
+#status { color: var(--muted); font-size: 11px; }
+button { font: inherit; color: inherit; background: transparent; border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; cursor: pointer; }
+button:focus-visible { outline: 2px solid #58a6ff; outline-offset: -2px; }
+.workspace { display: grid; grid-template-columns: clamp(155px, 29%, 240px) minmax(0, 1fr); height: 510px; }
+.navigation { min-width: 0; min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--border); background: color-mix(in srgb, currentColor 2%, transparent); }
+.nav-heading { padding: 12px 12px 6px; color: var(--muted); font-size: 11px; font-weight: 600; }
+#operations { flex: 1; min-height: 0; overflow: auto; }
+@media (max-width: 480px) {
+  body { padding: 4px; }
+  header { padding: 8px; gap: 6px; }
+  header label { font-size: 11px; }
+  .workspace { grid-template-columns: 110px minmax(0, 1fr); height: 460px; }
+  .operation { padding: 9px 8px; }
+}
+.operation { display: flex; flex-direction: column; width: 100%; text-align: left; gap: 3px; align-items: stretch; padding: 10px 12px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; }
+.operation[aria-pressed="true"] { background: color-mix(in srgb, #58a6ff 12%, transparent); }
+.label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11px/1.5 ui-monospace, monospace; }
+.state { flex: 0 0 auto; font-size: 11px; color: var(--muted); }
+.state.failed, .state.timed_out { color: light-dark(#cf222e, #ff7b72); }
+#detail { padding: 12px; min-width: 0; min-height: 0; overflow: auto; }
+.notice { padding: 12px; color: var(--muted); overflow-wrap: anywhere; }
+#history-note { padding: 4px 12px; font-size: 11px; color: var(--muted); }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<section class="panel" aria-label="Operation panel">
+<header><h1>Operations</h1><label><input id="follow" type="checkbox" checked> Follow latest</label><span id="status" role="status">Connecting…</span><button id="refresh" type="button">Refresh</button></header>
+<div class="workspace">
+<nav class="navigation" aria-label="Commands and operations">
+<div class="nav-heading">History</div>
+<div id="operations" aria-label="Operation history"></div>
+<div id="history-note" hidden>Recent operations</div>
+</nav>
+<section id="detail" aria-label="Selected operation"><div class="notice">Select an operation to view its command and output.</div></section>
+</div>
+</section>
+__PANEL_TEMPLATES__
+<script>
+__PANEL_RENDERERS__
+(() => {
+  const config = __TARGET_OPS_RUNTIME_CONFIG__;
+  const list = document.getElementById('operations');
+  const detail = document.getElementById('detail');
+  const status = document.getElementById('status');
+  const refreshButton = document.getElementById('refresh');
+  const follow = document.getElementById('follow');
+  const entries = new Map();
+  const pending = new Map();
+  let rpcId = 0, panelId = null, version = 0, generation = null, selected = null;
+  let ready = false, stopped = false, busy = false, timer = null, needsDetail = true;
+  let loadedResult = null, activeRenderer = null, activeKind = null;
+  let lastSize = '', sizeScheduled = false;
+
+  function rpc(method, params) {
+    return new Promise((resolve, reject) => {
+      const id = ++rpcId;
+      const timeout = setTimeout(() => { pending.delete(id); reject(new Error('Connection timed out. Select Refresh to retry.')); }, 15000);
+      pending.set(id, { resolve, reject, timeout });
+      window.parent.postMessage({ jsonrpc: '2.0', id, method, params }, '*');
+    });
+  }
+  function dataOf(result) {
+    if (result?.isError) throw new Error(result.content?.find(item => item.type === 'text')?.text || 'Panel unavailable.');
+    return result?.structuredContent || result?.mcp_tool_result?.structuredContent || result?.call_tool_result?.structuredContent || result;
+  }
+  function saveSelection() {
+    window.openai?.setWidgetState?.({ panel_id: panelId, selected, follow: follow.checked });
+  }
+  function hydrate(raw) {
+    const data = dataOf(raw);
+    if (typeof data?.panel_id !== 'string' || panelId === data.panel_id) return;
+    panelId = data.panel_id;
+    version = 0; generation = null;
+    entries.clear();
+    loadedResult = null;
+    const saved = window.openai?.widgetState;
+    selected = saved?.panel_id === panelId ? saved.selected : null;
+    follow.checked = saved?.panel_id === panelId ? saved.follow !== false : true;
+    needsDetail = true;
+    schedule(0);
+  }
+  function schedule(delay) {
+    clearTimeout(timer);
+    if (ready && panelId && !stopped && !document.hidden) timer = setTimeout(refresh, delay);
+  }
+  function showNotice(text) {
+    activeRenderer = null; activeKind = null;
+    const node = document.createElement('div'); node.className = 'notice'; node.textContent = text;
+    detail.replaceChildren(node);
+  }
+  function renderList() {
+    list.replaceChildren();
+    for (const entry of [...entries.values()].sort((a, b) => b.seq - a.seq)) {
+      const row = document.createElement('button');
+      row.type = 'button'; row.className = 'operation'; row.setAttribute('aria-pressed', String(entry.result_id === selected));
+      const label = document.createElement('span'); label.className = 'label'; label.textContent = entry.label; label.title = entry.label;
+      const state = document.createElement('span'); state.className = `state ${entry.status}`; state.textContent = entry.status.replaceAll('_', ' ');
+      row.append(label, state);
+      row.addEventListener('click', () => {
+        follow.checked = false;
+        selected = entry.result_id; needsDetail = true; loadedResult = null;
+        saveSelection(); renderList(); showNotice('Loading…'); schedule(0);
+      });
+      list.appendChild(row);
+    }
+  }
+  function rendererKind(tool) {
+    if (tool.startsWith('exec')) return 'exec-terminal';
+    if (tool === 'file_read') return 'file-read';
+    if (tool === 'target_list' || tool === 'mcp_server_list') return 'inventory-card';
+    return 'file-change';
+  }
+  function renderDetail(value) {
+    if (!value || value.result_id !== selected) return;
+    loadedResult = selected;
+    needsDetail = false;
+    if (!value.found || !value.data) { showNotice('Result expired from the cache.'); return; }
+    if (value.data.error) { showNotice(value.data.error); return; }
+    const kind = rendererKind(value.tool);
+    if (!activeRenderer || activeKind !== kind) {
+      const host = document.createElement('div');
+      const root = host.attachShadow({ mode: 'open' });
+      root.appendChild(document.getElementById(kind).content.cloneNode(true));
+      detail.replaceChildren(host);
+      activeRenderer = globalThis.targetOpsRenderers[kind](root, true);
+      activeKind = kind;
+    }
+    activeRenderer.render(value.data, { command: value.data.command });
+  }
+  async function refresh() {
+    if (busy || !ready || !panelId || document.hidden) return;
+    busy = true;
+    const requestedPanel = panelId;
+    const requestedResult = selected;
+    const shouldLoad = requestedResult && (needsDetail || loadedResult !== requestedResult || entries.get(requestedResult)?.status === 'running');
+    try {
+      const args = { panel_id: requestedPanel, after: version };
+      if (generation) args.generation = generation;
+      if (shouldLoad) args.result_id = requestedResult;
+      const data = dataOf(await rpc('tools/call', { name: 'panel_read', arguments: args }));
+      if (panelId !== requestedPanel) return;
+      if (data.reset) { entries.clear(); loadedResult = null; needsDetail = true; }
+      generation = data.generation;
+      version = data.version;
+      for (const entry of data.entries || []) entries.set(entry.result_id, entry);
+      for (const [id, entry] of entries) if (entry.seq < data.oldest_seq) entries.delete(id);
+      if (follow.checked || !selected || !entries.has(selected)) {
+        const latest = [...entries.values()].sort((a, b) => b.seq - a.seq)[0]?.result_id || null;
+        if (selected !== latest) {
+          selected = latest; loadedResult = null; needsDetail = Boolean(selected); saveSelection();
+        }
+      }
+      renderList();
+      document.getElementById('history-note').hidden = data.oldest_seq <= 1;
+      renderDetail(data.detail);
+      const running = [...entries.values()].filter(e => e.status === 'running').length;
+      status.textContent = running ? `${running} running · ${entries.size} operations` : `${entries.size} operations`;
+      if (!entries.size) showNotice('New operations will appear here.');
+      stopped = false;
+    } catch (error) {
+      stopped = true;
+      status.textContent = 'Refresh paused';
+      showNotice(error.message || 'Panel unavailable. Select Refresh to retry.');
+    } finally {
+      busy = false;
+      reportSize();
+      const running = [...entries.values()].some(e => e.status === 'running');
+      schedule(needsDetail && selected ? 0 : running ? config.jobPollIntervalMs : Math.max(5000, config.jobPollIntervalMs));
+    }
+  }
+  function reportSize() {
+    if (!ready || sizeScheduled) return;
+    sizeScheduled = true;
+    window.requestAnimationFrame(() => {
+      sizeScheduled = false;
+      const root = document.documentElement;
+      const previousHeight = root.style.height;
+      root.style.height = 'max-content';
+      const height = Math.ceil(root.getBoundingClientRect().height);
+      root.style.height = previousHeight;
+      const width = Math.ceil(window.innerWidth);
+      const key = `${width}:${height}`;
+      if (width > 0 && height > 0 && key !== lastSize) {
+        lastSize = key;
+        window.parent.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/size-changed', params: { width, height } }, '*');
+      }
+    });
+  }
+  window.addEventListener('message', event => {
+    if (event.source !== window.parent) return;
+    const msg = event.data;
+    if (msg?.jsonrpc === '2.0' && pending.has(msg.id)) {
+      const item = pending.get(msg.id); pending.delete(msg.id); clearTimeout(item.timeout);
+      if (msg.error) item.reject(new Error(msg.error.message || 'Request failed')); else item.resolve(msg.result);
+    }
+    if (msg?.method === 'ui/notifications/tool-result') {
+      try { hydrate(msg.params); } catch (error) { showNotice(error.message); }
+    }
+  });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) clearTimeout(timer); else schedule(0); });
+  window.addEventListener('pagehide', () => { stopped = true; clearTimeout(timer); });
+  window.addEventListener('pageshow', () => { stopped = false; schedule(0); });
+  follow.addEventListener('change', () => schedule(0));
+  refreshButton.addEventListener('click', () => {
+    stopped = false; needsDetail = true;
+    if (!ready) initialize(); else schedule(0);
+  });
+  let initializing = false;
+  async function initialize() {
+    if (initializing) return;
+    initializing = true;
+    try {
+      await rpc('ui/initialize', { appInfo: { name: 'target-ops-panel', version: '1.0.0' }, appCapabilities: { tools: {} }, protocolVersion: '2026-01-26' });
+      window.parent.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/initialized', params: {} }, '*');
+      ready = true; stopped = false;
+      hydrate(window.openai?.toolOutput || window.openai?.toolResponseMetadata);
+      status.textContent = 'Waiting for operations…';
+      schedule(0); reportSize();
+    } catch (error) { status.textContent = 'Connection unavailable'; showNotice(error.message); }
+    finally { initializing = false; }
+  }
+  if (typeof ResizeObserver === 'function') new ResizeObserver(reportSize).observe(document.body);
+  window.addEventListener('resize', reportSize);
+  initialize();
+})();
+</script>
+</body>
+</html>

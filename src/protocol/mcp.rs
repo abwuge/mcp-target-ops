@@ -69,6 +69,15 @@ pub fn handle_json_bytes_for_caller(
     bytes: &[u8],
     caller_key: &str,
 ) -> Result<Option<Vec<u8>>> {
+    handle_json_bytes_for_identity(state, bytes, caller_key, caller_key)
+}
+
+pub fn handle_json_bytes_for_identity(
+    state: Arc<AppState>,
+    bytes: &[u8],
+    caller_key: &str,
+    owner_key: &str,
+) -> Result<Option<Vec<u8>>> {
     let value = match serde_json::from_slice::<Value>(bytes) {
         Ok(value) => value,
         Err(err) => {
@@ -77,16 +86,17 @@ pub fn handle_json_bytes_for_caller(
         }
     };
 
-    handle_json_value_for_caller(state, value, caller_key)?
+    handle_json_value_for_identity(state, value, caller_key, owner_key)?
         .map(|response| serde_json::to_vec(&response))
         .transpose()
         .map_err(Error::Json)
 }
 
-fn handle_json_value_for_caller(
+fn handle_json_value_for_identity(
     state: Arc<AppState>,
     value: Value,
     caller_key: &str,
+    owner_key: &str,
 ) -> Result<Option<Value>> {
     if let Value::Array(requests) = value {
         if requests.is_empty() {
@@ -97,7 +107,9 @@ fn handle_json_value_for_caller(
 
         let mut responses = Vec::new();
         for request in requests {
-            if let Some(response) = handle_request_value(Arc::clone(&state), request, caller_key)? {
+            if let Some(response) =
+                handle_request_value(Arc::clone(&state), request, caller_key, owner_key)?
+            {
                 responses.push(response);
             }
         }
@@ -108,7 +120,7 @@ fn handle_json_value_for_caller(
             Ok(Some(Value::Array(responses)))
         }
     } else {
-        handle_request_value(state, value, caller_key)
+        handle_request_value(state, value, caller_key, owner_key)
     }
 }
 
@@ -116,10 +128,11 @@ fn handle_request_value(
     state: Arc<AppState>,
     value: Value,
     caller_key: &str,
+    owner_key: &str,
 ) -> Result<Option<Value>> {
     state.results.touch_session(caller_key)?;
     let response = match serde_json::from_value::<RpcRequest>(value) {
-        Ok(request) => handle_request(state, request, caller_key),
+        Ok(request) => handle_request(state, request, caller_key, owner_key),
         Err(err) => Some(parse_error(format!("parse error: {err}"))),
     };
 
@@ -145,6 +158,7 @@ fn handle_request(
     state: Arc<AppState>,
     request: RpcRequest,
     caller_key: &str,
+    owner_key: &str,
 ) -> Option<RpcResponse> {
     if request.method.starts_with("notifications/") {
         return None;
@@ -164,6 +178,7 @@ fn handle_request(
             state,
             request.params.unwrap_or_else(|| json!({})),
             caller_key,
+            owner_key,
         ),
         "resources/list" => Ok(apps::list_resources(
             state.config.server.public_base_url.as_deref(),
@@ -226,7 +241,12 @@ fn initialize(state: &AppState, params: Value) -> Result<Value> {
     }))
 }
 
-fn tools_call(state: Arc<AppState>, params: Value, caller_key: &str) -> Result<Value> {
+fn tools_call(
+    state: Arc<AppState>,
+    params: Value,
+    caller_key: &str,
+    owner_key: &str,
+) -> Result<Value> {
     #[derive(Deserialize)]
     struct ToolCallParams {
         name: String,
@@ -234,7 +254,42 @@ fn tools_call(state: Arc<AppState>, params: Value, caller_key: &str) -> Result<V
         arguments: Option<Value>,
     }
 
+    let conversation = params
+        .get("_meta")
+        .and_then(|m| m.get("openai/session"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty() && s.len() <= 512);
+    let scope = conversation
+        .map(|s| format!("conversation:{s}"))
+        .or_else(|| {
+            (caller_key.starts_with("session:") || caller_key == "direct")
+                .then(|| caller_key.to_string())
+        });
     let params: ToolCallParams = serde_json::from_value(params)?;
+    if matches!(params.name.as_str(), "panel_open" | "panel_read") {
+        let result = if params.name == "panel_open" {
+            scope
+                .as_deref()
+                .ok_or_else(|| {
+                    Error::Tool(
+                        "Panel requires openai/session metadata or an initialized MCP session"
+                            .into(),
+                    )
+                })
+                .and_then(|scope| state.panels.open(owner_key, scope))
+        } else {
+            state.panels.read(
+                &state,
+                owner_key,
+                params.arguments.unwrap_or_else(|| json!({})),
+            )
+        };
+        return Ok(match result {
+            Ok(data) => json!({"structuredContent":data,"content":[],"isError":false}),
+            Err(err) => json!({"content":[{"type":"text","text":err.to_string()}],"isError":true}),
+        });
+    }
+    let tool_input = params.arguments.clone().unwrap_or_else(|| json!({}));
     if requires_target_instructions(&params.name)
         && state.target_instructions_required(caller_key)?
     {
@@ -272,7 +327,25 @@ fn tools_call(state: Arc<AppState>, params: Value, caller_key: &str) -> Result<V
                 }
             }
             if caches_app_result(&params.name) {
+                // Preserve command context for a panel reopened after the original call.
+                if params.name.starts_with("exec") && value.get("command").is_none() {
+                    if let Some(command) = tool_input.get("command") {
+                        value["command"] = command.clone();
+                    }
+                }
                 let result_id = state.results.store(caller_key, &value)?;
+                if let Some(scope) = scope.as_deref() {
+                    if let Err(err) = state.panels.record(
+                        owner_key,
+                        scope,
+                        caller_key,
+                        &params.name,
+                        &result_id,
+                        &value,
+                    ) {
+                        eprintln!("failed to index operation panel: {err}");
+                    }
+                }
                 if let Some(object) = value.as_object_mut() {
                     object.insert("result_id".to_string(), Value::String(result_id));
                 }
@@ -342,6 +415,20 @@ fn tools_call(state: Arc<AppState>, params: Value, caller_key: &str) -> Result<V
             }))
         }
         Err(err) => {
+            if caches_app_result(&params.name) {
+                let data = json!({"error":err.to_string(),"command":tool_input.get("command"),"path":tool_input.get("path")});
+                if let (Some(scope), Ok(id)) =
+                    (scope.as_deref(), state.results.store(caller_key, &data))
+                {
+                    if let Err(index_error) =
+                        state
+                            .panels
+                            .record(owner_key, scope, caller_key, &params.name, &id, &data)
+                    {
+                        eprintln!("failed to index operation error: {index_error}");
+                    }
+                }
+            }
             let completed_jobs = if attach_completed {
                 state.jobs.take_completed_for_caller(caller_key)
             } else {
@@ -425,6 +512,15 @@ fn caches_app_result(name: &str) -> bool {
             | "file_patch"
             | "file_move"
     )
+}
+
+#[cfg(test)]
+fn handle_json_value_for_caller(
+    state: Arc<AppState>,
+    value: Value,
+    caller_key: &str,
+) -> Result<Option<Value>> {
+    handle_json_value_for_identity(state, value, caller_key, caller_key)
 }
 
 #[cfg(test)]
@@ -753,5 +849,277 @@ mod tests {
         assert!(next["result"]["structuredContent"]
             .get("completed_jobs")
             .is_none());
+    }
+    fn panel_call(
+        state: &Arc<AppState>,
+        transport: &str,
+        owner: &str,
+        conversation: Option<&str>,
+        name: &str,
+        args: Value,
+    ) -> Value {
+        let mut params = json!({"name":name,"arguments":args});
+        if let Some(conversation) = conversation {
+            params["_meta"] = json!({"openai/session":conversation});
+        }
+        handle_json_value_for_identity(
+            Arc::clone(state),
+            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":params}),
+            transport,
+            owner,
+        )
+        .unwrap()
+        .unwrap()["result"]
+            .clone()
+    }
+
+    #[test]
+    fn panel_recovers_across_transports_and_isolates_owners_and_conversations() {
+        let state = test_state();
+        let open = panel_call(
+            &state,
+            "session:a",
+            "alice",
+            Some("chat-a"),
+            "panel_open",
+            json!({}),
+        );
+        let id = open["structuredContent"]["panel_id"].clone();
+        panel_call(
+            &state,
+            "session:b",
+            "alice",
+            Some("chat-a"),
+            "target_list",
+            json!({}),
+        );
+        panel_call(
+            &state,
+            "session:b",
+            "alice",
+            Some("chat-b"),
+            "mcp_server_list",
+            json!({}),
+        );
+        let read = panel_call(
+            &state,
+            "session:widget",
+            "alice",
+            None,
+            "panel_read",
+            json!({"panel_id":id}),
+        );
+        let entries = read["structuredContent"]["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["tool"], "target_list");
+        let result_id = entries[0]["result_id"].clone();
+        let reopened = panel_call(
+            &state,
+            "session:new",
+            "alice",
+            Some("chat-a"),
+            "panel_open",
+            json!({}),
+        );
+        assert_eq!(reopened["structuredContent"]["panel_id"], id);
+        let denied = panel_call(
+            &state,
+            "session:a",
+            "bob",
+            None,
+            "panel_read",
+            json!({"panel_id":id,"result_id":result_id}),
+        );
+        assert_eq!(denied["isError"], true);
+        let other = panel_call(
+            &state,
+            "session:b",
+            "alice",
+            Some("chat-b"),
+            "panel_open",
+            json!({}),
+        );
+        let wrong_result = panel_call(
+            &state,
+            "session:b",
+            "alice",
+            None,
+            "panel_read",
+            json!({"panel_id":other["structuredContent"]["panel_id"],"result_id":result_id}),
+        );
+        assert_eq!(wrong_result["structuredContent"]["detail"]["found"], false);
+        let restored = AppState::new(state.config.clone()).unwrap();
+        let result = restored
+            .panels
+            .read(
+                &restored,
+                "alice",
+                json!({"panel_id":id,"result_id":result_id}),
+            )
+            .unwrap();
+        assert_eq!(result["detail"]["found"], true);
+        assert!(result["detail"]["data"]["targets"].is_array());
+    }
+
+    #[test]
+    fn panel_does_not_group_sessionless_clients_by_bearer() {
+        let state = test_state();
+        let denied = panel_call(
+            &state,
+            "bearer:shared",
+            "owner",
+            None,
+            "panel_open",
+            json!({}),
+        );
+        assert_eq!(denied["isError"], true);
+        let a = panel_call(&state, "session:a", "owner", None, "panel_open", json!({}));
+        let b = panel_call(&state, "session:b", "owner", None, "panel_open", json!({}));
+        assert_ne!(
+            a["structuredContent"]["panel_id"],
+            b["structuredContent"]["panel_id"]
+        );
+    }
+
+    #[test]
+    fn panel_records_errors_and_supports_incremental_reads() {
+        let state = test_state();
+        let open = panel_call(
+            &state,
+            "session:a",
+            "owner",
+            Some("chat"),
+            "panel_open",
+            json!({}),
+        );
+        let id = open["structuredContent"]["panel_id"].clone();
+        let result = panel_call(
+            &state,
+            "session:a",
+            "owner",
+            Some("chat"),
+            "file_read",
+            json!({"path":"/missing"}),
+        );
+        assert_eq!(result["isError"], true);
+        let read = state
+            .panels
+            .read(&state, "owner", json!({"panel_id":id}))
+            .unwrap();
+        assert_eq!(read["entries"][0]["status"], "failed");
+        let detail = state
+            .panels
+            .read(
+                &state,
+                "owner",
+                json!({"panel_id":id,"result_id":read["entries"][0]["result_id"]}),
+            )
+            .unwrap();
+        assert!(detail["detail"]["data"]["error"].is_string());
+        let next = state
+            .panels
+            .read(
+                &state,
+                "owner",
+                json!({"panel_id":id,"after":read["version"]}),
+            )
+            .unwrap();
+        assert_eq!(next["entries"], json!([]));
+    }
+
+    #[test]
+    fn panel_streaming_does_not_consume_job_completion() {
+        let state = test_state();
+        let open = panel_call(
+            &state,
+            "session:a",
+            "owner",
+            Some("chat"),
+            "panel_open",
+            json!({}),
+        );
+        let id = open["structuredContent"]["panel_id"].clone();
+        let run = panel_call(
+            &state,
+            "session:a",
+            "owner",
+            Some("chat"),
+            "exec_start",
+            json!({"command":"printf panel-output"}),
+        );
+        let result_id = run["structuredContent"]["result_id"].clone();
+        let job_id = run["structuredContent"]["job_id"].as_str().unwrap();
+        for _ in 0..100 {
+            if state
+                .jobs
+                .poll_for_caller(
+                    JobPollRequest {
+                        job_id: job_id.into(),
+                    },
+                    "session:a",
+                )
+                .unwrap()
+                .status
+                != "running"
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let read = state
+            .panels
+            .read(
+                &state,
+                "owner",
+                json!({"panel_id":id,"result_id":result_id}),
+            )
+            .unwrap();
+        assert_eq!(read["detail"]["data"]["stdout"], "panel-output");
+        assert_eq!(read["entries"][0]["status"], "completed");
+        let delivered = panel_call(
+            &state,
+            "session:a",
+            "owner",
+            Some("chat"),
+            "target_current",
+            json!({}),
+        );
+        assert_eq!(
+            delivered["structuredContent"]["completed_jobs"][0]["job_id"],
+            job_id
+        );
+    }
+
+    #[test]
+    fn panel_parallel_records_have_unique_versions_and_bounded_history() {
+        let state = test_state();
+        let mut workers = Vec::new();
+        for worker in 0..4 {
+            let state = Arc::clone(&state);
+            workers.push(std::thread::spawn(move || {
+                for n in 0..55 {
+                    let data = json!({"command":format!("{worker}:{n}"),"exit_code":0});
+                    let id = state.results.store("session:a", &data).unwrap();
+                    state
+                        .panels
+                        .record("owner", "chat", "session:a", "exec", &id, &data)
+                        .unwrap();
+                }
+            }));
+        }
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        let id = state.panels.open("owner", "chat").unwrap()["panel_id"].clone();
+        let read = state
+            .panels
+            .read(&state, "owner", json!({"panel_id":id}))
+            .unwrap();
+        assert_eq!(read["version"], 220);
+        assert_eq!(read["oldest_seq"], 21);
+        assert_eq!(read["entries"].as_array().unwrap().len(), 200);
+        for (i, entry) in read["entries"].as_array().unwrap().iter().enumerate() {
+            assert_eq!(entry["seq"], (i + 21) as u64);
+        }
     }
 }

@@ -14,3 +14,5 @@ pub mod result_store;
 pub mod secret;
 pub mod terminal;
 pub mod tools;
+
+pub mod panel;

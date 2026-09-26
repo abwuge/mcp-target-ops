@@ -71,6 +71,7 @@ fn handle_request(state: Arc<AppState>, mut request: Request) -> Result<()> {
         (Method::Post, "/" | MCP_PATH) => {
             let incoming_session = auth::mcp_session_id(&request);
             let fallback_caller_key = auth::caller_key(&request);
+            let owner_key = auth::owner_key(&state, &request);
             let mut body = Vec::new();
             request.as_reader().read_to_end(&mut body)?;
             let new_session =
@@ -80,7 +81,7 @@ fn handle_request(state: Arc<AppState>, mut request: Request) -> Result<()> {
                 .or(incoming_session.as_ref())
                 .map(|session| format!("session:{session}"))
                 .unwrap_or(fallback_caller_key);
-            match mcp::handle_json_bytes_for_caller(state, &body, &caller_key)? {
+            match mcp::handle_json_bytes_for_identity(state, &body, &caller_key, &owner_key)? {
                 Some(response) => {
                     if let Some(session_id) = new_session.as_deref() {
                         respond_bytes_with_headers(

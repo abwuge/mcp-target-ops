@@ -86,15 +86,18 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
   <details class="details" id="details"><summary>Details</summary><div class="meta" id="meta"></div></details>
 </details>
 <script>
-(() => {
-  const execution = document.getElementById('execution');
-  const title = document.getElementById('title');
-  const pathEl = document.getElementById('path');
-  const kindEl = document.getElementById('kind');
-  const statusEl = document.getElementById('status');
-  const viewer = document.getElementById('viewer');
-  const meta = document.getElementById('meta');
-  const details = document.getElementById('details');
+((mount) => {
+  if (globalThis.targetOpsRenderers) globalThis.targetOpsRenderers['exec-terminal'] = mount;
+  else mount(document);
+})((root, panelMode = false) => {
+  const execution = root.getElementById('execution');
+  const title = root.getElementById('title');
+  const pathEl = root.getElementById('path');
+  const kindEl = root.getElementById('kind');
+  const statusEl = root.getElementById('status');
+  const viewer = root.getElementById('viewer');
+  const meta = root.getElementById('meta');
+  const details = root.getElementById('details');
 
   const normalColors = ['var(--ansi-black)','var(--ansi-red)','var(--ansi-green)','var(--ansi-yellow)','var(--ansi-blue)','var(--ansi-magenta)','var(--ansi-cyan)','var(--ansi-white)'];
   const brightColors = ['var(--ansi-bright-black)','var(--ansi-bright-red)','var(--ansi-bright-green)','var(--ansi-bright-yellow)','var(--ansi-bright-blue)','var(--ansi-bright-magenta)','var(--ansi-bright-cyan)','var(--ansi-bright-white)'];
@@ -160,6 +163,7 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     sleeping = true;
   }
   function scheduleSleepOnly() {
+    if (panelMode) return;
     if (sleepTimer) window.clearTimeout(sleepTimer);
     sleepTimer = window.setTimeout(sleepCard, runtimeConfig.sleepAfterMs);
   }
@@ -391,6 +395,8 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
     } catch (_) { viewer.innerHTML = '<div class="notice">Result unavailable.</div>'; }
   }
 
+  if (panelMode) return { render(data, input) { render(data, input, false); execution.open = true; if (data.status === 'running') status('Running'); else if (data.status === 'unavailable') status('Unavailable', 'warn'); } };
+
   execution.addEventListener('toggle', () => {
     if (execution.open) {
       if (sleepTimer) window.clearTimeout(sleepTimer);
@@ -419,7 +425,7 @@ body { margin: 0; padding: 10px; background: transparent; color: inherit; }
   }
   hydrateLegacyInitialResult();
   initializeBridge().catch(error => console.error('Failed to initialize MCP Apps bridge:', error));
-})();
+});
 </script>
 </body>
 </html>

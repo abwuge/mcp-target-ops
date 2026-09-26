@@ -11,9 +11,8 @@ filesystem roots, timeouts, and output limits.
 
 It can run over stdio for local clients or HTTP for remote MCP clients and
 ChatGPT. HTTP mode also includes OAuth, ChatGPT file import/export metadata,
-compact inventory cards for targets and downstream MCP servers, a
-non-interactive command-result MCP App for `exec`, and a human-readable MCP App
-for reviewing file changes.
+a shared operation panel for command output, file reads/changes, and target or
+downstream MCP server inventory.
 
 > [!CAUTION]
 > Target Ops can execute commands and modify files. Keep the local target
@@ -23,7 +22,7 @@ for reviewing file changes.
 
 ## Highlights
 
-- One interface for local and SSH targets: 39 model-facing tools plus two App-only helpers
+- One interface for local and SSH targets: 40 model-facing tools plus two App-only helpers
 - Persistent OpenSSH workers for remote file operations
 - Foreground commands plus cancellable background jobs with live incremental output
 - Persistent PTY terminals with live resize support
@@ -31,7 +30,7 @@ for reviewing file changes.
   validated multi-file patches with rollback, and centrally managed expiring file backups
 - File-backed secret injection without placing secret values in MCP arguments
 - ChatGPT and connector file import/export with bounded transfer sizes
-- Self-contained MCP Apps for target/MCP-server inventory, live `exec` results,
+- One shared MCP App for target/MCP-server inventory, live `exec` results,
   and file review; command output renders ANSI styling safely, while file changes
   show full added/deleted content and editor-style diffs
 - Allowlisted downstream Streamable HTTP MCP gateway
@@ -244,10 +243,10 @@ Process-wide runtime behavior lives under `[runtime]`:
 | `file_backup_max_entries` | `1024` | Maximum retained snapshot count; also bounds empty/tiny-file backup metadata |
 | `terminal_default_rows` | `30` | Default PTY rows |
 | `terminal_default_cols` | `120` | Default PTY columns |
-| `app_success_collapse_ms` | `3000` | App card auto-collapse delay after success |
-| `app_failure_collapse_ms` | `6000` | App card auto-collapse delay after failure/warning |
-| `app_sleep_after_ms` | `30000` | Delay before a collapsed App discards heavy DOM and relies on result restoration |
-| `app_job_poll_interval_ms` | `1000` | Delay after each App job output response before polling again |
+| `app_success_collapse_ms` | `3000` | Historical standalone card auto-collapse delay after success |
+| `app_failure_collapse_ms` | `6000` | Historical standalone card auto-collapse delay after failure/warning |
+| `app_sleep_after_ms` | `30000` | Historical standalone card delay before discarding heavy DOM |
+| `app_job_poll_interval_ms` | `1000` | Delay after each active panel/job response before polling again (idle panel: at least 5 seconds) |
 
 Safety/protocol ceilings such as the 100 MiB absolute file-transfer maximum remain compiled hard limits rather than ordinary configuration knobs.
 
@@ -368,14 +367,15 @@ advanced deployments; see the example configuration.
 
 ## Tool catalog
 
-Target Ops publishes 40 tool descriptors: 39 model-facing tools and one App-only helper, `result_read`.
+Target Ops publishes 42 tool descriptors: 40 model-facing tools and two App-only helpers, `panel_read` and `result_read`.
 
 | Area | Tools |
 | --- | --- |
 | Server | `server_info` |
+| Operation panel | `panel_open`; App-only: `panel_read`, `result_read` |
 | Targets | `target_list`, `target_current`, `target_instructions`, `target_select`, `target_connect`, `target_disconnect` |
 | Downstream MCP | `mcp_server_list`, `mcp_tools_list`, `mcp_tool_call` |
-| Commands and jobs | `exec`, `exec_batch`, `exec_start`, `job_poll`, `job_output`, `job_wait`, `job_cancel`; App-only: `result_read` |
+| Commands and jobs | `exec`, `exec_batch`, `exec_start`, `job_poll`, `job_output`, `job_wait`, `job_cancel` |
 | Files and directories | `file_read`, `file_backup`, `file_backup_list`, `file_restore`, `file_backup_delete`, `file_list`, `file_find`, `file_edit`, `file_write`, `file_delete`, `file_import`, `file_export`, `file_transfer`, `file_patch`, `file_move`, `file_chmod`, `directory_create` |
 | Terminals | `terminal_open`, `terminal_send`, `terminal_read`, `terminal_resize`, `terminal_close` |
 
@@ -385,10 +385,45 @@ enabled, tool descriptors also advertise the configured OAuth scopes.
 
 ### Target and MCP server inventory
 
-`target_list` and `mcp_server_list` share the stable
-`ui://target-ops/inventory/v1.html` MCP App. The compact card shows target kind,
-active/enabled state, allowed operations and roots, or downstream server state,
-configuration source, timeout, response limit, and header-count metadata.
+`target_list` and `mcp_server_list` return data to the model and add an entry to
+the shared operation panel. The inventory renderer shows target policies and
+active/enabled state, or downstream server limits and configuration metadata.
+
+### Shared operation panel
+
+Call `panel_open` once per conversation (before commands if live output matters).
+Only this tool binds `ui://target-ops/panel/v1.html`. Commands, file reads/changes,
+and inventory tools return their normal structured results without creating new
+cards. Their results appear in the mounted panel through App-only `panel_read`.
+The panel uses left-hand operation navigation and a single right-hand detail view,
+with independent scrolling. It follows the latest result by default; selecting history turns off
+**Follow latest**. Only the selected result builds its full output/content DOM.
+
+Refreshes use a monotonic cursor for new entries and also update background job
+statuses. With running jobs, the delay after each response is
+`app_job_poll_interval_ms`; otherwise it is at least five seconds. Requests do
+not overlap. Hidden pages pause polling; errors pause until **Refresh** is selected.
+Panel reads never acknowledge job completion or perform target operations.
+
+Panel identity combines the authenticated owner with host `_meta["openai/session"]`
+when provided, otherwise an initialized MCP transport session (or the local stdio
+process). Sessionless clients without conversation metadata cannot open a panel:
+sharing a bearer token is not evidence of sharing a conversation. OAuth ownership
+uses the authenticated client in this single-operator server, and survives token
+refresh; pre-upgrade access tokens use a token fingerprint until renewed.
+
+Indexes persist in `runtime_dir/panels/`, bounded to 128 panels with 200 recent
+operations each; the oldest updated panel is evicted when another is created.
+Payloads remain in the existing bounded result cache. Reopen with `panel_open`
+if the host closes/unmounts the UI; the server restores the retained index, and
+widget state preserves the selected result when the host supplies it. A missing
+cached payload or expired/restarted job displays an explicit unavailable message.
+The host still owns iframe lifetime and placement: reopening can create another
+card, and the server cannot guarantee a permanent or automatically moved iframe.
+
+Refresh/reconnect the ChatGPT app after upgrading so it reloads tool descriptors.
+The four previous resource URIs and `result_read` remain available for saved
+historical cards; they are no longer bound to operation tools.
 
 ### Commands and background jobs
 
@@ -400,17 +435,25 @@ result per command. Sequential batches may stop on the first failure. Use
 or control flow; use `exec_batch` for unrelated inspections instead of joining
 them with shell separators.
 
-`exec`, `exec_batch`, and `exec_start` bind to the stable `ui://target-ops/exec-terminal/v1.html` MCP App. Synchronous `exec` remains the short-command path and returns its final result normally. For commands likely to run more than a few seconds, or whenever live output matters, prefer `exec_start`: it returns a job ID immediately, allowing the App to poll `job_output` without being blocked by the parent tool call. After each response, the App waits `runtime.app_job_poll_interval_ms` (default 1 second) before requesting more output. Requests do not overlap; host scheduling, network latency, and command output buffering can make visible updates less frequent. ANSI SGR color/style sequences are rendered safely instead of being shown as raw escape codes.
+`exec`, `exec_batch`, and `exec_start` add results to the shared panel. Synchronous
+`exec` remains the short-command path. Prefer `exec_start` when live output matters:
+it returns a job ID immediately, so the panel can show buffered stdout/stderr via
+read-only `panel_read` refreshes. Host scheduling, network latency, and process
+buffering can delay visible updates. ANSI SGR styling is rendered safely.
 
 For model-side workflows that only need to continue after a background command finishes, prefer `job_wait` over repeated `job_poll` or `job_output` calls. Its server-side default and cap come from `runtime.job_wait_default_timeout_ms` and `runtime.job_wait_max_timeout_ms`, and a call may request a shorter window.
 
-All Target Ops Apps use the same configurable result-card lifecycle. The default is to collapse successful cards after 3 seconds, failures/warnings after 6 seconds, and enter the DOM-light sleep state after 30 seconds. When an existing conversation is reopened, saved App results take a separate cold-start path: the App hydrates only the compact summary row before the bridge handshake, does not rebuild the heavy output/diff DOM until the user expands the card, and suppresses a duplicate host replay of that same historical result so it cannot rearm the fresh-result expansion timer. Apps also report intrinsic dimensions with the MCP Apps `ui/notifications/size-changed` notification using `ResizeObserver`, allowing a flexible-height host to shrink historical iframes to the collapsed row as soon as the bridge is ready. Static tool results are cached under `runtime_dir/results/` with no TTL; `runtime.result_cache_max_bytes` defaults to 100 MiB and eviction removes the least-recently-active whole session first. Reopening a sleeping card uses the App-only `result_read` helper and an opaque per-result `result_id`; new activity refreshes that session's LRU lifetime. Long-running job cards rebuild from the retained job output buffer only after expansion. The cards remain present and reopenable; Target Ops does not automatically request iframe teardown.
+Static tool results are cached under `runtime_dir/results/` with no TTL and a
+100 MiB default budget (`result_cache_max_bytes`), evicting whole least-recently-
+active sessions. Historical standalone cards retain their configurable collapse
+and sleep lifecycle; the shared panel stays open and loads only selected details.
+Both report intrinsic dimensions through `ui/notifications/size-changed`.
 
 `exec` and `exec_start` share the same `CommandSession` implementation for
 process lifecycle, stdout/stderr capture, timeout, cancellation, and incremental
 output. `exec` waits for the session and uses the target policy's default timeout
 when none is supplied; `exec_start` returns a job ID immediately and has no
-runtime timeout unless one is requested. Live UI output uses `job_output` polling for background jobs started by `exec_start` or promoted from `exec`. Child stdin is disconnected from the
+runtime timeout unless one is requested. The shared panel reads the same retained job buffers without consuming completion notifications for jobs started by `exec_start` or promoted from `exec`. Child stdin is disconnected from the
 MCP control stream. SSH command sessions still use dedicated local OpenSSH child
 processes for independent lifecycle, streaming, timeout, and cancellation, but
 those clients multiplex over a per-target OpenSSH ControlMaster when
@@ -505,7 +548,7 @@ remain process-local.
 
 ### ChatGPT file integration and review UI
 
-`file_read` binds to `ui://target-ops/file-read/v1.html`, which presents text with line numbers, range and hash metadata, and compact expandable batch results. This makes structured file reads easier to inspect than shell-based `cat`/`sed` output.
+`file_read` adds results to the shared panel using the file-read renderer, which presents text with line numbers, range and hash metadata, and compact expandable batch results. This makes structured file reads easier to inspect than shell-based `cat`/`sed` output.
 
 `file_import` accepts a ChatGPT or connector file parameter after runtime
 rewriting to a mounted local path or HTTPS file reference. It writes through the
@@ -538,11 +581,7 @@ metadata only.
 Both import and export use `runtime.file_transfer_default_max_bytes` (25 MiB by
 default) and retain a compiled 100 MiB hard maximum.
 
-File-changing tools bind to the stable MCP App resource:
-
-```text
-ui://target-ops/file-change/v1.html
-```
+File-changing tools add results to the shared operation panel. Its file-change renderer reuses the historical `ui://target-ops/file-change/v1.html` component.
 
 The self-contained widget:
 
@@ -553,7 +592,7 @@ The self-contained widget:
 - requests a bordered presentation and declares a closed network/resource CSP;
 - uses `server.public_base_url` as its widget domain when configured.
 
-The command result, file read, file change, and inventory MCP Apps use the same bordered card system: consistent 10 px outer radius, header spacing, monospace secondary text, editor-like content surface, expandable details, and shared success/warning/error pills. The OAuth authorization page keeps its full-page hierarchy while using the same system and monospace font families and related corner treatment.
+The command result, file read, file change, and inventory renderers use the same bordered card system: consistent 10 px outer radius, header spacing, monospace secondary text, editor-like content surface, expandable details, and shared success/warning/error pills. The OAuth authorization page keeps its full-page hierarchy while using the same system and monospace font families and related corner treatment.
 
 After changing tool descriptors or App metadata, reconnect or refresh the
 ChatGPT app so the client reloads `tools/list` and MCP resources.
@@ -685,6 +724,7 @@ Source layout:
 
 ```text
 assets/
+  panel.html             shared operation panel and refresh controller
   exec-terminal.html     MCP App non-interactive exec result interface
   file-change.html       MCP App file review interface
   file-read.html         MCP App single/batch file reader

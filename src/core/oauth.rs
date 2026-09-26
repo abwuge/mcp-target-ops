@@ -79,6 +79,9 @@ struct AuthorizationCode {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AccessToken {
+    // COMPAT(COMPAT-011): Access tokens persisted before panels lack client IDs.
+    #[serde(default)]
+    client_id: Option<String>,
     expires_at: SystemTime,
 }
 
@@ -324,6 +327,10 @@ impl OAuthState {
             .unwrap_or(false)
     }
 
+    pub fn token_client_id(&self, token: &str) -> Option<&str> {
+        self.tokens.get(token)?.client_id.as_deref()
+    }
+
     fn prune_expired(&mut self, now: SystemTime) {
         self.codes.retain(|_, code| code.expires_at > now);
         self.tokens.retain(|_, token| token.expires_at > now);
@@ -381,6 +388,7 @@ impl OAuthState {
         self.tokens.insert(
             access_token.clone(),
             AccessToken {
+                client_id: Some(client_id.clone()),
                 expires_at: now + Duration::from_secs(lifetimes.access_token_secs),
             },
         );
@@ -489,6 +497,7 @@ mod tests {
 
         assert_eq!(token.scope, "mcp:tools");
         assert!(state.access_token_valid(&token.access_token));
+        assert_eq!(state.token_client_id(&token.access_token), Some("client-1"));
 
         let refreshed = state
             .exchange_refresh_token(
@@ -504,6 +513,10 @@ mod tests {
             .expect("refresh succeeds");
         assert_ne!(refreshed.refresh_token, token.refresh_token);
         assert!(state.access_token_valid(&refreshed.access_token));
+        assert_eq!(
+            state.token_client_id(&refreshed.access_token),
+            Some("client-1")
+        );
 
         let err = state
             .exchange_refresh_token(
