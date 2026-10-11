@@ -15,9 +15,6 @@ rewrite_on_start = true
 # values ending in _bytes are raw bytes. Safety/protocol hard limits remain
 # compiled into the binary and cannot be raised through this section.
 [runtime]
-# Total on-disk budget for cached MCP App results. The cache has no TTL; once
-# this budget is exceeded, the least-recently-active whole session is evicted.
-result_cache_max_bytes = 104857600
 # Maximum number of background job entries retained in memory. Finished entries
 # are preferentially discarded when the registry reaches this size.
 max_retained_jobs = 128
@@ -69,17 +66,6 @@ file_backup_max_entries = 1024
 # Default PTY dimensions used by terminal_open when rows/cols are omitted.
 terminal_default_rows = 30
 terminal_default_cols = 120
-# Historical standalone cards only: delay before a successful card collapses.
-app_success_collapse_ms = 3000
-# Historical standalone cards only: delay before a failed/warning card collapses.
-app_failure_collapse_ms = 6000
-# Historical standalone cards only: delay before releasing output, diffs,
-# line rows, and ANSI spans. The card can later restore data from result cache.
-app_sleep_after_ms = 30000
-# Delay after each active panel/job output response before polling again.
-# An idle shared panel waits at least 5 seconds; hidden panels pause polling.
-# Host/network latency adds to this delay; it is not a guaranteed refresh rate.
-app_job_poll_interval_ms = 1000
 
 [server]
 # Server name advertised in the MCP initialize response.
@@ -102,8 +88,8 @@ runtime_dir = "/tmp/mcp-target-ops"
 # instead of storing the token here.
 # http_bearer_token = "change-me"
 #
-# Exact public HTTPS origin used by OAuth metadata, generated download links, and
-# the ChatGPT MCP App widget domain. Do not include a trailing slash. You may
+# Exact public HTTPS origin used by OAuth metadata and download links.
+# Do not include a trailing slash. You may
 # also use MCP_TARGET_OPS_PUBLIC_BASE_URL.
 # public_base_url = "https://mcp.example.com"
 #

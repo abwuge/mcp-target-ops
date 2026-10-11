@@ -48,9 +48,6 @@ pub enum FileExportDelivery {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeConfig {
-    #[serde(default = "default_result_cache_max_bytes")]
-    pub result_cache_max_bytes: u64,
-
     #[serde(default = "default_max_retained_jobs")]
     pub max_retained_jobs: usize,
 
@@ -107,18 +104,6 @@ pub struct RuntimeConfig {
 
     #[serde(default = "default_terminal_cols")]
     pub terminal_default_cols: u16,
-
-    #[serde(default = "default_app_success_collapse_ms")]
-    pub app_success_collapse_ms: u64,
-
-    #[serde(default = "default_app_failure_collapse_ms")]
-    pub app_failure_collapse_ms: u64,
-
-    #[serde(default = "default_app_sleep_after_ms")]
-    pub app_sleep_after_ms: u64,
-
-    #[serde(default = "default_app_job_poll_interval_ms")]
-    pub app_job_poll_interval_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -314,7 +299,6 @@ impl Default for ConfigManagementConfig {
 impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
-            result_cache_max_bytes: default_result_cache_max_bytes(),
             max_retained_jobs: default_max_retained_jobs(),
             exec_auto_background_after_ms: default_exec_auto_background_after_ms(),
             stream_default_max_bytes: default_stream_default_max_bytes(),
@@ -334,10 +318,6 @@ impl Default for RuntimeConfig {
             file_backup_max_entries: default_file_backup_max_entries(),
             terminal_default_rows: default_terminal_rows(),
             terminal_default_cols: default_terminal_cols(),
-            app_success_collapse_ms: default_app_success_collapse_ms(),
-            app_failure_collapse_ms: default_app_failure_collapse_ms(),
-            app_sleep_after_ms: default_app_sleep_after_ms(),
-            app_job_poll_interval_ms: default_app_job_poll_interval_ms(),
         }
     }
 }
@@ -530,10 +510,6 @@ fn default_max_output_bytes() -> usize {
     200_000
 }
 
-fn default_result_cache_max_bytes() -> u64 {
-    100 * 1024 * 1024
-}
-
 fn default_max_retained_jobs() -> usize {
     128
 }
@@ -604,22 +580,6 @@ fn default_terminal_rows() -> u16 {
 
 fn default_terminal_cols() -> u16 {
     120
-}
-
-fn default_app_success_collapse_ms() -> u64 {
-    3_000
-}
-
-fn default_app_failure_collapse_ms() -> u64 {
-    6_000
-}
-
-fn default_app_sleep_after_ms() -> u64 {
-    30_000
-}
-
-fn default_app_job_poll_interval_ms() -> u64 {
-    1000
 }
 
 pub const FILE_TRANSFER_HARD_MAX_BYTES: usize = 100 * 1024 * 1024;

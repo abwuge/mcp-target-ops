@@ -78,22 +78,6 @@ fn bearer_value(value: &str) -> Option<&str> {
         .then_some(token)
 }
 
-// Authentication is checked before this key is used. Never use host-provided
-// conversation metadata as an authentication credential.
-pub(super) fn owner_key(state: &AppState, request: &Request) -> String {
-    if let Some(token) = bearer_token(request) {
-        if state.config.server.http_bearer_token.as_deref() == Some(token) {
-            return format!("bearer:{}", hex_bytes(&Sha256::digest(token.as_bytes())));
-        }
-        if let Some(client) = state.oauth.lock().unwrap().token_client_id(token) {
-            return format!("oauth:{client}");
-        }
-        // COMPAT(COMPAT-011): Pre-panel OAuth records did not persist client IDs.
-        return format!("bearer:{}", hex_bytes(&Sha256::digest(token.as_bytes())));
-    }
-    "http:anonymous".into()
-}
-
 #[cfg(test)]
 mod tests {
     use super::bearer_value;

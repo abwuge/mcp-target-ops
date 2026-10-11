@@ -27,9 +27,6 @@ rewrite_on_start = true
 # values ending in _bytes are raw bytes. Safety/protocol hard limits remain
 # compiled into the binary and cannot be raised here.
 [runtime]
-# Total on-disk budget for cached MCP App results. There is no TTL; when this
-# budget is exceeded, the least-recently-active whole session is evicted.
-result_cache_max_bytes = 104857600
 # Maximum number of background job entries retained in memory.
 max_retained_jobs = 128
 # Foreground wait before an ordinary exec is promoted to the same running command
@@ -76,15 +73,6 @@ file_backup_max_entries = 1024
 # Default terminal_open PTY size when rows/cols are omitted.
 terminal_default_rows = 30
 terminal_default_cols = 120
-# Auto-collapse delay for successful MCP App result cards.
-app_success_collapse_ms = 3000
-# Auto-collapse delay for failed, timed-out, or warning-like App result cards.
-app_failure_collapse_ms = 6000
-# Delay before a collapsed App releases heavy DOM and relies on cached restore.
-app_sleep_after_ms = 30000
-# Delay after each job_output response before the command App polls again.
-# Host/network latency adds to this delay; it is not a guaranteed refresh rate.
-app_job_poll_interval_ms = 1000
 
 [server]
 # Server name advertised during MCP initialize.
@@ -101,7 +89,7 @@ oauth_refresh_token_ttl_secs = 2592000
 # ring buffer when a session exceeds the configured size.
 terminal_ring_buffer_bytes = 524288
 # runtime_dir is populated with this machine's platform-specific default and is
-# used for runtime state such as App result cache files.
+# used for runtime state such as file backups and download links.
 # Environment-backed or secret-bearing options are intentionally not materialized
 # here unless you configure them yourself, so environment secrets are never
 # copied into this file by the startup rewrite.
@@ -381,7 +369,7 @@ mod tests {
 name = "custom"
 
 [runtime]
-result_cache_max_bytes = 12345
+max_retained_jobs = 123
 
 [targets.dev]
 kind = "ssh"
@@ -398,7 +386,7 @@ url = "https://example.com/mcp"
         let written = fs::read_to_string(&path).unwrap();
 
         assert_eq!(config.server.name, "custom");
-        assert_eq!(config.runtime.result_cache_max_bytes, 12345);
+        assert_eq!(config.runtime.max_retained_jobs, 123);
         assert!(written.contains("# keep this comment"));
         assert!(written.contains("control_master = true"));
         assert!(written.contains("control_persist_secs = 1800"));

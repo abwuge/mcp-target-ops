@@ -7,7 +7,7 @@ use crate::{
     },
     tooling::{
         download::DownloadRegistry, file_backup::FileBackupStore, job::JobRegistry,
-        result_store::ResultStore, terminal::TerminalRegistry,
+        terminal::TerminalRegistry,
     },
     transport::ssh::SshSessionRegistry,
 };
@@ -26,8 +26,6 @@ pub struct AppState {
     pub ssh_sessions: SshSessionRegistry,
     pub terminals: TerminalRegistry,
     pub jobs: JobRegistry,
-    pub results: ResultStore,
-    pub panels: crate::tooling::panel::PanelStore,
     pub downloads: DownloadRegistry,
     pub backups: Arc<FileBackupStore>,
     pub oauth: Mutex<OAuthState>,
@@ -60,10 +58,6 @@ impl AppState {
     pub fn new(config: Config) -> Result<Self> {
         config.ensure_runtime_dir()?;
 
-        let results = ResultStore::new(
-            &config.server.runtime_dir,
-            config.runtime.result_cache_max_bytes,
-        )?;
         let terminals =
             TerminalRegistry::new(config.server.terminal_ring_buffer_bytes, &config.runtime);
         let jobs = JobRegistry::new(config.runtime.clone());
@@ -78,8 +72,6 @@ impl AppState {
             ssh_sessions: SshSessionRegistry::new()?,
             terminals,
             jobs,
-            panels: crate::tooling::panel::PanelStore::new(&config.server.runtime_dir)?,
-            results,
             downloads,
             backups,
             oauth: Mutex::new(OAuthState::load(config.server.oauth_state_file.clone())?),

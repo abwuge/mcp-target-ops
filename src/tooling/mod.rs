@@ -10,9 +10,6 @@ pub mod file_transfer;
 pub mod fs;
 pub mod job;
 pub mod mcp_client;
-pub mod result_store;
 pub mod secret;
 pub mod terminal;
 pub mod tools;
-
-pub mod panel;

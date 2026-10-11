@@ -14,10 +14,6 @@ pub(super) fn validate(config: &Config) -> Result<()> {
 
 fn validate_runtime(config: &Config) -> Result<()> {
     let runtime = &config.runtime;
-    validate_nonzero(
-        "runtime.result_cache_max_bytes",
-        runtime.result_cache_max_bytes,
-    )?;
     validate_nonzero("runtime.max_retained_jobs", runtime.max_retained_jobs)?;
     validate_nonzero(
         "runtime.exec_auto_background_after_ms",
@@ -127,19 +123,7 @@ fn validate_runtime(config: &Config) -> Result<()> {
         "runtime.terminal_default_cols",
         runtime.terminal_default_cols,
     )?;
-    validate_nonzero(
-        "runtime.app_success_collapse_ms",
-        runtime.app_success_collapse_ms,
-    )?;
-    validate_nonzero(
-        "runtime.app_failure_collapse_ms",
-        runtime.app_failure_collapse_ms,
-    )?;
-    validate_nonzero("runtime.app_sleep_after_ms", runtime.app_sleep_after_ms)?;
-    validate_nonzero(
-        "runtime.app_job_poll_interval_ms",
-        runtime.app_job_poll_interval_ms,
-    )
+    Ok(())
 }
 
 fn validate_server(config: &Config) -> Result<()> {

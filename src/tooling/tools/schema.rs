@@ -2,13 +2,6 @@ use serde_json::{json, Value};
 
 pub(super) fn output_schema(name: &str) -> Value {
     let mut schema = match name {
-        "panel_open" => {
-            json!({"type":"object","properties":{"panel_id":{"type":"string"},"version":{"type":"integer"}},"required":["panel_id","version"],"additionalProperties":false})
-        }
-        "panel_read" => json!({"type":"object","properties":{
-            "panel_id":{"type":"string"},"version":{"type":"integer"},"generation":{"type":"string"},"reset":{"type":"boolean"},"oldest_seq":{"type":"integer"},
-            "entries":{"type":"array","items":{"type":"object"}},"detail":{"type":["object","null"]}
-        },"required":["panel_id","version","oldest_seq","entries","detail"],"additionalProperties":false}),
         "server_info" => json!({
             "type": "object",
             "properties": {
@@ -112,15 +105,6 @@ pub(super) fn output_schema(name: &str) -> Value {
                 "timed_out": { "type": "boolean" }
             },
             "required": ["command", "resolved_target"],
-            "additionalProperties": false
-        }),
-        "result_read" => json!({
-            "type": "object",
-            "properties": {
-                "found": { "type": "boolean" },
-                "data": {}
-            },
-            "required": ["found"],
             "additionalProperties": false
         }),
         "exec_batch" => json!({
@@ -570,32 +554,11 @@ pub(super) fn output_schema(name: &str) -> Value {
     if matches!(name, "exec" | "exec_start") {
         schema["properties"]["command"] = json!({"type":"string"});
     }
-    if caches_app_result(name) {
-        schema["properties"]["result_id"] = json!({ "type": "string" });
-    }
     schema["properties"]["completed_jobs"] = json!({
         "type": "array",
         "items": completed_job_schema()
     });
     schema
-}
-
-fn caches_app_result(name: &str) -> bool {
-    matches!(
-        name,
-        "target_list"
-            | "mcp_server_list"
-            | "exec"
-            | "exec_batch"
-            | "exec_start"
-            | "file_read"
-            | "file_edit"
-            | "file_write"
-            | "file_delete"
-            | "file_import"
-            | "file_patch"
-            | "file_move"
-    )
 }
 
 fn completed_job_schema() -> Value {

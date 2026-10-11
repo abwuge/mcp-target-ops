@@ -9,8 +9,7 @@ SSH 主机上执行命令、管理文件、持续读取后台任务输出，以�
 每个目标都可以独立配置权限、可访问目录、超时时间与输出上限。
 
 它既可以通过 stdio 服务本地 MCP 客户端，也可以通过 HTTP 服务远程 MCP
-客户端与 ChatGPT。HTTP 模式还内置 OAuth、ChatGPT 文件导入/导出元数据、用于
-共享操作面板，集中展示目标与下游 MCP 服务器列表、命令输出、文件读取与变更。
+客户端与 ChatGPT。HTTP 模式还内置 OAuth 与 ChatGPT 文件导入/导出元数据。
 
 > [!CAUTION]
 > Target Ops 能够执行命令和修改文件。除非确有需要，否则应保持本机目标禁用；
@@ -19,7 +18,7 @@ SSH 主机上执行命令、管理文件、持续读取后台任务输出，以�
 
 ## 核心能力
 
-- 本机与 SSH 目标共用一套包含 40 个模型可见工具与 2 个 App-only 辅助工具的接口
+- 本机与 SSH 目标共用一套包含 39 个工具的接口
 - 普通远程命令与文件操作复用持久 OpenSSH worker
 - 支持前台命令，以及可取消、可增量读取输出的后台任务
 - 支持持久 PTY 终端和实时窗口尺寸调整
@@ -27,8 +26,6 @@ SSH 主机上执行命令、管理文件、持续读取后台任务输出，以�
   多文件补丁，以及统一管理且自动过期的文件备份
 - 从文件解析秘密并注入环境变量，秘密值不会出现在 MCP 参数中
 - 支持 ChatGPT/连接器文件导入导出，并限制传输大小
-- 共享 MCP App 面板：汇集目标/MCP 服务器列表、命令输出、文件读取与变更；
-  安全渲染 ANSI 样式，对新增/删除显示完整内容，对修改显示编辑器式差异
 - 仅允许访问预先配置服务器的下游 Streamable HTTP MCP 网关
 - 同时支持 stdio、HTTP、静态 Bearer Token、PKCE OAuth 2.0，以及持久化的
   轮换刷新令牌
@@ -213,7 +210,6 @@ rewrite_on_start = false
 
 | 配置项 | 默认值 | 用途 |
 | --- | ---: | --- |
-| `result_cache_max_bytes` | `104857600` | App 会话结果缓存总预算；超限时优先淘汰最久未活动的完整会话 |
 | `max_retained_jobs` | `128` | 进程内保留的后台任务条目数 |
 | `exec_auto_background_after_ms` | `5000` | 自适应 `exec` 在前台等待多久后自动转后台 |
 | `stream_default_max_bytes` | `65536` | 增量流/读取的默认单次字节上限 |
@@ -233,10 +229,6 @@ rewrite_on_start = false
 | `file_backup_max_entries` | `1024` | 最大保留快照数；同时限制空文件/小文件备份产生的元数据条目 |
 | `terminal_default_rows` | `30` | PTY 默认行数 |
 | `terminal_default_cols` | `120` | PTY 默认列数 |
-| `app_success_collapse_ms` | `3000` | 历史独立成功卡片自动折叠延迟 |
-| `app_failure_collapse_ms` | `6000` | 历史独立失败/warning 卡片自动折叠延迟 |
-| `app_sleep_after_ms` | `30000` | 历史独立卡片释放重 DOM、转入可恢复 sleep 的延迟 |
-| `app_job_poll_interval_ms` | `1000` | 面板/任务响应后到下一次轮询的等待时间；空闲面板至少 5 秒 |
 
 100 MiB 文件传输绝对上限等安全/协议硬限制仍编译在程序中，不作为普通可调配置开放。
 
@@ -250,7 +242,7 @@ rewrite_on_start = false
 | `terminal_ring_buffer_bytes` | `524288` | 每个终端保留的输出大小 |
 | `runtime_dir` | 系统临时目录下的 `mcp-target-ops` | 启动时创建的运行目录 |
 | `http_bearer_token` | 无 | 保护 HTTP 路由的静态 Bearer Token |
-| `public_base_url` | 无 | 用于 OAuth 元数据、导出链接与 MCP App widget 元数据的外部 HTTPS 源站地址 |
+| `public_base_url` | 无 | 用于 OAuth 元数据、导出链接的外部 HTTPS 源站地址 |
 | `oauth_enabled` | `false` | 启用内置 OAuth 授权服务器 |
 | `oauth_authorization_password` | 无 | 授权页的可选密码门禁 |
 | `oauth_scopes` | `["mcp:tools"]` | OAuth 公布并校验的 scope |
@@ -350,12 +342,11 @@ URL 或秘密值。高级部署仍可使用内联 URL 或文件秘密引用，�
 
 ## 工具列表
 
-Target Ops 当前发布 42 个工具描述：40 个模型可见工具，以及仅供 App 使用的 `panel_read` 和 `result_read`。
+Target Ops 当前提供 39 个工具。
 
 | 类别 | 工具 |
 | --- | --- |
 | 服务 | `server_info` |
-| 操作面板 | `panel_open`；仅 App：`panel_read`、`result_read` |
 | 目标 | `target_list`、`target_current`、`target_instructions`、`target_select`、`target_connect`、`target_disconnect` |
 | 下游 MCP | `mcp_server_list`、`mcp_tools_list`、`mcp_tool_call` |
 | 命令与任务 | `exec`、`exec_batch`、`exec_start`、`job_poll`、`job_output`、`job_wait`、`job_cancel` |
@@ -366,38 +357,6 @@ Target Ops 当前发布 42 个工具描述：40 个模型可见工具，以及�
 并包含标准 MCP annotations。启用 OAuth 后，工具描述还会公布已配置的 OAuth
 scope。
 
-### 目标与 MCP 服务器列表卡片
-
-`target_list` 与 `mcp_server_list` 向模型返回数据，并向共享操作面板添加一条记录。
-列表展示目标策略、active/enabled 状态，或下游服务器限制与配置元数据。
-
-### 共享操作面板
-
-每个对话调用一次 `panel_open`；需要实时输出时，在执行命令前打开。
-只有这个工具绑定 `ui://target-ops/panel/v1.html`。命令、文件读取/修改和列表工具
-保持原有结构化结果返回，通过仅供 App 使用的 `panel_read` 更新面板，不再逐次新建卡片。
-面板左侧为命令/操作导航，右侧仅展示选中项，两侧独立滚动，不使用纵向展开列表。
-默认跟随最新操作；点击历史记录后关闭 **Follow latest**，避免新结果打断阅读。
-只为选中的结果构建完整输出、代码或 diff 内容。
-
-面板按游标获取新增记录，同时更新后台任务状态。存在运行任务时，每次响应后等待
-`app_job_poll_interval_ms` 再刷新；空闲时至少等待 5 秒。请求不重叠，页面隐藏时暂停，
-错误后点击 **Refresh** 重试。刷新不执行目标操作，也不消耗模型侧的任务完成通知。
-
-面板按认证身份隔离，优先使用宿主 `_meta["openai/session"]` 关联对话；没有该字段时
-使用初始化后的 MCP 连接会话或本地 stdio 进程。既没有会话头也没有对话标识的客户端
-不能打开面板，不能仅因 bearer 相同就合并不同对话。当前单操作者服务的 OAuth 身份
-绑定认证客户端，刷新令牌后仍可恢复；升级前的 access token 暂用令牌指纹，续期后使用新身份。
-
-索引保存在 `runtime_dir/panels/`，最多保留 128 个面板、每个面板最近 200 条操作；
-新面板超过上限时淘汰最久未更新的面板。完整结果继续使用原有受限缓存。
-宿主关闭或卸载 UI 后，可再次调用 `panel_open` 恢复保留的记录；宿主提供 widget state
-时也恢复选中项。缓存被淘汰、任务过期或服务重启导致任务输出丢失时会明确显示不可用。
-iframe 的保留与位置仍由宿主控制，重新打开可能新增卡片，不能保证永远使用同一个实例。
-
-升级后需刷新或重新连接 ChatGPT 应用，使其重新获取工具描述。原来的四个资源 URI
-与 `result_read` 继续支持已保存的历史卡片，但操作工具不再绑定这些独立卡片。
-
 ### 命令与后台任务
 
 `exec` 执行一个受限的非交互式 shell 命令或脚本。`exec_batch` 可在一次工具调用中
@@ -406,21 +365,14 @@ iframe 的保留与位置仍由宿主控制，重新打开可能新增卡片，�
 管道或控制流等 shell 状态，应继续使用 `exec`；若只是为了减少工具调用而批量进行互不
 依赖的检查，应优先使用 `exec_batch`，而不是用 shell 分隔符强行拼接。
 
-`exec`、`exec_batch` 与 `exec_start` 将结果加入共享面板。同步 `exec` 仍用于短命令；
-实时输出有价值时优先使用 `exec_start`，立即返回 job id，让面板通过只读 `panel_read`
-刷新获取保留的 stdout/stderr。宿主调度、网络与命令输出缓冲可能影响更新速度。
-ANSI SGR 颜色/样式继续被安全渲染。
+长命令使用 `exec_start`，通过 `job_output` 增量读取 stdout/stderr。
 
 对于模型侧只需要“等后台命令结束后再继续”的工作流，应优先使用 `job_wait`，而不是反复调用 `job_poll` 或 `job_output`。其服务端默认等待窗口与最大等待窗口分别来自 `runtime.job_wait_default_timeout_ms` 和 `runtime.job_wait_max_timeout_ms`，单次调用可以请求更短的等待时间。
-
-静态工具结果缓存在 `runtime_dir/results/`，不设置 TTL；默认总预算为 100 MiB，
-按会话 LRU 淘汰。历史独立卡片仍使用原有的折叠与 sleep 配置；共享面板保持打开，
-按需加载选中项。两种界面都通过 `ui/notifications/size-changed` 上报实际尺寸。
 
 `exec` 与 `exec_start` 现在共用同一套 `CommandSession`，统一处理进程生命周期、
 stdout/stderr 捕获、超时、取消与增量输出。`exec` 会等待会话结束，并在未显式设置
 超时时继续使用目标策略的默认 timeout；`exec_start` 会立即返回任务 ID，未指定时不
-设置运行时 timeout。共享面板读取同一份后台任务输出缓冲，不消耗任务完成通知，任务可以由 `exec_start` 启动或由 `exec` 转入后台。子进程 stdin 与 MCP 控制流隔离。SSH 命令会话使用独立 OpenSSH
+设置运行时 timeout。子进程 stdin 与 MCP 控制流隔离。SSH 命令会话使用独立 OpenSSH
 进程；远程文件操作继续复用每个目标的持久 SSH worker。
 
 两个命令工具都支持 `secret_env`。值可以来自纯文本文件，也可以来自 TOML/JSON
@@ -494,9 +446,7 @@ MCP 请求参数中；但被启动的命令仍可通过输出环境或主动发�
 增量读取，`terminal_send` 写入输入，`terminal_resize` 调整真实 PTY 尺寸。终端
 输出使用有界环形缓冲区，所有会话均为进程内状态。
 
-### ChatGPT 文件集成与审阅界面
-
-`file_read` 将结果加入共享面板，复用文件阅读组件，以带行号的代码阅读界面展示文本、范围与哈希元数据，并以可展开的紧凑列表展示批量结果。相比通过 `exec` 调用 `cat`/`sed`，结构化读取更容易审阅。
+### ChatGPT 文件集成
 
 `file_import` 接受经运行时重写后的 ChatGPT/连接器文件参数，可以是已挂载本地
 路径或 HTTPS 文件引用，并通过普通原子/CAS 写入策略落盘；HTTPS 重定向被禁用。
@@ -521,22 +471,6 @@ embedded base64 resource 与 `file` 结果字段，link 模式只返回下载元
 
 导入和导出默认上限均由 `runtime.file_transfer_default_max_bytes` 控制（默认 25 MiB），
 同时保留编译期 100 MiB 硬上限。
-
-文件变更工具将结果加入共享面板，复用原来的 `ui://target-ops/file-change/v1.html` 渲染组件。
-
-该自包含组件会：
-
-- 对新增和删除文件显示完整内容；
-- 对修改后的 UTF-8 文件显示带行号的编辑器式行内差异；
-- 在一个界面中展示多文件变更；
-- 将哈希、大小、编码与目标信息收纳在折叠详情中；
-- 请求带边框展示，并声明禁止外部网络和资源加载的 CSP；
-- 配置 `server.public_base_url` 时，将其同时用作组件域名。
-
-面板内的命令结果、文件读取、文件变更与 inventory 渲染器共用同一套带边框卡片体系：统一的 10 px 外圆角、标题区间距、等宽辅助文字、编辑器式内容区、可展开详情，以及一致的成功/警告/错误状态胶囊。OAuth 授权页仍保留完整页面所需的信息层级，但字体族、等宽字体与圆角处理也与工具界面保持一致。
-
-修改工具描述或 App 元数据后，应在 ChatGPT 中重新连接或刷新应用，使客户端重新
-获取 `tools/list` 和 MCP resources。
 
 ## HTTP 模式
 
@@ -655,11 +589,6 @@ cargo clippy --locked --all-targets -- -D warnings
 
 ```text
 assets/
-  panel.html             共享操作面板与刷新控制器
-  exec-terminal.html     MCP App 非交互式 exec 结果界面
-  file-change.html       MCP App 文件审阅界面
-  file-read.html         MCP App 单文件/批量文件读取界面
-  inventory-card.html    MCP App 目标与 MCP 服务器列表卡片
   oauth-authorize.html   OAuth 授权页
 
 src/core/
@@ -670,7 +599,6 @@ src/core/
   state.rs               进程内注册表与目标解析
 
 src/protocol/
-  apps.rs                MCP App 资源元数据
   html.rs                共用 HTML 转义
   http/mod.rs            HTTP 路由与公开端点发现
   http/auth.rs           Bearer Token 授权

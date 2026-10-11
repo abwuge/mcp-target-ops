@@ -1,4 +1,4 @@
-use super::{schema::output_schema, PANEL_UI_URI};
+use super::schema::output_schema;
 use serde_json::{json, Value};
 
 pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
@@ -19,13 +19,6 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
     };
 
     json!([
-        tool("panel_open", "Use this to open the shared operation panel once per conversation, before operations when live progress matters or after operations to review results. Subsequent commands, file reads/changes and inventory calls update the same panel automatically. Do not call again for each operation; call again only if the user wants to reopen the panel. Requires host conversation metadata or an initialized MCP session.", object_schema(vec![])),
-        tool("panel_read", "Refresh the existing operation panel without rendering another UI. App-only, read-only; does not acknowledge completed jobs.", object_schema(vec![
-            required_string("panel_id", "Panel id from panel_open."),
-            optional_string("generation", "Generation from the last refresh; detects a recreated panel after eviction."),
-            optional_integer("after", "Last version received; omit or use zero to restore the retained history."),
-            optional_string("result_id", "Load details for an operation in this panel."),
-        ])),
         tool("server_info", "Return server configuration summary and active target state.", object_schema(vec![])),
         tool("target_list", "List configured local and SSH targets, including policy summaries and active marker.", object_schema(vec![])),
         tool("target_current", "Return the currently selected active target, if any.", object_schema(vec![])),
@@ -50,11 +43,8 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
             optional_integer("max_output_bytes", "Maximum bytes to return for stdout and stderr."),
             optional_value("secret_env", "Map environment variable names to server-side secret references.", secret_env_schema()),
         ])),
-        tool("result_read", "Reload a cached tool result for a sleeping App view.", object_schema(vec![
-            required_string("result_id", "Opaque result id returned with the original App-backed tool result."),
-        ])),
         tool("exec_batch", "Run multiple logically independent non-interactive commands in one tool call and return a separate result for each. Prefer this over combining unrelated inspections with shell separators; use exec for commands that must share shell state such as cd, variables, pipelines, or control flow. Prefer batch file_read for reading several known files.", exec_batch_schema()),
-        tool("exec_start", "Start a non-interactive command as a background job and return immediately. Prefer this for longer commands or when live output matters. Use job_wait when the model only needs to continue after completion; use job_output for incremental output. The command App streams progress through job_output independently. Jobs support cancellation and optional runtime timeouts.", object_schema(vec![
+        tool("exec_start", "Start a non-interactive command as a background job and return immediately. Prefer this for longer commands or when live output matters. Use job_wait when the model only needs to continue after completion; use job_output for incremental output. Jobs support cancellation and optional runtime timeouts.", object_schema(vec![
             optional_string("target", "Target id: local or ssh:<profile>. Omit to use active target."),
             required_string("command", "Shell command to execute."),
             optional_string("cwd", "Working directory."),
@@ -138,25 +128,6 @@ fn tool(
     output_schema: Value,
     security_schemes: Option<&Value>,
 ) -> Value {
-    let description = if matches!(
-        name,
-        "exec"
-            | "exec_batch"
-            | "exec_start"
-            | "file_read"
-            | "file_write"
-            | "file_edit"
-            | "file_delete"
-            | "file_import"
-            | "file_patch"
-            | "file_move"
-            | "target_list"
-            | "mcp_server_list"
-    ) {
-        format!("{description} For visual results, open panel_open once per conversation and reuse that panel for subsequent operations.")
-    } else {
-        description.to_string()
-    };
     let mut descriptor = json!({
         "name": name,
         "description": description,
@@ -171,14 +142,13 @@ fn tool(
     let mut meta = serde_json::Map::new();
 
     // COMPAT(COMPAT-004): Several blocks below intentionally emit OpenAI-prefixed
-    // aliases alongside newer MCP Apps/file-rewrite metadata. See COMPATIBILITY.md.
+    // aliases alongside file-rewrite metadata. See COMPATIBILITY.md.
     if let Some(schemes) = security_schemes {
         object.insert("securitySchemes".to_string(), schemes.clone());
         meta.insert("securitySchemes".to_string(), schemes.clone());
     }
 
     if matches!(name, "target_list" | "mcp_server_list") {
-        meta.insert("openai/widgetAccessible".to_string(), Value::Bool(true));
         let (invoking, invoked) = if name == "target_list" {
             ("Listing targets…", "Targets listed")
         } else {
@@ -194,22 +164,7 @@ fn tool(
         );
     }
 
-    if name == "panel_open" {
-        meta.insert("ui".into(), json!({"resourceUri": PANEL_UI_URI}));
-        meta.insert("openai/outputTemplate".into(), json!(PANEL_UI_URI));
-        meta.insert("openai/widgetAccessible".into(), json!(true));
-    }
-    if matches!(name, "result_read" | "panel_read") {
-        meta.insert("ui".to_string(), json!({ "visibility": ["app"] }));
-        meta.insert("openai/widgetAccessible".to_string(), Value::Bool(true));
-        meta.insert(
-            "openai/visibility".to_string(),
-            Value::String("private".to_string()),
-        );
-    }
-
     if matches!(name, "exec" | "exec_batch" | "exec_start") {
-        meta.insert("openai/widgetAccessible".to_string(), Value::Bool(true));
         let (invoking, invoked) = if name == "exec_batch" {
             ("Running command batch…", "Command batch finished")
         } else if name == "exec_start" {
@@ -227,12 +182,7 @@ fn tool(
         );
     }
 
-    if name == "job_output" {
-        meta.insert("openai/widgetAccessible".to_string(), Value::Bool(true));
-    }
-
     if name == "file_read" {
-        meta.insert("openai/widgetAccessible".to_string(), Value::Bool(true));
         meta.insert(
             "openai/toolInvocation/invoking".to_string(),
             Value::String("Reading file…".to_string()),
@@ -247,7 +197,6 @@ fn tool(
         name,
         "file_edit" | "file_write" | "file_delete" | "file_import" | "file_patch" | "file_move"
     ) {
-        meta.insert("openai/widgetAccessible".to_string(), Value::Bool(true));
         meta.insert(
             "openai/toolInvocation/invoking".to_string(),
             Value::String("Applying file change…".to_string()),
@@ -292,9 +241,7 @@ fn tool(
 fn tool_annotations(name: &str) -> Value {
     let read_only = matches!(
         name,
-        "panel_open"
-            | "panel_read"
-            | "server_info"
+        "server_info"
             | "target_list"
             | "target_current"
             | "target_instructions"
@@ -303,7 +250,6 @@ fn tool_annotations(name: &str) -> Value {
             | "job_poll"
             | "job_output"
             | "job_wait"
-            | "result_read"
             | "file_read"
             | "file_list"
             | "file_backup_list"
@@ -763,25 +709,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_panel_open_renders_a_widget() {
+    fn catalog_contains_only_model_tools_without_app_metadata() {
         let tools = list_tools(None);
-        let rendered: Vec<_> = tools
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|t| t["_meta"]["ui"]["resourceUri"].is_string())
-            .collect();
-        assert_eq!(rendered.len(), 1);
-        assert_eq!(rendered[0]["name"], "panel_open");
-        assert_eq!(rendered[0]["_meta"]["ui"]["resourceUri"], PANEL_UI_URI);
-        let read = tools
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|t| t["name"] == "panel_read")
-            .unwrap();
-        assert_eq!(read["_meta"]["ui"]["visibility"], json!(["app"]));
-        assert_eq!(read["annotations"]["readOnlyHint"], true);
+        let tools = tools.as_array().unwrap();
+        assert_eq!(tools.len(), 39);
+        for tool in tools {
+            assert!(!matches!(
+                tool["name"].as_str().unwrap(),
+                "panel_open" | "panel_read" | "result_read"
+            ));
+            let meta = &tool["_meta"];
+            for key in [
+                "ui",
+                "openai/outputTemplate",
+                "openai/widgetAccessible",
+                "openai/visibility",
+            ] {
+                assert!(meta.get(key).is_none(), "{} advertises {key}", tool["name"]);
+            }
+            assert!(tool["outputSchema"]["properties"]
+                .get("result_id")
+                .is_none());
+        }
     }
 
     #[test]
@@ -799,7 +748,7 @@ mod tests {
     }
 
     #[test]
-    fn list_tools_bind_inventory_app_resource() {
+    fn inventory_tools_keep_invocation_metadata() {
         let tools = list_tools(None);
         let tools = tools.as_array().unwrap();
 
@@ -842,27 +791,6 @@ mod tests {
             file_read["_meta"]["openai/toolInvocation/invoked"],
             "File read"
         );
-    }
-
-    #[test]
-    fn result_read_is_app_only_and_exec_widget_can_call_tools() {
-        let tools = list_tools(None);
-        let tools = tools.as_array().unwrap();
-        let tool = tools
-            .iter()
-            .find(|tool| tool["name"] == "result_read")
-            .expect("app-only tool");
-        assert_eq!(tool["_meta"]["ui"]["visibility"], json!(["app"]));
-        assert_eq!(tool["_meta"]["openai/visibility"], "private");
-        assert_eq!(tool["_meta"]["openai/widgetAccessible"], true);
-
-        for name in ["exec", "exec_start", "job_output"] {
-            let tool = tools
-                .iter()
-                .find(|tool| tool["name"] == name)
-                .expect("widget-accessible command tool");
-            assert_eq!(tool["_meta"]["openai/widgetAccessible"], true);
-        }
     }
 
     #[test]
