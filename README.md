@@ -20,7 +20,7 @@ ChatGPT. HTTP mode also includes OAuth and ChatGPT file import/export metadata.
 
 ## Highlights
 
-- One interface for local and SSH targets: 39 tools
+- One interface for local and SSH targets: 38 tools
 - Persistent OpenSSH workers for remote file operations
 - Foreground commands plus cancellable background jobs with live incremental output
 - Persistent PTY terminals with live resize support
@@ -260,8 +260,6 @@ Safety/protocol ceilings such as the 100 MiB absolute file-transfer maximum rema
 | `oauth_refresh_token_ttl_secs` | `2592000` | Refresh-token lifetime |
 | `oauth_state_file` | `~/.config/mcp-target-ops/oauth-state.json` | Persistent OAuth clients and tokens |
 
-Target Ops also looks for an optional `AGENTS.md` beside the selected main config file (for example `~/.config/mcp-target-ops/AGENTS.md`). It is **not** loaded during MCP initialization. When a non-empty file exists, the first tool call that would actually touch a configured local/SSH target is blocked with a short preflight message. The model must then call `target_instructions`, which returns the complete UTF-8 file contents and marks those instructions as loaded for that MCP session; the original target operation can then be retried. Inventory-only tools such as `target_list` and ordinary conversation do not load the file. The file is never generated or modified by Target Ops.
-
 Deployment-specific values can be supplied by environment variables:
 
 | Variable | Purpose |
@@ -357,12 +355,12 @@ advanced deployments; see the example configuration.
 
 ## Tool catalog
 
-Target Ops publishes 39 tools.
+Target Ops publishes 38 tools.
 
 | Area | Tools |
 | --- | --- |
 | Server | `server_info` |
-| Targets | `target_list`, `target_current`, `target_instructions`, `target_select`, `target_connect`, `target_disconnect` |
+| Targets | `target_list`, `target_current`, `target_select`, `target_connect`, `target_disconnect` |
 | Downstream MCP | `mcp_server_list`, `mcp_tools_list`, `mcp_tool_call` |
 | Commands and jobs | `exec`, `exec_batch`, `exec_start`, `job_poll`, `job_output`, `job_wait`, `job_cancel` |
 | Files and directories | `file_read`, `file_backup`, `file_backup_list`, `file_restore`, `file_backup_delete`, `file_list`, `file_find`, `file_edit`, `file_write`, `file_delete`, `file_import`, `file_export`, `file_transfer`, `file_patch`, `file_move`, `file_chmod`, `directory_create` |

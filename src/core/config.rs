@@ -28,9 +28,6 @@ pub struct Config {
 
     #[serde(default)]
     pub mcp_servers: BTreeMap<String, McpServerConfig>,
-
-    #[serde(skip)]
-    pub target_instructions_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -283,7 +280,6 @@ impl Default for Config {
             server: ServerConfig::default(),
             targets,
             mcp_servers: BTreeMap::new(),
-            target_instructions_file: None,
         }
     }
 }

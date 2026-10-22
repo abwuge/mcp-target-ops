@@ -22,7 +22,6 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
         tool("server_info", "Return server configuration summary and active target state.", object_schema(vec![])),
         tool("target_list", "List configured local and SSH targets, including policy summaries and active marker.", object_schema(vec![])),
         tool("target_current", "Return the currently selected active target, if any.", object_schema(vec![])),
-        tool("target_instructions", "Load the optional AGENTS.md target-operation instructions for this MCP session. Call this immediately before the first tool that actually touches a local/SSH target. When a non-empty AGENTS.md exists, target-bound tools are blocked until this tool has been called successfully. Do not call it for ordinary conversation, target inventory, or downstream MCP work that does not operate a configured target.", object_schema(vec![])),
         tool("target_select", "Select a session-scoped active target. Later calls may omit target and use this sticky target.", object_schema(vec![required_string("target", "Target id: local or ssh:<profile>")])),
         tool("target_connect", "Connect or warm an SSH target persistent worker.", object_schema(vec![required_string("target", "Target id: local or ssh:<profile>")])),
         tool("target_disconnect", "Disconnect an SSH target persistent worker, or no-op for local targets.", object_schema(vec![required_string("target", "Target id: local or ssh:<profile>")])),
@@ -244,7 +243,6 @@ fn tool_annotations(name: &str) -> Value {
         "server_info"
             | "target_list"
             | "target_current"
-            | "target_instructions"
             | "mcp_server_list"
             | "mcp_tools_list"
             | "job_poll"
@@ -712,11 +710,11 @@ mod tests {
     fn catalog_contains_only_model_tools_without_app_metadata() {
         let tools = list_tools(None);
         let tools = tools.as_array().unwrap();
-        assert_eq!(tools.len(), 39);
+        assert_eq!(tools.len(), 38);
         for tool in tools {
             assert!(!matches!(
                 tool["name"].as_str().unwrap(),
-                "panel_open" | "panel_read" | "result_read"
+                "panel_open" | "panel_read" | "result_read" | "target_instructions"
             ));
             let meta = &tool["_meta"];
             for key in [

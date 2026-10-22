@@ -213,18 +213,6 @@ fn tools_call(state: Arc<AppState>, params: Value, caller_key: &str) -> Result<V
     }
 
     let params: ToolCallParams = serde_json::from_value(params)?;
-    if requires_target_instructions(&params.name)
-        && state.target_instructions_required(caller_key)?
-    {
-        return Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": "Target operation was not executed. Target-specific AGENTS.md instructions are available for this MCP session. Call target_instructions, read and follow the returned instructions, then retry the original target operation."
-            }],
-            "isError": true
-        }));
-    }
-
     let attach_completed = !matches!(params.name.as_str(), "job_poll" | "job_output" | "job_wait");
     match tools::call_tool_with_context(
         Arc::clone(&state),
@@ -342,42 +330,6 @@ fn tools_call(state: Arc<AppState>, params: Value, caller_key: &str) -> Result<V
     }
 }
 
-fn requires_target_instructions(name: &str) -> bool {
-    matches!(
-        name,
-        "target_connect"
-            | "target_disconnect"
-            | "exec"
-            | "exec_batch"
-            | "exec_start"
-            | "job_poll"
-            | "job_wait"
-            | "job_cancel"
-            | "file_read"
-            | "file_backup"
-            | "file_backup_list"
-            | "file_restore"
-            | "file_backup_delete"
-            | "file_list"
-            | "file_edit"
-            | "file_write"
-            | "file_delete"
-            | "file_import"
-            | "file_export"
-            | "file_transfer"
-            | "file_patch"
-            | "file_find"
-            | "file_move"
-            | "file_chmod"
-            | "directory_create"
-            | "terminal_open"
-            | "terminal_send"
-            | "terminal_read"
-            | "terminal_resize"
-            | "terminal_close"
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -425,29 +377,6 @@ mod tests {
         .unwrap()
     }
 
-    fn target_instruction_state() -> (Arc<AppState>, std::path::PathBuf, std::path::PathBuf) {
-        let temp = tempdir().unwrap();
-        let root = temp.keep();
-        let agents = root.join("AGENTS.md");
-        std::fs::write(
-            &agents,
-            "RULE-SENTINEL: obey these instructions only when operating a target.\n",
-        )
-        .unwrap();
-
-        let mut config = Config::default();
-        if let Some(TargetConfig::Local(local)) = config.targets.get_mut("local") {
-            local.enabled = true;
-            local.policy.allow_file_read = true;
-            local.policy.allowed_roots = vec![root.to_string_lossy().to_string()];
-        }
-        config.server.default_target = Some("local".to_string());
-        config.server.oauth_state_file = None;
-        config.server.runtime_dir = root.join("runtime");
-        config.target_instructions_file = Some(agents.clone());
-        (Arc::new(AppState::new(config).unwrap()), root, agents)
-    }
-
     #[test]
     fn protocol_exposes_tools_without_app_resources() {
         let state = test_state();
@@ -473,97 +402,35 @@ mod tests {
     }
 
     #[test]
-    fn initialize_never_loads_target_instructions() {
-        let (state, _, _) = target_instruction_state();
-        let result = initialize(&state, json!({})).unwrap();
-        assert!(result.get("instructions").is_none());
-    }
+    fn target_operations_ignore_adjacent_agents_file() {
+        let original = test_state();
+        let root = original.config.server.runtime_dir.parent().unwrap();
+        let config_path = root.join("config.toml");
+        let agents = root.join("AGENTS.md");
+        let content = b"RULE-SENTINEL: target operations previously required reading this file.\n";
+        std::fs::write(&agents, content).unwrap();
+        std::fs::write(&config_path, toml::to_string(&original.config).unwrap()).unwrap();
+        let state = Arc::new(AppState::new(Config::load_from_path(&config_path).unwrap()).unwrap());
 
-    #[test]
-    fn target_operation_is_blocked_until_instructions_are_loaded() {
-        let (state, root, _) = target_instruction_state();
-
-        let blocked = call_tool_for(
-            Arc::clone(&state),
-            "session:a",
-            1,
-            "file_list",
-            json!({ "target": "local", "path": root }),
-        );
-        assert_eq!(blocked["result"]["isError"], true);
-        let blocked_text = blocked["result"]["content"][0]["text"].as_str().unwrap();
-        assert!(blocked_text.contains("Call target_instructions"));
-        assert!(!blocked_text.contains("RULE-SENTINEL"));
-
-        let loaded = call_tool_for(
-            Arc::clone(&state),
-            "session:a",
-            2,
-            "target_instructions",
-            json!({}),
-        );
-        assert_eq!(loaded["result"]["isError"], false);
-        assert_eq!(
-            loaded["result"]["structuredContent"]["instructions"],
-            "RULE-SENTINEL: obey these instructions only when operating a target.\n"
-        );
-
-        let allowed = call_tool_for(
-            Arc::clone(&state),
-            "session:a",
-            3,
-            "file_list",
-            json!({ "target": "local", "path": root }),
-        );
-        assert_eq!(allowed["result"]["isError"], false);
-
-        let other_session = call_tool_for(
-            Arc::clone(&state),
-            "session:b",
-            4,
-            "file_list",
-            json!({ "target": "local", "path": root }),
-        );
-        assert_eq!(other_session["result"]["isError"], true);
-    }
-
-    #[test]
-    fn inventory_tools_do_not_trigger_target_instruction_gate() {
-        let (state, _, _) = target_instruction_state();
-        let result = call_tool_for(state, "session:inventory", 1, "target_list", json!({}));
-        assert_eq!(result["result"]["isError"], false);
-    }
-
-    #[test]
-    fn missing_target_instructions_do_not_block_target_operations() {
-        let (state, root, agents) = target_instruction_state();
-        std::fs::remove_file(agents).unwrap();
-
-        let result = call_tool_for(
-            state,
-            "session:missing",
-            1,
-            "file_list",
-            json!({ "target": "local", "path": root }),
-        );
-        assert_eq!(result["result"]["isError"], false);
-    }
-
-    #[test]
-    fn target_instructions_reports_unreadable_source() {
-        let (_state, root, _) = target_instruction_state();
-        let mut config = Config::default();
-        config.server.oauth_state_file = None;
-        config.server.runtime_dir = root.join("runtime2");
-        config.target_instructions_file = Some(root.clone());
-        let state = Arc::new(AppState::new(config).unwrap());
-
-        let result = call_tool_for(state, "session:error", 1, "target_instructions", json!({}));
-        assert_eq!(result["result"]["isError"], true);
-        assert!(result["result"]["content"][0]["text"]
+        let initialized = initialize(&state, json!({})).unwrap();
+        assert!(initialized.get("instructions").is_none());
+        for caller in ["session:a", "session:b"] {
+            let result = call_tool_for(
+                Arc::clone(&state),
+                caller,
+                1,
+                "file_list",
+                json!({ "target": "local", "path": root }),
+            );
+            assert_eq!(result["result"]["isError"], false);
+        }
+        let removed = call_tool_for(state, "session:a", 2, "target_instructions", json!({}));
+        assert_eq!(removed["result"]["isError"], true);
+        assert!(removed["result"]["content"][0]["text"]
             .as_str()
             .unwrap()
-            .contains("failed to read target instructions file"));
+            .contains("unknown tool: target_instructions"));
+        assert_eq!(std::fs::read(&agents).unwrap(), content);
     }
 
     #[test]
