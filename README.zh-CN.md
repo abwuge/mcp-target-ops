@@ -263,7 +263,7 @@ rewrite_on_start = false
 | `MCP_TARGET_OPS_OAUTH_PASSWORD` | 授权页密码 |
 | `MCP_TARGET_OPS_OAUTH_SCOPES` | 以空格分隔的 OAuth scope |
 | `MCP_TARGET_OPS_OAUTH_STATE_FILE` | OAuth 状态文件路径 |
-| `MCP_TARGET_OPS_DASHBOARD_PASSWORD` | 单独启用只读监控页面的管理员密码（用户名固定 `admin`） |
+| `MCP_TARGET_OPS_DASHBOARD_PASSWORD` | 可选的监控专用密码覆盖值；默认复用 OAuth 授权密码 |
 
 ### 目标
 
@@ -515,12 +515,17 @@ max_calls = 100000
 Unix 下数据库权限为 `0600`，存储目录为 `0700`。备份时请使用 SQLite
 备份接口或停机后复制，并留意 WAL/SHM 文件。
 
-**个人使用默认复用 OAuth 授权密码，无需再设置一套密码。**
+**个人使用默认复用 OAuth 授权密码，无需用户名、第二套密码或浏览器 Basic Auth 弹窗。**
 当 `server.oauth_enabled = true` 且配置了 `server.oauth_authorization_password`
 （或 `MCP_TARGET_OPS_OAUTH_PASSWORD`）时，访问 `https://你的域名/dashboard`，
-浏览器会弹出 HTTP Basic 身份验证，用户名固定为 `admin`，
-密码就是**已有的 OAuth 授权密码**。这意味着共用同一个密码，
-但授权页面与 Dashboard 仍分别登录，暂不实现跨页面单点登录。
+会看到**与 OAuth 授权页共用 CSS 的密码输入表单**。输入已有授权密码即可进入。
+Dashboard 与授权页视觉统一为浅色/深色自适应的中性风格。
+
+登录后使用独立的 HttpOnly、SameSite=Strict、HTTPS 下带 Secure 标志的浏览器 Cookie。
+数据库仅保存会话令牌哈希和绑定校验值，不保存原始 Cookie；12 小时后到期，
+可主动退出。会话会随 SQLite 持久化，**服务重启后仍能保持登录**；
+更换授权密码后，旧 Cookie 无效。没有跨页面自动登录，用户仍需在第一次访问时
+输入一次密码。
 
 若未来需要权限隔离，可用 `MCP_TARGET_OPS_DASHBOARD_PASSWORD` 或
 `activity.dashboard_password` **覆盖**默认密码。若两个密码都未设置，
@@ -591,8 +596,10 @@ oauth_state_file = "/home/me/.config/mcp-target-ops/oauth-state.json"
 | `GET|POST /oauth/authorize` | 授权页面，以及批准或拒绝请求 |
 | `POST /oauth/token` | 授权码与刷新令牌交换 |
 | `POST /oauth/register` | 启用时的动态客户端注册 |
-| `GET /dashboard` | 独立管理员认证的只读活动面板（默认不启用） |
-| `GET /dashboard/api` | 只读活动查询接口（同上） |
+| `GET /dashboard` | 与 OAuth 授权页同风格的密码表单；认证后显示只读监控页 |
+| `POST /dashboard/login` | 校验授权密码并设置持久浏览器登录 Cookie |
+| `POST /dashboard/logout` | 立即撤销当前 Dashboard 登录会话 |
+| `GET /dashboard/api` | 通过 Dashboard Cookie 验证的只读查询接口 |
 
 Bearer 身份验证只代表一个共享服务身份，不是多用户授权系统，也不会额外提供按
 用户划分的目标权限。

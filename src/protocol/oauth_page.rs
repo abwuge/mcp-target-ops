@@ -6,6 +6,18 @@ use super::html::escape;
 const TEMPLATE: &str = include_str!("../../assets/oauth-authorize.html");
 const UNKNOWN_CLIENT: &str = "MCP client";
 
+/// Shared stylesheet for the OAuth consent page and password-only Dashboard login.
+/// Keep a single source for both experiences so their visual design cannot drift.
+pub(super) fn shared_auth_styles() -> &'static str {
+    TEMPLATE
+        .split_once("<style>")
+        .expect("authorization stylesheet")
+        .1
+        .split_once("</style>")
+        .expect("authorization stylesheet end")
+        .0
+}
+
 pub(super) fn render(
     state: &AppState,
     params: &BTreeMap<String, String>,

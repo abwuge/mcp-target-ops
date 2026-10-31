@@ -81,7 +81,7 @@ max_calls = 100000
 # Only configure an independent password if the admin needs separate credentials:
 # MCP_TARGET_OPS_DASHBOARD_PASSWORD or the override below.
 # Without either password, the dashboard stays disabled.
-# Do not expose HTTP Basic auth over plain HTTP.
+# Publish the password form only over HTTPS; cookies are HttpOnly and SameSite=Strict.
 # dashboard_password = "do-not-put-secrets-here"
 
 [server]

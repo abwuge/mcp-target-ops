@@ -13,7 +13,7 @@
 <div class="app">
   <aside class="sidebar">
     <div class="brand">
-      <div class="brandmark"><span>⌘</span></div>
+      <div class="brandmark"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m5 7 5 5-5 5m8 0h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
       <div><div class="brandname">TARGET OPS</div><div class="brandcaption">MCP OBSERVABILITY</div></div>
     </div>
     <div class="nav-section">工作台</div>
@@ -37,6 +37,7 @@
         <span class="live-indicator"><i class="dot dot-green"></i> <span id="connectionState">已连接</span></span>
         <label class="auto-switch"><input type="checkbox" id="autoRefresh" checked><span class="switch"></span> 自动刷新</label>
         <button id="refresh" class="icon-button" title="刷新数据" aria-label="刷新数据">↻</button>
+        <form method="post" action="/dashboard/logout" class="logout-form"><button type="submit" class="logout-button">退出</button></form>
       </div>
     </div>
 

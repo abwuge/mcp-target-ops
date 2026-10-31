@@ -565,10 +565,15 @@ backup with its WAL files included.
 For a single-user installation, the Dashboard **reuses the existing OAuth
 consent password** (`server.oauth_authorization_password`, or
 `MCP_TARGET_OPS_OAUTH_PASSWORD`) when `server.oauth_enabled = true`.
-No additional Dashboard password is needed. Open
-`https://your-domain/dashboard` and authenticate with HTTP Basic username
-`admin` and the **same OAuth consent password**. The browser still prompts
-for credentials separately: this is password reuse, not a shared login session.
+No username or additional Dashboard password is needed. Visit
+`https://your-domain/dashboard` to see a password-only login page that
+**reuses the OAuth consent page stylesheet**. Both use neutral light/dark colors.
+
+After login the browser receives a 12-hour HttpOnly, SameSite=Strict Cookie
+(Secure with HTTPS). Only a hashed session identifier and bound verifier are
+persisted in SQLite, not the raw cookie. Login survives process restarts and
+password rotation invalidates older sessions. Logout immediately revokes access.
+This is not cross-page SSO: the password must be entered once per new browser session.
 
 For optional separation, `MCP_TARGET_OPS_DASHBOARD_PASSWORD` or
 `activity.dashboard_password` **overrides** the OAuth consent password.
@@ -645,8 +650,10 @@ state.
 | `GET|POST /oauth/authorize` | Authorization page, approval, and denial |
 | `POST /oauth/token` | Authorization-code and refresh-token exchange |
 | `POST /oauth/register` | Dynamic client registration when enabled |
-| `GET /dashboard` | Read-only activity UI (separate admin auth, disabled by default) |
-| `GET /dashboard/api` | Read-only activity data with the same admin auth |
+| `GET /dashboard` | Shared-style password-only login; read-only Dashboard after login |
+| `POST /dashboard/login` | Validates the existing OAuth password and issues a browser-only cookie |
+| `POST /dashboard/logout` | Invalidates the active Dashboard cookie |
+| `GET /dashboard/api` | Read-only activity data requiring the Dashboard session cookie |
 
 Bearer authentication represents one shared service identity. It is not a
 multi-user authorization system and does not add per-user target permissions.

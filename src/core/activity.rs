@@ -1,7 +1,10 @@
 use crate::core::{config::ActivityConfig, error::Result};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use rand::{rngs::OsRng, RngCore};
 use rusqlite::{params, params_from_iter, types::Value as SqlValue, Connection};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{
     fs::{self, OpenOptions},
     path::Path,
@@ -155,7 +158,14 @@ impl ActivityStore {
              CREATE INDEX IF NOT EXISTS idx_calls_session ON calls(session_key, started_ms DESC);
              CREATE INDEX IF NOT EXISTS idx_calls_name_time ON calls(name, started_ms DESC);
              CREATE INDEX IF NOT EXISTS idx_calls_status_time ON calls(status, started_ms DESC);
-             CREATE INDEX IF NOT EXISTS idx_sessions_last_seen ON sessions(last_seen_ms DESC);",
+             CREATE INDEX IF NOT EXISTS idx_sessions_last_seen ON sessions(last_seen_ms DESC);
+             CREATE TABLE IF NOT EXISTS dashboard_sessions (
+               token_hash TEXT PRIMARY KEY,
+               auth_binding TEXT NOT NULL,
+               created_ms INTEGER NOT NULL,
+               expires_ms INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_dashboard_expires ON dashboard_sessions(expires_ms);",
         )?;
         let store = Self {
             conn: Mutex::new(conn),
@@ -164,6 +174,70 @@ impl ActivityStore {
         };
         store.cleanup()?;
         Ok(store)
+    }
+
+    /// Browser-only session. Store hashes rather than bearer cookie values.
+    pub fn issue_dashboard_session(&self, password: &str) -> Result<String> {
+        let mut bytes = [0u8; 32];
+        OsRng.fill_bytes(&mut bytes);
+        let token = URL_SAFE_NO_PAD.encode(bytes);
+        let now = now_ms();
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM dashboard_sessions WHERE expires_ms <= ?1",
+            params![now],
+        )?;
+        tx.execute(
+            "INSERT INTO dashboard_sessions(token_hash,auth_binding,created_ms,expires_ms)
+             VALUES (?1,?2,?3,?4)",
+            params![
+                session_hash(&token),
+                session_auth_binding(&token, password),
+                now,
+                now + 12 * 3_600_000
+            ],
+        )?;
+        tx.execute(
+            "DELETE FROM dashboard_sessions WHERE token_hash NOT IN
+                (SELECT token_hash FROM dashboard_sessions ORDER BY created_ms DESC LIMIT 128)",
+            [],
+        )?;
+        tx.commit()?;
+        Ok(token)
+    }
+
+    pub fn dashboard_session_valid(&self, token: &str, password: &str) -> Result<bool> {
+        if token.len() != 43
+            || !token
+                .bytes()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == b'-' || ch == b'_')
+        {
+            return Ok(false);
+        }
+        let conn = self.conn.lock().unwrap();
+        let saved = conn.query_row(
+            "SELECT auth_binding FROM dashboard_sessions
+             WHERE token_hash=?1 AND expires_ms > ?2",
+            params![session_hash(token), now_ms()],
+            |row| row.get::<_, String>(0),
+        );
+        match saved {
+            Ok(saved) => Ok(constant_time_eq(
+                saved.as_bytes(),
+                session_auth_binding(token, password).as_bytes(),
+            )),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    pub fn revoke_dashboard_session(&self, token: &str) -> Result<()> {
+        self.conn.lock().unwrap().execute(
+            "DELETE FROM dashboard_sessions WHERE token_hash=?1",
+            params![session_hash(token)],
+        )?;
+        Ok(())
     }
 
     pub fn record(&self, event: Event) -> Result<()> {
@@ -247,6 +321,10 @@ impl ActivityStore {
         let tx = conn.transaction()?;
         let cutoff = now_ms() - (self.config.retention_days as i64) * 86_400_000;
         tx.execute("DELETE FROM calls WHERE started_ms < ?1", params![cutoff])?;
+        tx.execute(
+            "DELETE FROM dashboard_sessions WHERE expires_ms <= ?1",
+            params![now_ms()],
+        )?;
         tx.execute(
             "DELETE FROM calls WHERE id <= COALESCE(
                 (SELECT id FROM calls ORDER BY id DESC LIMIT 1 OFFSET ?1), -1)",
@@ -463,6 +541,28 @@ impl ActivityStore {
 const CLIENT_SQL: &str =
     "COALESCE(NULLIF(s.client_name,''),NULLIF(s.oauth_client_name,''),NULLIF(s.user_agent,''),'Unknown')";
 
+fn session_hash(token: &str) -> String {
+    format!("{:x}", Sha256::digest(token.as_bytes()))
+}
+
+fn session_auth_binding(token: &str, password: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"target-ops/dashboard-session/v1");
+    hasher.update(token.as_bytes());
+    hasher.update(password.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter()
+        .zip(b.iter())
+        .fold(0u8, |acc, (&x, &y)| acc | (x ^ y))
+        == 0
+}
+
 pub fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -483,6 +583,39 @@ mod tests {
         )
         .unwrap();
         (dir, store)
+    }
+
+    #[test]
+    fn browser_session_survives_restart_and_rejects_password_change() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("private/activity.sqlite");
+        let store = ActivityStore::open(&path, &ActivityConfig::default()).unwrap();
+        let token = store
+            .issue_dashboard_session("test-only-passphrase")
+            .unwrap();
+        assert!(store
+            .dashboard_session_valid(&token, "test-only-passphrase")
+            .unwrap());
+        assert!(!store.dashboard_session_valid(&token, "invalid").unwrap());
+        assert!(!store
+            .dashboard_session_valid("not-a-token", "test-only-passphrase")
+            .unwrap());
+        drop(store);
+        let reopened = ActivityStore::open(&path, &ActivityConfig::default()).unwrap();
+        assert!(reopened
+            .dashboard_session_valid(&token, "test-only-passphrase")
+            .unwrap());
+        assert!(!reopened
+            .dashboard_session_valid(&token, "changed-password")
+            .unwrap());
+        let bytes = fs::read(&path).unwrap();
+        assert!(!bytes
+            .windows(token.len())
+            .any(|slice| slice == token.as_bytes()));
+        reopened.revoke_dashboard_session(&token).unwrap();
+        assert!(!reopened
+            .dashboard_session_valid(&token, "test-only-passphrase")
+            .unwrap());
     }
 
     #[test]
