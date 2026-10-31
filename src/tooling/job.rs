@@ -628,6 +628,7 @@ mod tests {
         config.server.default_target = Some("local".to_string());
         config.server.oauth_state_file = None;
         config.server.runtime_dir = path.join("runtime");
+        config.activity.enabled = false;
         AppState::new(config).unwrap()
     }
 
@@ -644,6 +645,7 @@ mod tests {
         config.server.default_target = Some("local".to_string());
         config.server.oauth_state_file = None;
         config.server.runtime_dir = path.join("runtime");
+        config.activity.enabled = false;
         let state = AppState::new(config).unwrap();
         let started = std::time::Instant::now();
         let output = state
@@ -830,6 +832,7 @@ mod tests {
         config.server.default_target = Some("local".to_string());
         config.server.oauth_state_file = None;
         config.server.runtime_dir = path.join("runtime");
+        config.activity.enabled = false;
         let state = AppState::new(config).unwrap();
 
         let outcome = state

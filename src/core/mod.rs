@@ -1,3 +1,4 @@
+pub mod activity;
 pub mod config;
 pub mod error;
 pub mod oauth;

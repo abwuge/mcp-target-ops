@@ -536,6 +536,56 @@ Authorization: Bearer <token>
 Static bearer authentication and OAuth may be enabled together; either valid
 token type authorizes a protected request.
 
+### MCP Activity Dashboard
+
+Read-only monitoring is served at `GET /dashboard`, with query data at
+`GET /dashboard/api`. The self-contained UI shows call volume, top tools,
+success/failure rates, average and P95 latency, client and session groups,
+individual calls and their safe argument-key metadata. Filter by hour window,
+client, session, tool, outcome or search; refresh automatically every 15 seconds,
+or page through older calls. No frontend build tooling is required.
+
+```toml
+[activity]
+enabled = true
+retention_days = 30
+max_calls = 100000
+# database_path = "/home/me/.local/state/mcp-target-ops/calls.sqlite3"
+```
+
+The indexed SQLite WAL database defaults to
+`$XDG_STATE_HOME/mcp-target-ops/calls.sqlite3`, or
+`~/.local/state/mcp-target-ops/calls.sqlite3` if XDG_STATE_HOME is unset.
+Unlike the ephemeral `server.runtime_dir`, this location survives reboot.
+The retention window and row limit are configurable; old events cannot be
+retroactively recovered. On Unix, the state directory has mode `0700`
+and the DB file `0600`. Use the SQLite backup API or take a stopped-server
+backup with its WAL files included.
+
+The dashboard is **disabled unless** `MCP_TARGET_OPS_DASHBOARD_PASSWORD`
+(or `activity.dashboard_password`) is configured. Open
+`https://your-domain/dashboard` and authenticate with Basic username `admin`
+and that password. Keep the management endpoint behind HTTPS and preferably
+a reverse-proxy access restriction; never put the password in a URL or shell
+history. Dashboard access is independent of MCP Bearer/OAuth tool permissions
+and never grants permission to operate a target.
+
+Session attribution is best effort:
+
+- Echoed `Mcp-Session-Id` yields a protocol-session group; `DELETE /mcp`
+  marks it ended. One MCP session does not necessarily equal one chat thread.
+- Client name uses `initialize.clientInfo` if supplied, then registered
+  OAuth client metadata, then `User-Agent`; these values can be self-declared.
+- Sessionless HTTP requests share a hashed bearer-token group (or an
+  anonymous group), **not** a reliably distinct conversation.
+- stdio events are grouped by server process, not by conversation.
+
+**Metadata only:** timestamps, tool and protocol names, target, duration,
+outcome, error code, and argument field **names**. The database never stores
+command text, argument values, file contents, returned output, bearer tokens,
+or SSH secrets. Existing operational jobs, backups and OAuth-state files remain
+on their current storage mechanisms.
+
 ### OAuth for remote MCP and ChatGPT
 
 ```toml
@@ -586,6 +636,8 @@ state.
 | `GET|POST /oauth/authorize` | Authorization page, approval, and denial |
 | `POST /oauth/token` | Authorization-code and refresh-token exchange |
 | `POST /oauth/register` | Dynamic client registration when enabled |
+| `GET /dashboard` | Read-only activity UI (separate admin auth, disabled by default) |
+| `GET /dashboard/api` | Read-only activity data with the same admin auth |
 
 Bearer authentication represents one shared service identity. It is not a
 multi-user authorization system and does not add per-user target permissions.

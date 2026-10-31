@@ -263,6 +263,7 @@ rewrite_on_start = false
 | `MCP_TARGET_OPS_OAUTH_PASSWORD` | 授权页密码 |
 | `MCP_TARGET_OPS_OAUTH_SCOPES` | 以空格分隔的 OAuth scope |
 | `MCP_TARGET_OPS_OAUTH_STATE_FILE` | OAuth 状态文件路径 |
+| `MCP_TARGET_OPS_DASHBOARD_PASSWORD` | 单独启用只读监控页面的管理员密码（用户名固定 `admin`） |
 
 ### 目标
 
@@ -490,6 +491,52 @@ Authorization: Bearer <token>
 
 静态 Bearer 与 OAuth 可以同时启用，任一有效令牌都能通过受保护请求的认证。
 
+### MCP 调用监控 Dashboard
+
+内置只读页面位于 `GET /dashboard`，其查询接口为 `GET /dashboard/api`。
+页面提供调用趋势、热门工具、总数与失败率、平均/P95 耗时、会话与客户端、工具调用列表，
+并支持按时间（1 小时/24 小时/7 天/30 天）、客户端、会话、工具、状态和关键字筛选；
+点击一条记录可查看时间、目标、参数字段名及来源归组。页面每 15 秒自动刷新，
+支持关闭自动刷新和分批加载调用历史。页面无需前端构建、CDN 或额外 Node 进程。
+
+```toml
+[activity]
+enabled = true
+retention_days = 30
+max_calls = 100000
+# database_path = "/home/me/.local/state/mcp-target-ops/calls.sqlite3"
+```
+
+记录写入轻量的嵌入式 SQLite（WAL 模式）。数据库默认位于
+`$XDG_STATE_HOME/mcp-target-ops/calls.sqlite3`，未设置该变量时位于
+`~/.local/state/mcp-target-ops/calls.sqlite3`，**不放在可能随重启清空的 /tmp 运行目录**。
+数据库使用按时间、会话、工具和状态建立的索引；最多保留 30 天、100,000 条记录，
+可由配置调整。超出限额的记录会定期删除；已有历史不能从旧版本自动补录。
+Unix 下数据库权限为 `0600`，存储目录为 `0700`。备份时请使用 SQLite
+备份接口或停机后复制，并留意 WAL/SHM 文件。
+
+监控页面与 MCP 工具权限完全分离。**没有设置管理员密码时返回 404，默认无法访问**。
+在服务的运行环境中设置 `MCP_TARGET_OPS_DASHBOARD_PASSWORD`，然后访问
+`https://你的域名/dashboard`；浏览器会要求 HTTP Basic 身份验证，
+用户名为 `admin`，密码为该环境变量。线上请配合 HTTPS 和反向代理访问控制；
+不要把管理密码写进链接、启动命令历史或公开配置。此密码不授予任何 MCP 操作权限，
+OAuth/Bearer 客户端也不能仅凭其工具访问令牌读取监控历史。
+
+**会话识别的真实性边界：**
+
+- `Mcp-Session-Id`：采用客户端实际传回的协议会话标识，并在 `DELETE /mcp`
+  后标记结束；它并不必然与「一个聊天窗口」一一对应。
+- 客户端身份：优先使用 `initialize.clientInfo`，其次为已注册 OAuth 客户端名称，
+  最后为 HTTP `User-Agent`（均可能由客户端自行声明）。
+- 没有 Session ID 的 HTTP 请求：按 Bearer Token 的不可逆指纹合并，清楚标为
+  「凭证归组」，不声称能够区分共享同一个凭证的不同对话；匿名请求同样按来源归组。
+- stdio：只能按启动服务的进程实例归组，不存在跨请求会话 ID 时无法恢复聊天会话。
+
+为降低敏感数据泄露风险，默认只保存工具名称、时间戳、执行耗时、目标标识、
+状态、错误码和**参数字段名**，**不保存参数值、完整命令、文件内容、响应正文、
+访问令牌或 SSH 凭据**。工具本身的输出仍依照既有任务与终端机制处理，
+与活动数据库相互独立。
+
 ### 面向远程 MCP 与 ChatGPT 的 OAuth
 
 ```toml
@@ -537,6 +584,8 @@ oauth_state_file = "/home/me/.config/mcp-target-ops/oauth-state.json"
 | `GET|POST /oauth/authorize` | 授权页面，以及批准或拒绝请求 |
 | `POST /oauth/token` | 授权码与刷新令牌交换 |
 | `POST /oauth/register` | 启用时的动态客户端注册 |
+| `GET /dashboard` | 独立管理员认证的只读活动面板（默认不启用） |
+| `GET /dashboard/api` | 只读活动查询接口（同上） |
 
 Bearer 身份验证只代表一个共享服务身份，不是多用户授权系统，也不会额外提供按
 用户划分的目标权限。
@@ -567,7 +616,7 @@ Target Ops 使用多层控制，而不是把认证当作唯一边界：
 docker build -t mcp-target-ops .
 ```
 
-部署时应显式挂载配置、SSH 材料以及可写的 OAuth 状态目录，不能把凭据打进镜像。
+部署时应显式挂载配置、SSH 材料，以及 OAuth 状态和活动数据库的持久化目录，不能把凭据打进镜像。
 
 GitHub Actions 包含：
 

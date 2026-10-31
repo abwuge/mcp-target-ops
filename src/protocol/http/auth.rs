@@ -26,6 +26,19 @@ pub(super) fn request_authorized(state: &AppState, request: &Request) -> bool {
     oauth_configured && state.oauth.lock().unwrap().access_token_valid(token)
 }
 
+pub(super) fn oauth_client_metadata(
+    state: &AppState,
+    request: &Request,
+) -> (Option<String>, Option<String>) {
+    let Some(token) = bearer_token(request) else {
+        return (None, None);
+    };
+    let Some(client) = state.oauth.lock().unwrap().access_token_client(token) else {
+        return (None, None);
+    };
+    (Some(client.client_id), client.client_name)
+}
+
 pub(super) fn caller_key(request: &Request) -> String {
     if let Some(session_id) = mcp_session_id(request) {
         return format!("session:{session_id}");

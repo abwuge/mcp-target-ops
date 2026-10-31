@@ -74,6 +74,19 @@ file_backup_max_entries = 1024
 terminal_default_rows = 30
 terminal_default_cols = 120
 
+[activity]
+# Metadata-only history in a persistent SQLite database, independent of runtime_dir.
+# Never stores raw tool arguments, command strings, bearer tokens or responses.
+# The database defaults to $XDG_STATE_HOME/mcp-target-ops/calls.sqlite3 or
+# ~/.local/state/mcp-target-ops/calls.sqlite3, NOT the temporary runtime_dir.
+enabled = true
+retention_days = 30
+max_calls = 100000
+# Optional absolute path for persistent SQLite (including -wal and -shm files).
+# database_path = "/home/me/.local/state/mcp-target-ops/calls.sqlite3"
+# The dashboard is disabled unless MCP_TARGET_OPS_DASHBOARD_PASSWORD or
+# activity.dashboard_password is set. Use a strong password and HTTPS.
+
 [server]
 # Server name advertised during MCP initialize.
 name = "mcp-target-ops"

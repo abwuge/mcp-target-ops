@@ -1,4 +1,5 @@
 mod auth;
+mod dashboard;
 mod form;
 mod oauth;
 mod response;
@@ -10,6 +11,7 @@ use self::response::{
 };
 use crate::{
     core::{
+        activity::Caller,
         error::{Error, Result},
         state::AppState,
     },
@@ -53,6 +55,10 @@ fn handle_request(state: Arc<AppState>, mut request: Request) -> Result<()> {
     let method = request.method().clone();
     let path = request_path(request.url());
 
+    if path == "/dashboard" || path.starts_with("/dashboard/") {
+        return dashboard::handle(state, request, method, &path);
+    }
+
     if method == Method::Options {
         return respond_empty_with_allow(request, 204);
     }
@@ -71,6 +77,9 @@ fn handle_request(state: Arc<AppState>, mut request: Request) -> Result<()> {
         (Method::Post, "/" | MCP_PATH) => {
             let incoming_session = auth::mcp_session_id(&request);
             let fallback_caller_key = auth::caller_key(&request);
+            let user_agent = header_value(&request, "user-agent").map(str::to_string);
+            let (oauth_client_id, oauth_client_name) =
+                auth::oauth_client_metadata(&state, &request);
             let mut body = Vec::new();
             request.as_reader().read_to_end(&mut body)?;
             let new_session =
@@ -80,7 +89,11 @@ fn handle_request(state: Arc<AppState>, mut request: Request) -> Result<()> {
                 .or(incoming_session.as_ref())
                 .map(|session| format!("session:{session}"))
                 .unwrap_or(fallback_caller_key);
-            match mcp::handle_json_bytes_for_caller(state, &body, &caller_key)? {
+            let mut caller = Caller::from_key(&caller_key, "http");
+            caller.user_agent = user_agent;
+            caller.oauth_client_id = oauth_client_id;
+            caller.oauth_client_name = oauth_client_name;
+            match mcp::handle_json_bytes_for_context(state, &body, &caller)? {
                 Some(response) => {
                     if let Some(session_id) = new_session.as_deref() {
                         respond_bytes_with_headers(
@@ -96,7 +109,16 @@ fn handle_request(state: Arc<AppState>, mut request: Request) -> Result<()> {
                 None => respond_empty(request, 202),
             }
         }
-        (Method::Delete, MCP_PATH) => respond_empty(request, 204),
+        (Method::Delete, MCP_PATH) => {
+            if let (Some(store), Some(session_id)) =
+                (state.activity.as_ref(), auth::mcp_session_id(&request))
+            {
+                if let Err(err) = store.end_session(&format!("session:{session_id}")) {
+                    eprintln!("mcp-target-ops activity session close failed: {err}");
+                }
+            }
+            respond_empty(request, 204)
+        }
         (Method::Get, MCP_PATH) => respond_json(
             request,
             405,

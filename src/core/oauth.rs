@@ -80,6 +80,8 @@ struct AuthorizationCode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AccessToken {
     expires_at: SystemTime,
+    #[serde(default)]
+    client_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -315,6 +317,12 @@ impl OAuthState {
         Ok(response)
     }
 
+    pub fn access_token_client(&mut self, token: &str) -> Option<OAuthClient> {
+        self.prune_expired(SystemTime::now());
+        let client_id = self.tokens.get(token)?.client_id.as_deref()?;
+        self.clients.get(client_id).cloned()
+    }
+
     pub fn access_token_valid(&mut self, token: &str) -> bool {
         let now = SystemTime::now();
         self.prune_expired(now);
@@ -382,6 +390,7 @@ impl OAuthState {
             access_token.clone(),
             AccessToken {
                 expires_at: now + Duration::from_secs(lifetimes.access_token_secs),
+                client_id: Some(client_id.clone()),
             },
         );
         self.refresh_tokens.insert(
@@ -454,6 +463,30 @@ mod tests {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     use sha2::{Digest, Sha256};
     use tempfile::tempdir;
+
+    #[test]
+    fn issued_access_token_is_attributed_to_registered_client() {
+        let mut state = OAuthState::load(None).unwrap();
+        let client = state
+            .register_client(
+                Some("Example MCP Desktop".into()),
+                vec!["https://example.com/callback".into()],
+            )
+            .unwrap();
+        let tokens = state.issue_token_pair(
+            client.client_id.clone(),
+            vec!["mcp:tools".into()],
+            "https://mcp.example.com".into(),
+            TokenLifetimes {
+                access_token_secs: 60,
+                refresh_token_secs: 120,
+            },
+            std::time::SystemTime::now(),
+        );
+        let found = state.access_token_client(&tokens.access_token).unwrap();
+        assert_eq!(found.client_id, client.client_id);
+        assert_eq!(found.client_name.as_deref(), Some("Example MCP Desktop"));
+    }
 
     #[test]
     fn exchanges_authorization_code_with_pkce() {

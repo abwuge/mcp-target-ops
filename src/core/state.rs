@@ -1,5 +1,6 @@
 use crate::{
     core::{
+        activity::ActivityStore,
         config::{Config, TargetConfig},
         error::{Error, Result},
         oauth::OAuthState,
@@ -26,6 +27,7 @@ pub struct AppState {
     pub jobs: JobRegistry,
     pub downloads: DownloadRegistry,
     pub backups: Arc<FileBackupStore>,
+    pub activity: Option<ActivityStore>,
     pub oauth: Mutex<OAuthState>,
     started_at: SystemTime,
 }
@@ -64,6 +66,18 @@ impl AppState {
             &config.runtime,
         )?);
         backups.start_cleanup_worker()?;
+        // Observability must not take MCP operations offline when storage fails.
+        let activity = if config.activity.enabled {
+            match ActivityStore::open(&config.activity.database_path, &config.activity) {
+                Ok(store) => Some(store),
+                Err(err) => {
+                    eprintln!("mcp-target-ops activity logging disabled: {err}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         Ok(Self {
             ssh_sessions: SshSessionRegistry::new()?,
@@ -71,6 +85,7 @@ impl AppState {
             jobs,
             downloads,
             backups,
+            activity,
             oauth: Mutex::new(OAuthState::load(config.server.oauth_state_file.clone())?),
             config,
             active_target: Mutex::new(None),
@@ -167,6 +182,7 @@ mod tests {
         config.server.default_target = Some("local".to_string());
         config.server.oauth_state_file = None;
         config.server.runtime_dir = temp.path().join("runtime");
+        config.activity.database_path = temp.path().join("activity/calls.sqlite3");
         let state = AppState::new(config).expect("state initializes");
         (temp, state)
     }

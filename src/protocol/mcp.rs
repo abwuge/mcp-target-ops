@@ -1,5 +1,6 @@
 use crate::{
     core::{
+        activity::{self, Caller, Event},
         error::{Error, Result},
         state::AppState,
     },
@@ -10,6 +11,7 @@ use serde_json::{json, Value};
 use std::{
     io::{self, BufRead, Write},
     sync::Arc,
+    time::{Instant, UNIX_EPOCH},
 };
 
 #[derive(Debug, Deserialize)]
@@ -68,6 +70,24 @@ pub fn handle_json_bytes_for_caller(
     bytes: &[u8],
     caller_key: &str,
 ) -> Result<Option<Vec<u8>>> {
+    let caller = caller_for_key(&state, caller_key);
+    handle_json_bytes_for_context(state, bytes, &caller)
+}
+
+fn caller_for_key(state: &AppState, key: &str) -> Caller {
+    let epoch = state
+        .started_at()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    Caller::from_key(key, &format!("{}-{epoch}", std::process::id()))
+}
+
+pub fn handle_json_bytes_for_context(
+    state: Arc<AppState>,
+    bytes: &[u8],
+    caller: &Caller,
+) -> Result<Option<Vec<u8>>> {
     let value = match serde_json::from_slice::<Value>(bytes) {
         Ok(value) => value,
         Err(err) => {
@@ -76,16 +96,26 @@ pub fn handle_json_bytes_for_caller(
         }
     };
 
-    handle_json_value_for_caller(state, value, caller_key)?
+    handle_json_value_for_context(state, value, caller)?
         .map(|response| serde_json::to_vec(&response))
         .transpose()
         .map_err(Error::Json)
 }
 
+#[cfg(test)]
 fn handle_json_value_for_caller(
     state: Arc<AppState>,
     value: Value,
     caller_key: &str,
+) -> Result<Option<Value>> {
+    let caller = caller_for_key(&state, caller_key);
+    handle_json_value_for_context(state, value, &caller)
+}
+
+fn handle_json_value_for_context(
+    state: Arc<AppState>,
+    value: Value,
+    caller: &Caller,
 ) -> Result<Option<Value>> {
     if let Value::Array(requests) = value {
         if requests.is_empty() {
@@ -96,7 +126,7 @@ fn handle_json_value_for_caller(
 
         let mut responses = Vec::new();
         for request in requests {
-            if let Some(response) = handle_request_value(Arc::clone(&state), request, caller_key)? {
+            if let Some(response) = handle_request_value(Arc::clone(&state), request, caller)? {
                 responses.push(response);
             }
         }
@@ -107,17 +137,17 @@ fn handle_json_value_for_caller(
             Ok(Some(Value::Array(responses)))
         }
     } else {
-        handle_request_value(state, value, caller_key)
+        handle_request_value(state, value, caller)
     }
 }
 
 fn handle_request_value(
     state: Arc<AppState>,
     value: Value,
-    caller_key: &str,
+    caller: &Caller,
 ) -> Result<Option<Value>> {
     let response = match serde_json::from_value::<RpcRequest>(value) {
-        Ok(request) => handle_request(state, request, caller_key),
+        Ok(request) => handle_request(state, request, caller),
         Err(err) => Some(parse_error(format!("parse error: {err}"))),
     };
 
@@ -142,39 +172,77 @@ fn parse_error(message: String) -> RpcResponse {
 fn handle_request(
     state: Arc<AppState>,
     request: RpcRequest,
-    caller_key: &str,
+    caller: &Caller,
 ) -> Option<RpcResponse> {
     if request.method.starts_with("notifications/") {
         return None;
     }
+    let started_ms = activity::now_ms();
+    let start = Instant::now();
+    let mut observed_caller = caller.clone();
+    if request.method == "initialize" {
+        let info = request.params.as_ref().and_then(|p| p.get("clientInfo"));
+        observed_caller.client_name = info
+            .and_then(|v| v.get("name"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        observed_caller.client_version = info
+            .and_then(|v| v.get("version"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+    }
+    let tool_params = (request.method == "tools/call")
+        .then_some(request.params.as_ref())
+        .flatten();
+    let name = tool_params
+        .and_then(|p| p.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or(&request.method)
+        .to_string();
+    let arguments = tool_params.and_then(|p| p.get("arguments"));
+    let mut keys: Vec<String> = arguments
+        .and_then(Value::as_object)
+        .map(|obj| {
+            obj.keys()
+                .take(32)
+                .map(|key| key.chars().take(64).collect::<String>())
+                .collect()
+        })
+        .unwrap_or_default();
+    keys.sort();
+    let requested_target = arguments
+        .and_then(|a| a.get("target"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let kind = if request.method == "tools/call" {
+        "tool"
+    } else {
+        "protocol"
+    };
 
     let id = request.id.clone();
     let result = match request.method.as_str() {
         "initialize" => initialize(&state, request.params.unwrap_or_else(|| json!({}))),
         "tools/list" => Ok(json!({ "tools": tools::list_tools(
-            state
-                .config
-                .server
-                .oauth_enabled
+            state.config.server.oauth_enabled
                 .then_some(state.config.server.oauth_scopes.as_slice())
         ) })),
         "tools/call" => tools_call(
-            state,
+            Arc::clone(&state),
             request.params.unwrap_or_else(|| json!({})),
-            caller_key,
+            &caller.key,
         ),
         "ping" => Ok(json!({})),
         other => Err(Error::Tool(format!("unsupported method: {other}"))),
     };
-
-    match result {
-        Ok(value) => Some(RpcResponse {
+    let response = match result {
+        Ok(value) => RpcResponse {
             jsonrpc: "2.0",
             id,
             result: Some(value),
             error: None,
-        }),
-        Err(err) => Some(RpcResponse {
+        },
+        Err(err) => RpcResponse {
             jsonrpc: "2.0",
             id,
             result: None,
@@ -182,8 +250,40 @@ fn handle_request(
                 code: err.json_rpc_code(),
                 message: err.to_string(),
             }),
-        }),
+        },
+    };
+    if let Some(store) = &state.activity {
+        let errored = response.error.is_some()
+            || response
+                .result
+                .as_ref()
+                .and_then(|v| v.get("isError"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+        let response_target = response
+            .result
+            .as_ref()
+            .and_then(|v| v.get("structuredContent"))
+            .and_then(|v| v.get("resolved_target"))
+            .and_then(|v| v.get("target"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let event = Event {
+            caller: observed_caller,
+            started_ms,
+            duration_ms: start.elapsed().as_secs_f64() * 1000.0,
+            kind,
+            name,
+            status: if errored { "error" } else { "ok" },
+            target: requested_target.or(response_target),
+            argument_keys: keys,
+            rpc_error_code: response.error.as_ref().map(|err| err.code),
+        };
+        if let Err(err) = store.record(event) {
+            eprintln!("mcp-target-ops activity log failed: {err}");
+        }
     }
+    Some(response)
 }
 
 fn initialize(state: &AppState, params: Value) -> Result<Value> {
@@ -353,6 +453,7 @@ mod tests {
         config.server.public_base_url = Some("https://files.example.test".to_string());
         config.server.oauth_state_file = None;
         config.server.runtime_dir = path.join("runtime");
+        config.activity.database_path = path.join("activity/calls.sqlite3");
         Arc::new(AppState::new(config).unwrap())
     }
 
@@ -375,6 +476,53 @@ mod tests {
         )
         .unwrap()
         .unwrap()
+    }
+
+    #[test]
+    fn activity_correlates_client_and_mcp_session_without_storing_values() {
+        let state = test_state();
+        let init = handle_json_value_for_caller(
+            Arc::clone(&state),
+            json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+                "protocolVersion":"2025-06-18",
+                "clientInfo":{"name":"Client A","version":"2.1"}
+            }}),
+            "session:observable-a",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(init["error"], Value::Null);
+        let successful = call_tool_for(
+            Arc::clone(&state),
+            "session:observable-a",
+            2,
+            "target_current",
+            json!({"password":"NEVER_SAVE_THIS_VALUE"}),
+        );
+        assert_eq!(successful["result"]["isError"], false);
+        let failed = call_tool_for(
+            Arc::clone(&state),
+            "session:observable-a",
+            3,
+            "no_such_tool",
+            json!({}),
+        );
+        assert_eq!(failed["result"]["isError"], true);
+
+        let data = state
+            .activity
+            .as_ref()
+            .unwrap()
+            .query(Default::default())
+            .unwrap();
+        assert_eq!(data["summary"]["count"], 3);
+        assert_eq!(data["summary"]["sessions"], 1);
+        assert_eq!(data["summary"]["errors"], 1);
+        assert_eq!(data["sessions"][0]["client"], "Client A");
+        assert_eq!(data["sessions"][0]["client_version"], "2.1");
+        assert_eq!(data["sessions"][0]["grouping"], "mcp_session");
+        assert_eq!(data["calls"][1]["argument_keys"], json!(["password"]));
+        assert!(!data.to_string().contains("NEVER_SAVE_THIS_VALUE"));
     }
 
     #[test]

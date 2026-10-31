@@ -7,6 +7,7 @@ use std::str::FromStr;
 
 pub(super) fn validate(config: &Config) -> Result<()> {
     validate_runtime(config)?;
+    validate_activity(config)?;
     validate_server(config)?;
     validate_targets(config)?;
     validate_mcp_servers(config)
@@ -122,6 +123,31 @@ fn validate_runtime(config: &Config) -> Result<()> {
     validate_nonzero(
         "runtime.terminal_default_cols",
         runtime.terminal_default_cols,
+    )?;
+    Ok(())
+}
+
+fn validate_activity(config: &Config) -> Result<()> {
+    if !(1..=3650).contains(&config.activity.retention_days) {
+        return Err(Error::Config(
+            "activity.retention_days must be between 1 and 3650".into(),
+        ));
+    }
+    if config.activity.database_path.as_os_str().is_empty()
+        || !config.activity.database_path.is_absolute()
+    {
+        return Err(Error::Config(
+            "activity.database_path must be an absolute path".into(),
+        ));
+    }
+    if !(1..=1_000_000).contains(&config.activity.max_calls) {
+        return Err(Error::Config(
+            "activity.max_calls must be between 1 and 1000000".into(),
+        ));
+    }
+    validate_optional_secret(
+        "activity.dashboard_password",
+        config.activity.dashboard_password.as_deref(),
     )?;
     Ok(())
 }

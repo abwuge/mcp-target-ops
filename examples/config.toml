@@ -67,6 +67,20 @@ file_backup_max_entries = 1024
 terminal_default_rows = 30
 terminal_default_cols = 120
 
+[activity]
+# Keep metadata-only MCP activity history in an embedded, indexed SQLite file.
+# No full commands, argument values, returned data, or secrets are logged.
+enabled = true
+retention_days = 30
+max_calls = 100000
+# Persistent state path (independent of server.runtime_dir, which may be /tmp).
+# Defaults to $XDG_STATE_HOME/mcp-target-ops/calls.sqlite3, or
+# ~/.local/state/mcp-target-ops/calls.sqlite3 without XDG_STATE_HOME.
+# database_path = "/home/me/.local/state/mcp-target-ops/calls.sqlite3"
+# To enable read-only browser dashboard, set the environment variable
+# MCP_TARGET_OPS_DASHBOARD_PASSWORD. Do not expose Basic auth over plain HTTP.
+# dashboard_password = "do-not-put-secrets-here"
+
 [server]
 # Server name advertised in the MCP initialize response.
 name = "mcp-target-ops"
@@ -77,7 +91,7 @@ default_target = "ssh:dev"
 # Per-terminal ring-buffer capacity. Older terminal output is discarded when a
 # session produces more than this amount.
 terminal_ring_buffer_bytes = 524288
-# Directory for runtime state such as App result cache files. The directory is
+# Directory for ephemeral runtime state such as download links and backups. The directory is
 # created automatically during startup.
 runtime_dir = "/tmp/mcp-target-ops"
 

@@ -100,6 +100,7 @@ mod tests {
         config.server.name = "Target <Ops>".to_string();
         config.server.runtime_dir = temp.path().join("runtime");
         config.server.oauth_state_file = None;
+        config.activity.enabled = false;
         let state = AppState::new(config).expect("state initializes");
         let client = state
             .oauth

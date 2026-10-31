@@ -348,6 +348,7 @@ mod tests {
                 },
             }),
         );
+        config.activity.enabled = false;
         let state = AppState::new(config).unwrap();
         let opened = state
             .terminals

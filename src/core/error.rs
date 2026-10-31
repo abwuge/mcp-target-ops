@@ -25,6 +25,9 @@ pub enum Error {
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
 
+    #[error("database error: {0}")]
+    Database(#[from] rusqlite::Error),
+
     #[error("toml decode error: {0}")]
     TomlDe(#[from] toml::de::Error),
 
@@ -44,7 +47,11 @@ impl Error {
             | Error::Policy(_)
             | Error::Tool(_)
             | Error::Terminal(_) => -32000,
-            Error::Io(_) | Error::TomlDe(_) | Error::TomlSer(_) | Error::Utf8(_) => -32001,
+            Error::Io(_)
+            | Error::Database(_)
+            | Error::TomlDe(_)
+            | Error::TomlSer(_)
+            | Error::Utf8(_) => -32001,
         }
     }
 }

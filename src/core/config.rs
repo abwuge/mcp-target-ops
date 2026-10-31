@@ -21,6 +21,9 @@ pub struct Config {
     pub runtime: RuntimeConfig,
 
     #[serde(default)]
+    pub activity: ActivityConfig,
+
+    #[serde(default)]
     pub server: ServerConfig,
 
     #[serde(default)]
@@ -101,6 +104,33 @@ pub struct RuntimeConfig {
 
     #[serde(default = "default_terminal_cols")]
     pub terminal_default_cols: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActivityConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_activity_retention_days")]
+    pub retention_days: u32,
+    #[serde(default = "default_activity_max_calls")]
+    pub max_calls: usize,
+    #[serde(default = "default_activity_database_path")]
+    pub database_path: PathBuf,
+    // If unset, the dashboard and its API do not exist. Do not reuse MCP OAuth tokens.
+    #[serde(default = "default_dashboard_password")]
+    pub dashboard_password: Option<String>,
+}
+
+impl Default for ActivityConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            retention_days: default_activity_retention_days(),
+            max_calls: default_activity_max_calls(),
+            database_path: default_activity_database_path(),
+            dashboard_password: default_dashboard_password(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -277,6 +307,7 @@ impl Default for Config {
         Self {
             config: ConfigManagementConfig::default(),
             runtime: RuntimeConfig::default(),
+            activity: ActivityConfig::default(),
             server: ServerConfig::default(),
             targets,
             mcp_servers: BTreeMap::new(),
@@ -389,6 +420,49 @@ impl Config {
     fn validate(&self) -> Result<()> {
         validation::validate(self)
     }
+}
+
+fn default_activity_retention_days() -> u32 {
+    30
+}
+
+fn default_activity_max_calls() -> usize {
+    100_000
+}
+
+fn default_activity_database_path() -> PathBuf {
+    #[cfg(windows)]
+    let state_home = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| {
+            std::env::var_os("USERPROFILE")
+                .map(PathBuf::from)
+                .filter(|path| path.is_absolute())
+                .map(|home| home.join("AppData").join("Local"))
+        })
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    #[cfg(not(windows))]
+    let state_home = std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| {
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .filter(|path| path.is_absolute())
+                .or_else(|| std::env::current_dir().ok())
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".local")
+                .join("state")
+        });
+    state_home.join("mcp-target-ops").join("calls.sqlite3")
+}
+
+fn default_dashboard_password() -> Option<String> {
+    std::env::var("MCP_TARGET_OPS_DASHBOARD_PASSWORD")
+        .ok()
+        .filter(|password| !password.trim().is_empty())
 }
 
 fn default_name() -> String {

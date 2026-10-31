@@ -702,6 +702,7 @@ mod tests {
         config.server.runtime_dir = temp.path().join("runtime");
         config.runtime.file_backup_cleanup_interval_secs = 1;
         config.runtime.file_backup_max_entries = max_entries;
+        config.activity.enabled = false;
         let state = AppState::new(config).unwrap();
         (temp, state, root)
     }
