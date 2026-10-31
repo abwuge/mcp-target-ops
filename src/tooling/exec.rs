@@ -61,8 +61,17 @@ pub enum ExecBatchMode {
     Parallel,
 }
 
+/// Accept concise command strings for the common case while retaining the
+/// existing detailed per-command object syntax for cwd/timeouts/output limits.
 #[derive(Debug, Clone, Deserialize)]
-pub struct ExecBatchCommand {
+#[serde(untagged)]
+pub enum ExecBatchCommand {
+    Shell(String),
+    Detailed(ExecBatchCommandDetails),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ExecBatchCommandDetails {
     pub command: String,
     #[serde(default)]
     pub cwd: Option<String>,
@@ -70,6 +79,20 @@ pub struct ExecBatchCommand {
     pub timeout_ms: Option<u64>,
     #[serde(default)]
     pub max_output_bytes: Option<usize>,
+}
+
+impl ExecBatchCommand {
+    fn into_details(self) -> ExecBatchCommandDetails {
+        match self {
+            Self::Shell(command) => ExecBatchCommandDetails {
+                command,
+                cwd: None,
+                timeout_ms: None,
+                max_output_bytes: None,
+            },
+            Self::Detailed(details) => details,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -289,6 +312,7 @@ fn run_batch_item(
     index: usize,
     command: ExecBatchCommand,
 ) -> ExecBatchItemResponse {
+    let command = command.into_details();
     let started = Instant::now();
     let request = ExecRequest {
         target: Some(target.to_string()),
@@ -343,6 +367,53 @@ mod tests {
     use super::*;
     use crate::core::target::{TargetId, TargetSource};
     use serde_json::json;
+
+    #[test]
+    fn batch_accepts_mixed_string_and_object_commands_in_parallel() {
+        use crate::core::config::{Config, TargetConfig};
+        use tempfile::tempdir;
+
+        let temp = tempdir().unwrap();
+        let mut config = Config::default();
+        config.server.runtime_dir = temp.path().join("runtime");
+        config.server.oauth_state_file = None;
+        config.activity.enabled = false;
+        config.server.default_target = Some("local".into());
+        if let Some(TargetConfig::Local(local)) = config.targets.get_mut("local") {
+            local.enabled = true;
+            local.policy.allow_exec = true;
+        }
+        let state = AppState::new(config).unwrap();
+        let request: ExecBatchRequest = serde_json::from_value(json!({
+            "target": "local", "mode": "parallel",
+            "commands": [
+                "printf simple",
+                {"command": "pwd", "cwd": temp.path().to_string_lossy()},
+                "printf third"
+            ]
+        }))
+        .unwrap();
+        let result = run_batch(&state, request).unwrap();
+        assert_eq!(result.executed_count, 3);
+        assert_eq!(result.succeeded, 3);
+        assert_eq!(result.results[0].stdout, "simple");
+        assert_eq!(
+            result.results[1].stdout.trim(),
+            temp.path().to_str().unwrap()
+        );
+        assert_eq!(result.results[2].stdout, "third");
+        assert_eq!(result.results[0].index, 0);
+        assert_eq!(result.results[2].index, 2);
+
+        // Detailed object input is still accepted unchanged.
+        let previous: ExecBatchRequest = serde_json::from_value(json!({
+            "target":"local",
+            "commands":[{"command":"printf legacy","cwd":temp.path().to_str().unwrap()}]
+        }))
+        .unwrap();
+        let legacy = run_batch(&state, previous).unwrap();
+        assert_eq!(legacy.results[0].stdout, "legacy");
+    }
 
     #[test]
     fn omits_empty_and_inactive_exec_fields() {

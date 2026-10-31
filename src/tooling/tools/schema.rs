@@ -9,13 +9,26 @@ pub(super) fn output_schema(name: &str) -> Value {
                 "version": { "type": "string" },
                 "active_target": nullable_string_schema(),
                 "ssh_session_ids": string_array_schema(),
+                "ssh_master_ids": string_array_schema(),
                 "terminal_ids": string_array_schema(),
                 "job_ids": string_array_schema(),
+                "downstream_mcp_servers": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": { "type": "string" },
+                            "enabled": { "type": "boolean" }
+                        },
+                        "required": ["name", "enabled"],
+                        "additionalProperties": false
+                    }
+                },
                 "runtime_dir": { "type": "string" },
                 "started_at_debug": { "type": "string" },
                 "notes": string_array_schema()
             },
-            "required": ["name", "version", "active_target", "ssh_session_ids", "terminal_ids", "job_ids", "runtime_dir", "started_at_debug", "notes"],
+            "required": ["name", "version", "active_target", "ssh_session_ids", "ssh_master_ids", "terminal_ids", "job_ids", "downstream_mcp_servers", "runtime_dir", "started_at_debug", "notes"],
             "additionalProperties": false
         }),
         "target_list" => json!({

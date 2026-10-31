@@ -227,12 +227,17 @@ fn server_info(state: &AppState) -> Value {
         "ssh_master_ids": state.ssh_sessions.master_ids(),
         "terminal_ids": state.terminals.ids(),
         "job_ids": state.jobs.ids(),
+        "downstream_mcp_servers": mcp_client::list_servers(state)
+            .into_iter()
+            .map(|server| json!({"name": server.name, "enabled": server.enabled}))
+            .collect::<Vec<_>>(),
         "runtime_dir": state.config.server.runtime_dir.display().to_string(),
         "started_at_debug": format!("{:?}", state.started_at()),
         "notes": [
             "SSH exec, jobs, terminals, and persistent file workers share a per-target OpenSSH ControlMaster when enabled.",
             "exec and exec_start share the same command-session implementation.",
-            "The active target is process-scoped; terminal and job sessions remain bound to their original targets."
+            "The active target is process-scoped; terminal and job sessions remain bound to their original targets.",
+            "Enabled downstream MCP servers are listed in downstream_mcp_servers. Discover their tools with mcp_tools_list(server), then invoke them through mcp_tool_call(server, tool, arguments)."
         ]
     })
 }

@@ -19,7 +19,7 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
     };
 
     json!([
-        tool("server_info", "Return server configuration summary and active target state.", object_schema(vec![])),
+        tool("server_info", "Return server configuration summary, active target state, and enabled/disabled downstream MCP service names; discover their tools with mcp_tools_list(server).", object_schema(vec![])),
         tool("target_list", "List configured local and SSH targets, including policy summaries and active marker.", object_schema(vec![])),
         tool("target_current", "Return the currently selected active target, if any.", object_schema(vec![])),
         tool("target_select", "Select a session-scoped active target. Later calls may omit target and use this sticky target.", object_schema(vec![required_string("target", "Target id: local or ssh:<profile>")])),
@@ -34,6 +34,7 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
             required_string("tool", "Downstream MCP tool name."),
             optional_value("arguments", "JSON object passed as downstream tool arguments. Defaults to an empty object.", json!({"type":"object","additionalProperties":true})),
         ])),
+        tool("exec_batch", "Run multiple logically independent non-interactive commands in one tool call and return a separate result for each. Prefer this over combining unrelated inspections with shell separators; use exec for commands that must share shell state such as cd, variables, pipelines, or control flow. Prefer batch file_read for reading several known files.", exec_batch_schema()),
         tool("exec", "Run one non-interactive shell command or script. Long-running executions may be promoted automatically to a background job and return job_id instead of blocking. When that happens, use job_wait to wait once for completion or continue with other work; do not repeatedly poll. Prefer exec_start when a command is known in advance to be long-running or live output matters. Use exec_batch for several short, logically independent commands. Prefer file_read/file_find over cat, sed, or grep when reading known files. Do not create ad-hoc .bak/.old safety copies with shell commands; use file_backup for managed rollback snapshots.", object_schema(vec![
             optional_string("target", "Target id: local or ssh:<profile>. Omit to use active target."),
             required_string("command", "Shell command or script to execute as one shell unit."),
@@ -42,7 +43,6 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
             optional_integer("max_output_bytes", "Maximum bytes to return for stdout and stderr."),
             optional_value("secret_env", "Map environment variable names to server-side secret references.", secret_env_schema()),
         ])),
-        tool("exec_batch", "Run multiple logically independent non-interactive commands in one tool call and return a separate result for each. Prefer this over combining unrelated inspections with shell separators; use exec for commands that must share shell state such as cd, variables, pipelines, or control flow. Prefer batch file_read for reading several known files.", exec_batch_schema()),
         tool("exec_start", "Start a non-interactive command as a background job and return immediately. Prefer this for longer commands or when live output matters. Use job_wait when the model only needs to continue after completion; use job_output for incremental output. Jobs support cancellation and optional runtime timeouts.", object_schema(vec![
             optional_string("target", "Target id: local or ssh:<profile>. Omit to use active target."),
             required_string("command", "Shell command to execute."),
@@ -372,17 +372,22 @@ fn exec_batch_schema() -> Value {
                 "type": "array",
                 "minItems": 1,
                 "maxItems": 32,
-                "description": "Independent commands. Results preserve this order even in parallel mode.",
+                "description": "For common independent checks, use concise strings: [\"git status\", \"git log -1\"]. For an item needing cwd or a timeout, pass an object: {\"command\":\"pwd\",\"cwd\":\"/project\"}. Results preserve input order.",
                 "items": {
-                    "type": "object",
-                    "properties": {
-                        "command": { "type": "string", "description": "One shell command or script unit." },
-                        "cwd": { "type": "string", "description": "Working directory for this command." },
-                        "timeout_ms": { "type": "integer", "description": "Timeout in milliseconds for this command." },
-                        "max_output_bytes": { "type": "integer", "description": "Maximum bytes returned for this command's stdout and stderr." }
-                    },
-                    "required": ["command"],
-                    "additionalProperties": false
+                    "oneOf": [
+                        {"type": "string", "minLength": 1, "description": "One command or shell script (simple case)."},
+                        {
+                            "type": "object",
+                            "properties": {
+                                "command": { "type": "string", "minLength": 1, "description": "One shell command or script unit." },
+                                "cwd": { "type": "string", "description": "Working directory for this command." },
+                                "timeout_ms": { "type": "integer", "description": "Timeout in milliseconds for this command." },
+                                "max_output_bytes": { "type": "integer", "description": "Maximum bytes returned for this command's stdout and stderr." }
+                            },
+                            "required": ["command"],
+                            "additionalProperties": false
+                        }
+                    ]
                 }
             },
             "mode": { "type": "string", "enum": ["sequential", "parallel"], "description": "Execution mode. Defaults to sequential." },
@@ -822,6 +827,22 @@ mod tests {
         assert!(schema("file_delete")["properties"].get("content").is_some());
         assert!(schema("file_edit")["properties"].get("diff").is_some());
         assert!(schema("file_write")["properties"].get("diff").is_some());
+    }
+
+    #[test]
+    fn batch_is_discoverable_before_exec_with_concise_commands() {
+        let tools = list_tools(None);
+        let tools = tools.as_array().unwrap();
+        let batch_pos = tools
+            .iter()
+            .position(|t| t["name"] == "exec_batch")
+            .unwrap();
+        let exec_pos = tools.iter().position(|t| t["name"] == "exec").unwrap();
+        assert!(batch_pos < exec_pos);
+        let items = &tools[batch_pos]["inputSchema"]["properties"]["commands"]["items"]["oneOf"];
+        assert_eq!(items[0]["type"], "string");
+        assert_eq!(items[1]["type"], "object");
+        assert_eq!(items[1]["required"][0], "command");
     }
 
     #[test]
