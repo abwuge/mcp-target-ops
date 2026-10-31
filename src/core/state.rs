@@ -7,8 +7,8 @@ use crate::{
         target::{ResolvedTarget, TargetId, TargetSource},
     },
     tooling::{
-        download::DownloadRegistry, file_backup::FileBackupStore, job::JobRegistry,
-        terminal::TerminalRegistry,
+        batch::BatchRegistry, download::DownloadRegistry, file_backup::FileBackupStore,
+        job::JobRegistry, terminal::TerminalRegistry,
     },
     transport::ssh::SshSessionRegistry,
 };
@@ -25,6 +25,7 @@ pub struct AppState {
     pub ssh_sessions: SshSessionRegistry,
     pub terminals: TerminalRegistry,
     pub jobs: JobRegistry,
+    pub batches: BatchRegistry,
     pub downloads: DownloadRegistry,
     pub backups: Arc<FileBackupStore>,
     pub activity: Option<ActivityStore>,
@@ -60,6 +61,7 @@ impl AppState {
         let terminals =
             TerminalRegistry::new(config.server.terminal_ring_buffer_bytes, &config.runtime);
         let jobs = JobRegistry::new(config.runtime.clone());
+        let batches = BatchRegistry::new();
         let downloads = DownloadRegistry::new(&config.server.runtime_dir)?;
         let backups = Arc::new(FileBackupStore::new(
             &config.server.runtime_dir,
@@ -83,6 +85,7 @@ impl AppState {
             ssh_sessions: SshSessionRegistry::new()?,
             terminals,
             jobs,
+            batches,
             downloads,
             backups,
             activity,

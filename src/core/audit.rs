@@ -62,6 +62,20 @@ impl CallDetails {
 
 fn command_text(tool: &str, args: &Value) -> Option<String> {
     match tool {
+        "exec" if args.get("commands").is_some() => {
+            let cmds = args.get("commands")?.as_array()?;
+            let lines: Vec<String> = cmds
+                .iter()
+                .enumerate()
+                .filter_map(|(i, item)| {
+                    let command = item
+                        .as_str()
+                        .or_else(|| item.get("command").and_then(Value::as_str));
+                    command.map(|command| format!("# {}\n{command}", i + 1))
+                })
+                .collect();
+            (!lines.is_empty()).then(|| lines.join("\n\n"))
+        }
         "exec" | "exec_start" => args
             .get("command")
             .and_then(Value::as_str)
@@ -233,6 +247,11 @@ mod tests {
         assert_eq!(detail.command.as_deref(), Some("printf 'hello world'"));
         assert_eq!(detail.cwd.as_deref(), Some("/tmp"));
         assert!(detail.request_json.contains("printf 'hello world'"));
+        let unified = CallDetails::from_arguments(
+            "exec",
+            Some(&json!({"commands":["printf a",{"command":"printf b","cwd":"/tmp"}]})),
+        );
+        assert!(unified.command.unwrap().contains("printf b"));
         let batch = CallDetails::from_arguments(
             "exec_batch",
             Some(&json!({

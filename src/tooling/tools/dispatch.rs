@@ -7,11 +7,10 @@ use crate::{
         target::{ResolvedTarget, TargetId, TargetSource},
     },
     tooling::{
-        exec::{self, ExecBatchRequest, ExecRequest},
-        file_backup::{
-            self, FileBackupDeleteRequest, FileBackupListRequest, FileBackupRequest,
-            FileRestoreRequest,
-        },
+        command_api,
+        exec::{self, ExecBatchRequest},
+        file_api,
+        file_backup::{self, FileBackupDeleteRequest, FileBackupListRequest, FileBackupRequest},
         file_bridge::{self, FileExportRequest, FileImportRequest},
         file_transfer::{self, FileTransferRequest},
         fs::{
@@ -64,11 +63,10 @@ pub fn call_tool_with_context(
             )?;
             Ok(json!({ "server": req.server, "tool": req.tool, "result": result }))
         }
-        "exec" => Ok(serde_json::to_value(exec::run_with_context(
-            &state,
-            parse::<ExecRequest>(args)?,
-            caller_key,
-        )?)?),
+        "exec" => command_api::execute(Arc::clone(&state), args, caller_key),
+        "job" => command_api::job(Arc::clone(&state), args, caller_key),
+        // COMPAT(COMPAT-011): Accept cached pre-migration tool names without advertising
+        // them in tools/list; remove after old MCP clients have reconnected.
         "exec_batch" => Ok(serde_json::to_value(exec::run_batch(
             &state,
             parse::<ExecBatchRequest>(args)?,
@@ -98,6 +96,7 @@ pub fn call_tool_with_context(
                 .jobs
                 .cancel_for_caller(parse::<JobCancelRequest>(args)?, caller_key)?,
         )?),
+        "read" => file_api::read(&state, args),
         "file_read" => Ok(serde_json::to_value(fs::read(
             &state,
             parse::<FileReadRequest>(args)?,
@@ -110,10 +109,7 @@ pub fn call_tool_with_context(
             &state,
             parse::<FileBackupListRequest>(args)?,
         )?)?),
-        "file_restore" => Ok(serde_json::to_value(file_backup::restore(
-            &state,
-            parse::<FileRestoreRequest>(args)?,
-        )?)?),
+        "file_restore" => file_api::restore(&state, args),
         "file_backup_delete" => Ok(serde_json::to_value(file_backup::delete(
             &state,
             parse::<FileBackupDeleteRequest>(args)?,
@@ -126,6 +122,7 @@ pub fn call_tool_with_context(
             &state,
             parse::<FileEditRequest>(args)?,
         )?)?),
+        "write" => file_api::write(&state, args),
         "file_write" => Ok(serde_json::to_value(fs::write(
             &state,
             parse::<FileWriteRequest>(args)?,
@@ -219,6 +216,8 @@ fn parse<T: for<'de> Deserialize<'de>>(value: Value) -> Result<T> {
 
 fn server_info(state: &AppState) -> Value {
     let active_target = state.current_target().map(|target| target.to_string());
+    let mut job_ids = state.jobs.ids();
+    job_ids.extend(state.batches.ids());
     json!({
         "name": state.config.server.name.clone(),
         "version": state.config.server.version.clone(),
@@ -226,7 +225,7 @@ fn server_info(state: &AppState) -> Value {
         "ssh_session_ids": state.ssh_sessions.ids(),
         "ssh_master_ids": state.ssh_sessions.master_ids(),
         "terminal_ids": state.terminals.ids(),
-        "job_ids": state.jobs.ids(),
+        "job_ids": job_ids,
         "downstream_mcp_servers": mcp_client::list_servers(state)
             .into_iter()
             .map(|server| json!({"name": server.name, "enabled": server.enabled}))

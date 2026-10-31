@@ -321,7 +321,10 @@ fn tools_call(state: Arc<AppState>, params: Value, caller_key: &str) -> Result<V
     }
 
     let params: ToolCallParams = serde_json::from_value(params)?;
-    let attach_completed = !matches!(params.name.as_str(), "job_poll" | "job_output" | "job_wait");
+    let attach_completed = !matches!(
+        params.name.as_str(),
+        "job" | "job_poll" | "job_output" | "job_wait"
+    );
     match tools::call_tool_with_context(
         Arc::clone(&state),
         &params.name,
@@ -442,7 +445,6 @@ fn tools_call(state: Arc<AppState>, params: Value, caller_key: &str) -> Result<V
 mod tests {
     use super::*;
     use crate::core::config::{Config, TargetConfig};
-    use crate::tooling::job::JobPollRequest;
     use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
     use std::time::Duration;
     use tempfile::tempdir;
@@ -724,6 +726,245 @@ mod tests {
     }
 
     #[test]
+    fn unified_exec_handles_batches_background_wait_and_cancel() {
+        let state = test_state();
+        let owner = "session:unified";
+        let launched = call_tool_for(
+            Arc::clone(&state),
+            owner,
+            100,
+            "exec",
+            json!({
+                "target":"local", "commands":[
+                    "sleep 0.04; printf first",
+                    {"command":"sleep 0.03; printf second"}
+                ],
+                "mode":"parallel", "yield_time_ms":0
+            }),
+        );
+        assert_eq!(launched["result"]["isError"], false);
+        let group_id = launched["result"]["structuredContent"]["job_id"]
+            .as_str()
+            .unwrap();
+        assert!(group_id.starts_with("batch_"));
+        let ready = call_tool_for(
+            Arc::clone(&state),
+            owner,
+            101,
+            "job",
+            json!({"job_id":group_id, "action":"wait", "wait_ms":5000}),
+        );
+        let report = &ready["result"]["structuredContent"];
+        assert_eq!(report["status"], "completed");
+        assert_eq!(report["succeeded"], 2);
+        assert_eq!(report["results"][0]["stdout"], "first");
+        assert_eq!(report["results"][1]["stdout"], "second");
+        assert_eq!(report["results"][0]["index"], 0);
+        assert_eq!(report["results"][1]["index"], 1);
+
+        let unrelated = call_tool_for(
+            Arc::clone(&state),
+            "session:other",
+            102,
+            "job",
+            json!({"job_id":group_id, "action":"read"}),
+        );
+        assert_eq!(unrelated["result"]["isError"], true);
+
+        let stopped = call_tool_for(
+            Arc::clone(&state),
+            owner,
+            103,
+            "exec",
+            json!({"target":"local","commands":["false", "printf should-not-run"],
+                "mode":"sequential", "stop_on_error":true, "yield_time_ms":0}),
+        );
+        let failed_group = stopped["result"]["structuredContent"]["job_id"]
+            .as_str()
+            .unwrap();
+        let stopped_result = call_tool_for(
+            Arc::clone(&state),
+            owner,
+            104,
+            "job",
+            json!({"job_id":failed_group, "action":"wait","wait_ms":5000}),
+        );
+        assert_eq!(
+            stopped_result["result"]["structuredContent"]["status"],
+            "failed"
+        );
+        assert_eq!(
+            stopped_result["result"]["structuredContent"]["executed_count"],
+            1
+        );
+        assert_eq!(
+            stopped_result["result"]["structuredContent"]["stopped_early"],
+            true
+        );
+
+        let long = call_tool_for(
+            Arc::clone(&state),
+            owner,
+            105,
+            "exec",
+            json!({"target":"local", "commands":["sleep 3; printf no","sleep 3; printf no"],
+                "mode":"parallel","yield_time_ms":0}),
+        );
+        let long_id = long["result"]["structuredContent"]["job_id"]
+            .as_str()
+            .unwrap();
+        let cancel = call_tool_for(
+            Arc::clone(&state),
+            owner,
+            106,
+            "job",
+            json!({"job_id":long_id,"action":"cancel"}),
+        );
+        assert_eq!(cancel["result"]["isError"], false);
+        let cancellation = call_tool_for(
+            Arc::clone(&state),
+            owner,
+            107,
+            "job",
+            json!({"job_id":long_id,"action":"wait","wait_ms":5000}),
+        );
+        assert_eq!(
+            cancellation["result"]["structuredContent"]["status"],
+            "cancelled"
+        );
+
+        let single = call_tool_for(
+            Arc::clone(&state),
+            owner,
+            108,
+            "exec",
+            json!({"target":"local","command":"sleep 0.03; printf single","yield_time_ms":0}),
+        );
+        let single_id = single["result"]["structuredContent"]["job_id"]
+            .as_str()
+            .unwrap();
+        let single_result = call_tool_for(
+            Arc::clone(&state),
+            owner,
+            109,
+            "job",
+            json!({"job_id":single_id,"action":"wait","wait_ms":5000}),
+        );
+        assert_eq!(
+            single_result["result"]["structuredContent"]["stdout"],
+            "single"
+        );
+
+        let audit = state
+            .activity
+            .as_ref()
+            .unwrap()
+            .query(crate::core::activity::Query {
+                search: Some("printf second".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(audit["summary"]["count"].as_i64().unwrap() >= 1);
+    }
+
+    #[test]
+    fn unified_read_search_write_patch_and_restore() {
+        let state = test_state();
+        let root = state.config.server.runtime_dir.parent().unwrap();
+        let folder = root.join("workspace");
+        std::fs::create_dir_all(&folder).unwrap();
+        let file = folder.join("example.rs");
+        let path = file.to_string_lossy().to_string();
+        let owner = "session:file-unified";
+
+        let write = call_tool_for(
+            Arc::clone(&state),
+            owner,
+            201,
+            "write",
+            json!({
+                "target":"local","path":path,"content":"alpha_12\nbeta\n"
+            }),
+        );
+        assert_eq!(write["result"]["isError"], false);
+        let read = call_tool_for(
+            Arc::clone(&state),
+            owner,
+            202,
+            "read",
+            json!({"target":"local","path":path,"start_line":1,"end_line":1}),
+        );
+        assert_eq!(read["result"]["structuredContent"]["content"], "alpha_12\n");
+        let searched = call_tool_for(
+            Arc::clone(&state),
+            owner,
+            203,
+            "read",
+            json!({
+                "target":"local","path":folder.to_string_lossy(),
+                "pattern":"alpha_[0-9]+","glob":["*.rs"],"context_lines":1
+            }),
+        );
+        assert_eq!(searched["result"]["isError"], false, "{searched}");
+        assert_eq!(
+            searched["result"]["structuredContent"]["match_count"], 1,
+            "{searched}"
+        );
+        assert!(
+            searched["result"]["structuredContent"]["results"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("alpha_12")
+        );
+
+        let snapshot = call_tool_for(
+            Arc::clone(&state),
+            owner,
+            204,
+            "file_backup",
+            json!({"target":"local","path":path}),
+        );
+        assert_eq!(snapshot["result"]["isError"], false);
+        let id = snapshot["result"]["structuredContent"]["backup"]["backup_id"]
+            .as_str()
+            .unwrap();
+        let backup_listing = call_tool_for(
+            Arc::clone(&state),
+            owner,
+            205,
+            "file_restore",
+            json!({"target":"local","path":path}),
+        );
+        assert_eq!(backup_listing["result"]["isError"], false);
+        assert_eq!(
+            backup_listing["result"]["structuredContent"]["backups"][0]["backup_id"],
+            id
+        );
+
+        let patch =
+            "--- a/example.rs\n+++ b/example.rs\n@@ -1,2 +1,2 @@\n-alpha_12\n+alpha_34\n beta\n";
+        let patched = call_tool_for(
+            Arc::clone(&state),
+            owner,
+            206,
+            "write",
+            json!({"target":"local","path":path,"patch":patch}),
+        );
+        assert_eq!(patched["result"]["isError"], false, "{patched}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "alpha_34\nbeta\n");
+
+        let restored = call_tool_for(
+            Arc::clone(&state),
+            owner,
+            207,
+            "file_restore",
+            json!({"target":"local","backup_id":id,"overwrite":true}),
+        );
+        assert_eq!(restored["result"]["isError"], false, "{restored}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "alpha_12\nbeta\n");
+    }
+
+    #[test]
     fn protocol_exposes_tools_without_app_resources() {
         let state = test_state();
         let initialized = initialize(&state, json!({})).unwrap();
@@ -851,26 +1092,35 @@ mod tests {
             json!({
                 "target": "local",
                 "command": "sleep 0.02; printf queued",
-                "timeout_ms": 1000
+                "timeout_ms": 5000
             }),
         );
         let job_id = started["result"]["structuredContent"]["job_id"]
             .as_str()
             .unwrap()
             .to_string();
-        while state
-            .jobs
-            .poll_for_caller(
-                JobPollRequest {
-                    job_id: job_id.clone(),
-                },
-                "session:a",
-            )
-            .unwrap()
-            .status
-            == "running"
-        {
-            std::thread::sleep(Duration::from_millis(5));
+        // Process completion and pipe EOF are separate events on busy CI runners.
+        // The completion inbox requires EOF, so wait for that rather than a
+        // process state transition that may arrive before output is drained.
+        let started_wait = std::time::Instant::now();
+        loop {
+            let peek = state
+                .jobs
+                .output_for_caller(
+                    crate::tooling::job::JobOutputRequest {
+                        job_id: job_id.clone(),
+                        stdout_since_seq: None,
+                        stderr_since_seq: None,
+                        max_bytes: None,
+                    },
+                    "session:a",
+                )
+                .unwrap();
+            if peek.eof {
+                break;
+            }
+            assert!(started_wait.elapsed() < Duration::from_secs(10));
+            std::thread::sleep(Duration::from_millis(10));
         }
 
         let other = call_tool_for(
@@ -923,7 +1173,7 @@ mod tests {
             json!({
                 "target": "local",
                 "command": "sleep 0.02; printf waited",
-                "timeout_ms": 1000
+                "timeout_ms": 5000
             }),
         );
         let job_id = started["result"]["structuredContent"]["job_id"]
@@ -935,7 +1185,7 @@ mod tests {
             "session:a",
             2,
             "job_wait",
-            json!({ "job_id": job_id, "wait_timeout_ms": 1000 }),
+            json!({ "job_id": job_id, "wait_timeout_ms": 5000 }),
         );
         assert_eq!(waited["result"]["structuredContent"]["stdout"], "waited");
 

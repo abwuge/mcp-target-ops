@@ -362,9 +362,9 @@ Target Ops publishes 38 tools.
 | Server | `server_info` |
 | Targets | `target_list`, `target_current`, `target_select`, `target_connect`, `target_disconnect` |
 | Downstream MCP | `mcp_server_list`, `mcp_tools_list`, `mcp_tool_call` |
-| Commands and jobs | `exec`, `exec_batch`, `exec_start`, `job_poll`, `job_output`, `job_wait`, `job_cancel` |
-| Files and directories | `file_read`, `file_backup`, `file_backup_list`, `file_restore`, `file_backup_delete`, `file_list`, `file_find`, `file_edit`, `file_write`, `file_delete`, `file_import`, `file_export`, `file_transfer`, `file_patch`, `file_move`, `file_chmod`, `directory_create` |
-| Terminals | `terminal_open`, `terminal_send`, `terminal_read`, `terminal_resize`, `terminal_close` |
+| Commands and jobs | `exec`, `job` |
+| Files and directories | `read`, `file_edit`, `write`, `file_delete`, `file_import`, `file_export`, `file_transfer`, `file_backup`, `file_restore` |
+| Terminals | `terminal_open`, `terminal_send`, `terminal_read`, `terminal_close` |
 
 Every tool declares an object `outputSchema`, returns successful data through
 `structuredContent`, and includes standard MCP annotations. When OAuth is
@@ -372,39 +372,40 @@ enabled, tool descriptors also advertise the configured OAuth scopes.
 
 ### Commands and background jobs
 
-`exec` runs one bounded non-interactive shell command or script. `exec_batch`
-runs up to 32 logically independent commands in one tool call, sequentially by
-default or in parallel when explicitly requested, and returns one structured
-result per command. Sequential batches may stop on the first failure. Use
-`exec` when commands need shared shell state such as `cd`, variables, pipelines,
-or control flow; use `exec_batch` for unrelated inspections instead of joining
-them with shell separators.
+The 24 advertised MCP tools include **two process interfaces**:
 
-Use `exec_start` for long commands and `job_output` to read incremental stdout/stderr.
+- `exec`: `command` for one shell command, or `commands` (1–32 strings or detailed objects)
+  for independent commands. `mode=sequential|parallel` controls batch scheduling.
+  `yield_time_ms` is the foreground wait window; a longer operation is returned
+  as a job or batch group, not killed. `timeout_ms` is the actual process deadline
+  (applied per command for batches). Default foreground wait comes from
+  `runtime.exec_auto_background_after_ms`. Batch groups preserve child indices,
+  independent errors, and allow cancellation.
+- `job`: pass the `job_id` returned by `exec` and
+  `action=status|read|wait|cancel`. `read` is the default; `wait` uses
+  the optional `wait_ms`, bounded by the configured maximum. Single jobs
+  retain incremental output sequence cursors. Batch groups report per-item
+  progress and output while running.
 
-MCP tool responses contain **results rather than a copy of the request**.
-`exec`, per-command `exec_batch` results, and asynchronous `completed_jobs`
-no longer repeat `command` or `cwd`; they retain target attribution, status,
-stdout/stderr, exit codes, timings and job IDs. Likewise, `file_write` and
-`file_import` no longer echo the uploaded `content`, and `file_patch` does
-not echo the submitted patch as `diff`. Readable file data (`file_read`),
-deleted-file recovery content (`file_delete`), and generated edit/write diffs
-remain results and are not removed. Submitted inputs and results remain
-available in the authenticated Dashboard command audit log.
+```json
+{"target":"local","commands":["git status --short","git log -1"],"mode":"parallel","yield_time_ms":5000}
+```
 
-For model-side workflows that only need to continue after a background command finishes, prefer `job_wait` over repeated `job_poll` or `job_output` calls. Its server-side default and cap come from `runtime.job_wait_default_timeout_ms` and `runtime.job_wait_max_timeout_ms`, and a call may request a shorter window.
+`read` supports exact file/line-range reads (including multi-file requests) and
+structured recursive searches with `pattern`, `regex`, `case_sensitive`,
+`glob`, `exclude`, `context_lines`, and output limits. Search delegates to
+ripgrep on the selected host rather than reimplementing a slower search engine;
+ripgrep must be installed on targets used for search.
 
-`exec` and `exec_start` share the same `CommandSession` implementation for
-process lifecycle, stdout/stderr capture, timeout, cancellation, and incremental
-output. `exec` waits for the session and uses the target policy's default timeout
-when none is supplied; `exec_start` returns a job ID immediately and has no
-runtime timeout unless one is requested. Child stdin is disconnected from the
-MCP control stream. SSH command sessions still use dedicated local OpenSSH child
-processes for independent lifecycle, streaming, timeout, and cancellation, but
-those clients multiplex over a per-target OpenSSH ControlMaster when
-`control_master = true`. Remote file workers and persistent terminals use that
-same transport, so independent operations remain concurrent without repeating
-TCP/SSH handshakes.
+`write` handles either full `content` (atomic file replacement) or a
+`patch` (unified diff, including multi-file validation/rollback), never both.
+`file_edit` retains exact text replacement and SHA-256 compare-and-swap.
+`file_restore` lists managed backups when `backup_id` is omitted and
+restores a selected snapshot otherwise. `terminal_send` accepts optional
+`rows` and `cols` together to resize a live PTY.
+
+The underlying server still accepts a selection of legacy tool names for
+existing MCP clients, but the new tool list exposes only the simplified APIs.
 
 Both command tools accept `secret_env`. A value may come from a text file or a
 dot-selected scalar in TOML or JSON:

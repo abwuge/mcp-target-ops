@@ -341,16 +341,16 @@ URL 或秘密值。高级部署仍可使用内联 URL 或文件秘密引用，�
 
 ## 工具列表
 
-Target Ops 当前提供 38 个工具。
+Target Ops 当前向 MCP 客户端公开 24 个工具（部分旧工具名仅保留短期兼容分发，不再在工具列表中出现）。
 
 | 类别 | 工具 |
 | --- | --- |
 | 服务 | `server_info` |
 | 目标 | `target_list`、`target_current`、`target_select`、`target_connect`、`target_disconnect` |
 | 下游 MCP | `mcp_server_list`、`mcp_tools_list`、`mcp_tool_call` |
-| 命令与任务 | `exec`、`exec_batch`、`exec_start`、`job_poll`、`job_output`、`job_wait`、`job_cancel` |
-| 文件与目录 | `file_read`、`file_backup`、`file_backup_list`、`file_restore`、`file_backup_delete`、`file_list`、`file_find`、`file_edit`、`file_write`、`file_delete`、`file_import`、`file_export`、`file_transfer`、`file_patch`、`file_move`、`file_chmod`、`directory_create` |
-| 终端 | `terminal_open`、`terminal_send`、`terminal_read`、`terminal_resize`、`terminal_close` |
+| 命令与任务 | `exec`、`job` |
+| 文件与目录 | `read`、`file_edit`、`write`、`file_delete`、`file_import`、`file_export`、`file_transfer`、`file_backup`、`file_restore` |
+| 终端 | `terminal_open`、`terminal_send`、`terminal_read`、`terminal_close` |
 
 每个工具都声明对象形式的 `outputSchema`，成功结果通过 `structuredContent` 返回，
 并包含标准 MCP annotations。启用 OAuth 后，工具描述还会公布已配置的 OAuth
@@ -358,29 +358,30 @@ scope。
 
 ### 命令与后台任务
 
-`exec` 执行一个受限的非交互式 shell 命令或脚本。`exec_batch` 可在一次工具调用中
-执行最多 32 个彼此独立的命令，默认顺序执行，也可以显式请求并行执行，并为每条命令
-返回独立的结构化结果；顺序模式还可在首次失败时停止。若多条命令需要共享 `cd`、变量、
-管道或控制流等 shell 状态，应继续使用 `exec`；若只是为了减少工具调用而批量进行互不
-依赖的检查，应优先使用 `exec_batch`，而不是用 shell 分隔符强行拼接。
+现在对外仅有 **`exec` 和 `job` 两个接口**：
 
-长命令使用 `exec_start`，通过 `job_output` 增量读取 stdout/stderr。
+- `exec` 既支持单条 `command`，也支持 1–32 条独立 `commands`（字符串或详细对象）。
+  批量命令可选择 `mode=sequential|parallel`。`yield_time_ms` 是前台等待时长，
+  超过后**转为后台任务而不是中止进程**；`timeout_ms` 才是真正的执行期限
+  （批量模式下按单条命令生效）。后台批量任务以任务组 ID 查询，保留独立子命令结果，
+  支持取消正在执行的命令。
+- `job` 根据 `job_id` 管理单任务和任务组，支持 `action=status|read|wait|cancel`，
+  默认读取状态和输出。`wait_ms` 控制等待时间，单命令保留增量输出游标。
 
-**MCP 返回结果不再重复原始调用参数。** `exec`、`exec_batch`
-每条结果及后台任务完成通知中的 `command`、`cwd` 输入回显已移除，
-但目标、执行状态、stdout/stderr、退出码、耗时和任务 ID 均保留。
-`file_write` / `file_import` 不再回显新写入的 `content`，
-`file_patch` 不再把提交的补丁原样作为 `diff` 返回。
-真正的操作结果（文件读取内容、删除文件的恢复数据、计算得出的编辑/覆盖差异）
-仍然保留；所有请求参数和审计记录仍可在已认证的 Dashboard 中查询。
+```json
+{"target":"local","commands":["git status --short","git log -1"],"mode":"parallel","yield_time_ms":5000}
+```
 
-对于模型侧只需要“等后台命令结束后再继续”的工作流，应优先使用 `job_wait`，而不是反复调用 `job_poll` 或 `job_output`。其服务端默认等待窗口与最大等待窗口分别来自 `runtime.job_wait_default_timeout_ms` 和 `runtime.job_wait_max_timeout_ms`，单次调用可以请求更短的等待时间。
+`read` 同时支持按行读取（单文件和多文件）及使用 `rg` 搜索目录。
+搜索支持正则、glob 包含/排除、大小写、上下文与最大匹配数，并返回结构化匹配；
+搜索所在目标机需安装 `ripgrep`。
 
-`exec` 与 `exec_start` 现在共用同一套 `CommandSession`，统一处理进程生命周期、
-stdout/stderr 捕获、超时、取消与增量输出。`exec` 会等待会话结束，并在未显式设置
-超时时继续使用目标策略的默认 timeout；`exec_start` 会立即返回任务 ID，未指定时不
-设置运行时 timeout。子进程 stdin 与 MCP 控制流隔离。SSH 命令会话使用独立 OpenSSH
-进程；远程文件操作继续复用每个目标的持久 SSH worker。
+`write` 使用 `content` 完整写入文件，或使用 `patch` 应用 Unified Diff，
+二者互斥；多文件补丁复用既有校验与回滚流程。`file_edit` 保留精确替换及 SHA 校验。
+`file_restore` 无备份 ID 时列出托管快照，提供 ID 时恢复。
+`terminal_send` 可连同输入可选地提供 `rows` 和 `cols` 改变 PTY 尺寸。
+
+旧版工具名暂时只保留兼容性分发，**不再出现在新的 `tools/list` 中**。
 
 两个命令工具都支持 `secret_env`。值可以来自纯文本文件，也可以来自 TOML/JSON
 中以点号路径选中的标量：
@@ -435,12 +436,11 @@ MCP 请求参数中；但被启动的命令仍可通过输出环境或主动发�
 超过配置的最大值（默认 30 天）。Unix 下备份目录权限为 0700，payload 与元数据文件
 权限为 0600。
 
-即使调用者已经丢失原始工具结果或对话上下文，也可以通过 `file_backup_list` 重新找到
+即使调用者已经丢失原始工具结果或对话上下文，也可以通过不提供 `backup_id` 的 `file_restore` 重新找到
 仍有效的快照。默认返回最新 100 条，可通过 `limit` 调整到最多 200 条，并返回
 `total_matches` 与 `truncated`。`file_restore` 会先验证备份完整性，再恢复到原路径或显式指定的新路径；
 如果目标文件已经存在，必须提供 `expected_current_sha256` 做 CAS 校验，或明确设置
-`overwrite = true`。支持的平台会同时恢复原权限位。`file_backup_delete` 可提前删除单个
-快照，但不会触碰源文件。
+`overwrite = true`。支持的平台会同时恢复原权限位。快照无需专门的删除工具，由自动清理机制管理，不会触碰原始源文件。
 
 过期快照在备份相关操作中会立即视为不可用，并在服务启动时、后台清理线程中（默认每
 60 秒）以及正常工具流量的节流清理中从磁盘删除；同时执行 `file_backup_store_max_bytes` 总容量预算和
@@ -449,9 +449,9 @@ MCP 请求参数中；但被启动的命令仍可通过输出环境或主动发�
 
 ### 终端
 
-`terminal_open` 启动持久 PTY，并永久绑定到当时解析出的目标。`terminal_read` 支持
-增量读取，`terminal_send` 写入输入，`terminal_resize` 调整真实 PTY 尺寸。终端
-输出使用有界环形缓冲区，所有会话均为进程内状态。
+`terminal_open` 启动持久 PTY，并绑定到当时解析出的目标。`terminal_read` 支持
+增量读取，`terminal_send` 可写入输入并同时附带 `rows` 和 `cols` 调整真实 PTY 尺寸，
+因此不再单独公开 `terminal_resize`。终端输出使用有界环形缓冲区，所有会话均为进程内状态。
 
 ### ChatGPT 文件集成
 

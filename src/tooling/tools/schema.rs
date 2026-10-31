@@ -89,6 +89,9 @@ pub(super) fn output_schema(name: &str) -> Value {
             "required": ["server", "tool", "result"],
             "additionalProperties": false
         }),
+        "job" | "read" | "write" => {
+            json!({"type":"object","properties":{}, "required":[],"additionalProperties":false})
+        }
         "exec" => json!({
             "type": "object",
             "properties": {
@@ -548,6 +551,68 @@ pub(super) fn output_schema(name: &str) -> Value {
         _ => unreachable!("output schema missing for tool {name}"),
     };
 
+    match name {
+        "exec" => {
+            let batch = output_schema("exec_batch");
+            for (key, value) in batch["properties"].as_object().unwrap() {
+                schema["properties"][key] = value.clone();
+            }
+            schema["properties"]["job_id"] = json!({"type":"string"});
+            schema["properties"]["status"] = json!({"type":"string"});
+            schema["properties"]["auto_backgrounded"] = json!({"type":"boolean"});
+            schema["properties"]["timed_out"] =
+                json!({"oneOf":[{"type":"boolean"},{"type":"integer"}]});
+            schema["properties"]["kind"] = json!({"type":"string"});
+            schema["properties"]["target"] = json!({"type":"string"});
+            schema["properties"]["done"] = json!({"type":"boolean"});
+            schema["properties"]["cancel_requested"] = json!({"type":"boolean"});
+            schema["properties"]["completed_count"] = json!({"type":"integer"});
+            schema["properties"]["elapsed_ms"] = json!({"type":"integer"});
+        }
+        "job" => {
+            schema = output_schema("job_wait");
+            schema["properties"]["results"] =
+                json!({"type":"array","items":exec_batch_item_schema()});
+            schema["properties"]["kind"] = json!({"type":"string"});
+            schema["properties"]["done"] = json!({"type":"boolean"});
+            schema["properties"]["completed_count"] = json!({"type":"integer"});
+            schema["properties"]["requested_count"] = json!({"type":"integer"});
+            schema["properties"]["executed_count"] = json!({"type":"integer"});
+            schema["properties"]["cancel_requested"] = json!({"type":"boolean"});
+            schema["properties"]["resolved_target"] = resolved_target_schema();
+            schema["properties"]["mode"] = json!({"type":"string"});
+            schema["properties"]["succeeded"] = json!({"type":"integer"});
+            schema["properties"]["failed"] = json!({"type":"integer"});
+            schema["properties"]["stopped_early"] = json!({"type":"boolean"});
+            schema["properties"]["timed_out"] =
+                json!({"oneOf":[{"type":"boolean"},{"type":"integer"}]});
+            schema["required"] = json!(["job_id", "status"]);
+        }
+        "read" => {
+            schema = output_schema("file_read");
+            schema["properties"]["pattern"] = json!({"type":"string"});
+            schema["properties"]["match_count"] = json!({"type":"integer"});
+            schema["properties"]["results"] = json!({"type":"array","items":{"type":"object"}});
+            schema["properties"]["timed_out"] = json!({"type":"boolean"});
+        }
+        "write" => {
+            schema = output_schema("file_write");
+            let patch = output_schema("file_patch");
+            for (key, value) in patch["properties"].as_object().unwrap() {
+                schema["properties"][key] = value.clone();
+            }
+            schema["required"] = json!(["resolved_target", "path", "written"]);
+        }
+        "file_restore" => {
+            let listing = output_schema("file_backup_list");
+            for (key, value) in listing["properties"].as_object().unwrap() {
+                schema["properties"][key] = value.clone();
+            }
+            schema["required"] = json!(["resolved_target"]);
+        }
+        _ => {}
+    }
+
     schema["properties"]["completed_jobs"] = json!({
         "type": "array",
         "items": completed_job_schema()
@@ -620,6 +685,9 @@ fn exec_batch_item_schema() -> Value {
         "type": "object",
         "properties": {
             "index": { "type": "integer", "minimum": 0 },
+            "status": { "type": "string" },
+            "stdout_next_seq": { "type": "integer" },
+            "stderr_next_seq": { "type": "integer" },
             "exit_code": nullable_integer_schema(),
             "stdout": { "type": "string" },
             "stderr": { "type": "string" },
@@ -630,7 +698,7 @@ fn exec_batch_item_schema() -> Value {
             "elapsed_ms": { "type": "integer", "minimum": 0 },
             "success": { "type": "boolean" }
         },
-        "required": ["index", "elapsed_ms", "success"],
+        "required": ["index", "elapsed_ms"],
         "additionalProperties": false
     })
 }

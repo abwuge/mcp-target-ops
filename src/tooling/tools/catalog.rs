@@ -34,65 +34,19 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
             required_string("tool", "Downstream MCP tool name."),
             optional_value("arguments", "JSON object passed as downstream tool arguments. Defaults to an empty object.", json!({"type":"object","additionalProperties":true})),
         ])),
-        tool("exec_batch", "Run multiple logically independent non-interactive commands in one tool call and return a separate result for each. Prefer this over combining unrelated inspections with shell separators; use exec for commands that must share shell state such as cd, variables, pipelines, or control flow. Prefer batch file_read for reading several known files.", exec_batch_schema()),
-        tool("exec", "Run one non-interactive shell command or script. Long-running executions may be promoted automatically to a background job and return job_id instead of blocking. When that happens, use job_wait to wait once for completion or continue with other work; do not repeatedly poll. Prefer exec_start when a command is known in advance to be long-running or live output matters. Use exec_batch for several short, logically independent commands. Prefer file_read/file_find over cat, sed, or grep when reading known files. Do not create ad-hoc .bak/.old safety copies with shell commands; use file_backup for managed rollback snapshots.", object_schema(vec![
-            optional_string("target", "Target id: local or ssh:<profile>. Omit to use active target."),
-            required_string("command", "Shell command or script to execute as one shell unit."),
-            optional_string("cwd", "Working directory."),
-            optional_integer("timeout_ms", "Timeout in milliseconds."),
-            optional_integer("max_output_bytes", "Maximum bytes to return for stdout and stderr."),
-            optional_value("secret_env", "Map environment variable names to server-side secret references.", secret_env_schema()),
-        ])),
-        tool("exec_start", "Start a non-interactive command as a background job and return immediately. Prefer this for longer commands or when live output matters. Use job_wait when the model only needs to continue after completion; use job_output for incremental output. Jobs support cancellation and optional runtime timeouts.", object_schema(vec![
-            optional_string("target", "Target id: local or ssh:<profile>. Omit to use active target."),
-            required_string("command", "Shell command to execute."),
-            optional_string("cwd", "Working directory."),
-            optional_integer("timeout_ms", "Optional job timeout in milliseconds. Omit for no runtime timeout."),
-            optional_integer("max_output_bytes", "Maximum retained bytes for each stdout and stderr buffer."),
-            optional_value("secret_env", "Map environment variable names to server-side secret references.", secret_env_schema()),
-        ])),
-        tool("job_poll", "Return the current state and exit information for a background job.", object_schema(vec![
-            required_string("job_id", "Job id returned by exec_start."),
-        ])),
-        tool("job_output", "Read incremental stdout and stderr from a background job using independent sequence cursors.", object_schema(vec![
-            required_string("job_id", "Job id returned by exec_start."),
-            optional_integer("stdout_since_seq", "Last stdout sequence already consumed. Omit or use 0 for buffered output."),
-            optional_integer("stderr_since_seq", "Last stderr sequence already consumed. Omit or use 0 for buffered output."),
-            optional_integer("max_bytes", "Maximum bytes to return from each stream."),
-        ])),
-        tool("job_wait", "Wait for a background job to finish without repeated client polling, then return its status and incremental output. The configured default and maximum wait windows apply.", object_schema(vec![
-            required_string("job_id", "Job id returned by exec_start."),
-            optional_integer("wait_timeout_ms", "Maximum time to wait in this call. The configured default and cap apply."),
-            optional_integer("stdout_since_seq", "Last stdout sequence already consumed. Omit or use 0 for buffered output."),
-            optional_integer("stderr_since_seq", "Last stderr sequence already consumed. Omit or use 0 for buffered output."),
-            optional_integer("max_bytes", "Maximum bytes to return from each stream."),
-        ])),
-        tool("job_cancel", "Request cancellation of a running background job.", object_schema(vec![
-            required_string("job_id", "Job id returned by exec_start."),
-        ])),
+        tool("exec", "Execute one command or a batch of independent commands, sequentially or in parallel. Supports yield_time_ms for automatic background promotion and timeout_ms for a real execution deadline. For job_id results use job.", exec_schema()),
+        tool("job", "Manage foreground-promoted or background jobs and batch groups by job_id. action=status/read/wait/cancel, default read; wait_ms controls blocking, output cursors for single jobs.", job_schema()),
         // COMPAT(COMPAT-006): Keep the original top-level path/range request shape
         // while newer callers migrate to the files[] batch form.
-        tool("file_read", "Read one known file or batch several independent file/range reads in one call. Prefer this over exec with cat/sed when file paths are known. Single-file path mode remains compatible; batch mode uses files[] and keeps per-file failures independent.", file_read_schema()),
+        tool("read", "Read exact file/range data or search a directory with ripgrep regular expressions, glob filters, match lines and context. Accepts single path or batch files for reads; search with path + pattern. Returns bounded structured data.", read_schema()),
         tool("file_backup", "Create a managed rollback snapshot of one file. Use this instead of cp/mv-based .bak, .old, timestamped, or in-place backup files. Snapshots are centrally tracked under the Target Ops runtime directory, expire automatically, preserve the original mode when available, and can be restored with file_restore.", file_backup_schema()),
-        tool("file_backup_list", "List the newest unexpired managed rollback snapshots for one target, optionally restricted to an exact source path. Results are bounded (100 by default, 200 maximum); expired snapshots are removed automatically.", file_backup_list_schema()),
-        tool("file_restore", "Restore a managed file_backup snapshot to its original path or an explicit destination. Existing destinations require expected_current_sha256 or overwrite=true. The target must match the backup and normal write policy still applies.", file_restore_schema()),
-        tool("file_backup_delete", "Delete one managed rollback snapshot before its TTL expires. This removes only the managed backup; it never deletes the source file.", file_backup_delete_schema()),
-        tool("file_list", "List one directory on the explicit target or active target.", object_schema(vec![
-            optional_string("target", "Target id. Omit to use active target."),
-            required_string("path", "Directory path."),
-            optional_integer("timeout_ms", "Timeout in milliseconds for remote directory access."),
-        ])),
+        tool("file_restore", "List managed backups when backup_id is omitted; restore one backup when backup_id is supplied. Existing destinations require expected_current_sha256 or overwrite=true.", restore_schema()),
         tool("file_edit", "Apply exact text replacements with sha256 compare-and-swap support. Existing file permissions are preserved. Writes require explicit target by default.", file_edit_schema()),
-        tool("file_write", "Create or replace a UTF-8 or base64 file atomically. Existing files require overwrite=true or an expected sha256. Writes require explicit target by default.", file_write_schema()),
+        tool("write", "Atomically write file content or apply a unified patch (including multi-file patches); supply exactly one of content or patch. Supports expected_sha256 and dry-run for patches. Use file_edit for precise text substitutions.", write_schema()),
         tool("file_delete", "Delete one file after optionally checking its sha256. Returns the deleted content for review. Directories are refused.", file_delete_schema()),
         tool("file_import", "Import a ChatGPT or connector file reference into a target path. Accepts platform-rewritten local paths or HTTPS download URLs and preserves the normal target write policy.", file_import_schema()),
         tool("file_export", "Export one target file. IMPORTANT: file_export can trigger mandatory front-end review/approval. If the user is away, approval may time out and terminate the model's reasoning. Avoid this tool during active reasoning unless it is strictly necessary; prefer using it only after the substantive work is complete, especially with expensive Pro-tier models. The default link delivery returns a short-lived opaque HTTPS download URL; delivery=attachment preserves the embedded-resource compatibility path.", file_export_schema()),
         tool("file_transfer", "Copy one regular file between two different targets without materializing file data in the model. Both source_target and destination_target must be explicit. Uses rsync when available and falls back to scp. SSH-to-SSH transfers are direct between the two targets: Target Ops may initiate commands from either remote side, but the plugin host is never used as a file-data relay.", file_transfer_schema()),
-        tool("file_patch", "Apply a unified diff to one UTF-8 file, or a standard multi-file unified diff rooted at path. Single-file mode supports sha256 compare-and-swap; multi-file mode validates all files before writing and rolls back earlier writes if a later write fails.", file_patch_schema()),
-        tool("file_find", "Find literal text in one UTF-8 file and return matching lines with bounded context.", file_find_schema()),
-        tool("file_move", "Move or rename a file or directory within one target. Existing destinations are not replaced unless overwrite=true.", file_move_schema()),
-        tool("file_chmod", "Change the Unix mode of a file or directory using an octal mode string.", file_chmod_schema()),
-        tool("directory_create", "Create a directory on the selected target, recursively by default.", directory_create_schema()),
         tool("terminal_open", "Open a persistent PTY terminal on the explicit target or active target.", object_schema(vec![
             optional_string("target", "Target id. Omit to use active target."),
             optional_string("cwd", "Initial working directory."),
@@ -100,19 +54,16 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
             optional_integer("rows", "PTY rows."),
             optional_integer("cols", "PTY columns."),
         ])),
-        tool("terminal_send", "Send input to an existing terminal_id. The terminal is already bound to its target.", object_schema(vec![
+        tool("terminal_send", "Send input and optionally resize the same live PTY session; supply rows and cols together, with or without input.", object_schema(vec![
             required_string("terminal_id", "Terminal id from terminal_open."),
-            required_string("input", "Input bytes represented as UTF-8 text, usually ending in newline."),
+            optional_string("input", "UTF-8 terminal input; omit for a resize-only operation."),
+            optional_integer("rows", "Optional PTY height; must accompany cols."),
+            optional_integer("cols", "Optional PTY width; must accompany rows."),
         ])),
         tool("terminal_read", "Read incremental output from an existing terminal_id.", object_schema(vec![
             required_string("terminal_id", "Terminal id from terminal_open."),
             optional_integer("since_seq", "Last seen sequence number. Omit or 0 to read buffered output."),
             optional_integer("max_bytes", "Maximum output bytes."),
-        ])),
-        tool("terminal_resize", "Resize the live PTY associated with an open terminal session.", object_schema(vec![
-            required_string("terminal_id", "Terminal id from terminal_open."),
-            required_integer("rows", "PTY rows."),
-            required_integer("cols", "PTY columns."),
         ])),
         tool("terminal_close", "Close an existing terminal session.", object_schema(vec![
             required_string("terminal_id", "Terminal id from terminal_open."),
@@ -163,8 +114,10 @@ fn tool(
         );
     }
 
-    if matches!(name, "exec" | "exec_batch" | "exec_start") {
-        let (invoking, invoked) = if name == "exec_batch" {
+    if matches!(name, "exec" | "job" | "exec_batch" | "exec_start") {
+        let (invoking, invoked) = if name == "job" {
+            ("Checking job…", "Job result received")
+        } else if name == "exec_batch" {
             ("Running command batch…", "Command batch finished")
         } else if name == "exec_start" {
             ("Starting command…", "Command started")
@@ -181,7 +134,7 @@ fn tool(
         );
     }
 
-    if name == "file_read" {
+    if matches!(name, "read" | "file_read") {
         meta.insert(
             "openai/toolInvocation/invoking".to_string(),
             Value::String("Reading file…".to_string()),
@@ -194,7 +147,13 @@ fn tool(
 
     if matches!(
         name,
-        "file_edit" | "file_write" | "file_delete" | "file_import" | "file_patch" | "file_move"
+        "write"
+            | "file_edit"
+            | "file_write"
+            | "file_delete"
+            | "file_import"
+            | "file_patch"
+            | "file_move"
     ) {
         meta.insert(
             "openai/toolInvocation/invoking".to_string(),
@@ -248,6 +207,7 @@ fn tool_annotations(name: &str) -> Value {
             | "job_poll"
             | "job_output"
             | "job_wait"
+            | "read"
             | "file_read"
             | "file_list"
             | "file_backup_list"
@@ -258,6 +218,8 @@ fn tool_annotations(name: &str) -> Value {
     let destructive = matches!(
         name,
         "exec"
+            | "job"
+            | "write"
             | "exec_batch"
             | "exec_start"
             | "job_cancel"
@@ -276,6 +238,8 @@ fn tool_annotations(name: &str) -> Value {
     let open_world = matches!(
         name,
         "exec"
+            | "job"
+            | "write"
             | "exec_batch"
             | "exec_start"
             | "mcp_tools_list"
@@ -347,20 +311,95 @@ fn optional_value(name: &'static str, description: &'static str, schema: Value) 
     }
 }
 
-fn required_integer(name: &'static str, description: &'static str) -> Prop {
-    Prop {
-        name,
-        required: true,
-        value: json!({ "type": "integer", "description": description }),
-    }
-}
-
 fn optional_integer(name: &'static str, description: &'static str) -> Prop {
     Prop {
         name,
         required: false,
         value: json!({ "type": "integer", "description": description }),
     }
+}
+
+fn exec_schema() -> Value {
+    let mut schema = exec_batch_schema();
+    let properties = schema["properties"].as_object_mut().unwrap();
+    properties.insert("command".into(), json!({"type":"string","minLength":1,"description":"One shell command/script; supply this OR commands."}));
+    properties.insert(
+        "cwd".into(),
+        json!({"type":"string","description":"Single-command working directory."}),
+    );
+    properties.insert("yield_time_ms".into(), json!({"type":"integer","minimum":0,"maximum":120000,"description":"Foreground wait before promoting to a job; 0 starts in background. Different from execution timeout."}));
+    properties.insert("timeout_ms".into(), json!({"type":"integer","minimum":1,"description":"Execution deadline (per command for batch)."}));
+    properties.insert(
+        "max_output_bytes".into(),
+        json!({"type":"integer","minimum":1}),
+    );
+    schema["required"] = json!([]);
+    schema["oneOf"] = json!([{"required":["command"]}, {"required":["commands"]}]);
+    schema
+}
+
+fn job_schema() -> Value {
+    json!({"type":"object","properties":{
+        "job_id":{"type":"string","description":"Single job or batch group ID from exec."},
+        "action":{"type":"string","enum":["status","read","wait","cancel"],"description":"Defaults to read, including status and output. wait blocks for a bounded window."},
+        "wait_ms":{"type":"integer","minimum":0,"description":"Maximum wait window for action=wait."},
+        "stdout_since_seq":{"type":"integer","minimum":0,"description":"Single job stdout cursor."},
+        "stderr_since_seq":{"type":"integer","minimum":0,"description":"Single job stderr cursor."},
+        "max_bytes":{"type":"integer","minimum":1}
+    },"required":["job_id"],"additionalProperties":false})
+}
+
+fn read_schema() -> Value {
+    let mut schema = file_read_schema();
+    let props = schema["properties"].as_object_mut().unwrap();
+    props.insert("pattern".into(),json!({"type":"string","minLength":1,"description":"Search path recursively with ripgrep, return structured matches and context; otherwise read path/files exactly."}));
+    props.insert(
+        "regex".into(),
+        json!({"type":"boolean","description":"Default true; false performs literal matching."}),
+    );
+    props.insert(
+        "case_sensitive".into(),
+        json!({"type":"boolean","description":"Default true."}),
+    );
+    props.insert(
+        "glob".into(),
+        json!({"type":"array","items":{"type":"string"},"description":"Include globs."}),
+    );
+    props.insert(
+        "exclude".into(),
+        json!({"type":"array","items":{"type":"string"},"description":"Exclude globs."}),
+    );
+    props.insert(
+        "context_lines".into(),
+        json!({"type":"integer","minimum":0,"maximum":8}),
+    );
+    props.insert(
+        "max_matches".into(),
+        json!({"type":"integer","minimum":1,"maximum":200}),
+    );
+    props.insert("max_output_bytes".into(),json!({"type":"integer","minimum":1024,"description":"Search byte budget; file reads use max_bytes."}));
+    schema
+}
+
+fn write_schema() -> Value {
+    let mut schema = file_write_schema();
+    let patch = file_patch_schema();
+    let properties = schema["properties"].as_object_mut().unwrap();
+    properties.insert("patch".into(), patch["properties"]["patch"].clone());
+    properties.insert("dry_run".into(), patch["properties"]["dry_run"].clone());
+    schema["required"] = json!(["path"]);
+    schema["oneOf"] = json!([{"required":["content"]},{"required":["patch"]}]);
+    schema
+}
+
+fn restore_schema() -> Value {
+    let mut schema = file_restore_schema();
+    let list = file_backup_list_schema();
+    let props = schema["properties"].as_object_mut().unwrap();
+    props.insert("path".into(), list["properties"]["path"].clone());
+    props.insert("limit".into(), list["properties"]["limit"].clone());
+    schema["required"] = json!([]);
+    schema
 }
 
 fn exec_batch_schema() -> Value {
@@ -480,18 +519,6 @@ fn file_restore_schema() -> Value {
     })
 }
 
-fn file_backup_delete_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "target": { "type": "string", "description": "Target id. Must match the backup. Writes require an explicit target by default policy." },
-            "backup_id": { "type": "string", "description": "Managed backup id to delete." }
-        },
-        "required": ["backup_id"],
-        "additionalProperties": false
-    })
-}
-
 fn file_edit_schema() -> Value {
     json!({
         "type": "object",
@@ -517,13 +544,6 @@ fn file_edit_schema() -> Value {
         },
         "required": ["path", "edits"],
         "additionalProperties": false
-    })
-}
-
-fn secret_env_schema() -> Value {
-    json!({
-        "type": "object",
-        "additionalProperties": secret_ref_schema()
     })
 }
 
@@ -646,67 +666,6 @@ fn file_patch_schema() -> Value {
     })
 }
 
-fn file_find_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "target": { "type": "string", "description": "Target id. Omit to use active target." },
-            "path": { "type": "string", "description": "UTF-8 text file path." },
-            "pattern": { "type": "string", "description": "Literal text to find." },
-            "case_sensitive": { "type": "boolean", "description": "Use case-sensitive matching. Defaults to true." },
-            "context_lines": { "type": "integer", "minimum": 0, "maximum": 20, "description": "Lines of context before and after each match. Defaults to 2." },
-            "max_matches": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Maximum matches to return. Defaults to 20." },
-            "timeout_ms": { "type": "integer", "description": "Timeout for remote file access." }
-        },
-        "required": ["path", "pattern"],
-        "additionalProperties": false
-    })
-}
-
-fn file_move_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "target": { "type": "string", "description": "Target id. Writes require an explicit target by default." },
-            "source": { "type": "string", "description": "Existing source path." },
-            "destination": { "type": "string", "description": "Destination path on the same target." },
-            "overwrite": { "type": "boolean", "description": "Replace an existing destination. Defaults to false." },
-            "timeout_ms": { "type": "integer", "description": "Timeout for remote file access." }
-        },
-        "required": ["source", "destination"],
-        "additionalProperties": false
-    })
-}
-
-fn file_chmod_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "target": { "type": "string", "description": "Target id. Writes require an explicit target by default." },
-            "path": { "type": "string", "description": "File or directory path." },
-            "mode": { "type": "string", "description": "Octal mode such as 0644 or 0755." },
-            "timeout_ms": { "type": "integer", "description": "Timeout for remote file access." }
-        },
-        "required": ["path", "mode"],
-        "additionalProperties": false
-    })
-}
-
-fn directory_create_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "target": { "type": "string", "description": "Target id. Writes require an explicit target by default." },
-            "path": { "type": "string", "description": "Directory path." },
-            "recursive": { "type": "boolean", "description": "Create missing parents. Defaults to true." },
-            "mode": { "type": "string", "description": "Optional octal mode such as 0755." },
-            "timeout_ms": { "type": "integer", "description": "Timeout for remote file access." }
-        },
-        "required": ["path"],
-        "additionalProperties": false
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -715,7 +674,7 @@ mod tests {
     fn catalog_contains_only_model_tools_without_app_metadata() {
         let tools = list_tools(None);
         let tools = tools.as_array().unwrap();
-        assert_eq!(tools.len(), 38);
+        assert_eq!(tools.len(), 24);
         for tool in tools {
             assert!(!matches!(
                 tool["name"].as_str().unwrap(),
@@ -781,8 +740,8 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .find(|tool| tool["name"] == "file_read")
-            .expect("file_read tool");
+            .find(|tool| tool["name"] == "read")
+            .expect("read tool");
 
         assert!(file_read["_meta"]["ui"]["resourceUri"].is_null());
         assert!(file_read["_meta"]["openai/outputTemplate"].is_null());
@@ -812,37 +771,35 @@ mod tests {
             .unwrap()
             .iter()
             .any(|required| required == "command"));
-        let batch = &schema("exec_batch")["properties"]["results"]["items"];
+        let batch = &schema("exec")["properties"]["results"]["items"];
         assert!(batch["properties"].get("command").is_none());
         assert!(batch["properties"].get("cwd").is_none());
         let completed = &schema("target_current")["properties"]["completed_jobs"]["items"];
         assert!(completed["properties"].get("command").is_none());
         assert!(completed["properties"].get("cwd").is_none());
-        assert!(schema("file_write")["properties"].get("content").is_none());
+        assert!(schema("write")["properties"].get("content").is_none());
         assert!(schema("file_import")["properties"].get("content").is_none());
-        assert!(schema("file_patch")["properties"].get("diff").is_none());
+        assert!(schema("write")["properties"].get("files").is_some());
 
         // These are actual results, not repeated request payloads.
-        assert!(schema("file_read")["properties"].get("content").is_some());
+        assert!(schema("read")["properties"].get("content").is_some());
         assert!(schema("file_delete")["properties"].get("content").is_some());
         assert!(schema("file_edit")["properties"].get("diff").is_some());
-        assert!(schema("file_write")["properties"].get("diff").is_some());
+        assert!(schema("write")["properties"].get("diff").is_some());
     }
 
     #[test]
-    fn batch_is_discoverable_before_exec_with_concise_commands() {
+    fn unified_exec_supports_single_and_batch_commands() {
         let tools = list_tools(None);
         let tools = tools.as_array().unwrap();
-        let batch_pos = tools
-            .iter()
-            .position(|t| t["name"] == "exec_batch")
-            .unwrap();
-        let exec_pos = tools.iter().position(|t| t["name"] == "exec").unwrap();
-        assert!(batch_pos < exec_pos);
-        let items = &tools[batch_pos]["inputSchema"]["properties"]["commands"]["items"]["oneOf"];
+        let exec = tools.iter().find(|t| t["name"] == "exec").unwrap();
+        let items = &exec["inputSchema"]["properties"]["commands"]["items"]["oneOf"];
         assert_eq!(items[0]["type"], "string");
         assert_eq!(items[1]["type"], "object");
-        assert_eq!(items[1]["required"][0], "command");
+        assert_eq!(exec["inputSchema"]["oneOf"][0]["required"][0], "command");
+        assert_eq!(exec["inputSchema"]["oneOf"][1]["required"][0], "commands");
+        assert!(tools.iter().any(|t| t["name"] == "job"));
+        assert!(!tools.iter().any(|t| t["name"] == "exec_batch"));
     }
 
     #[test]
@@ -852,12 +809,7 @@ mod tests {
 
         for (name, invoking, invoked) in [
             ("exec", "Running command…", "Command finished"),
-            (
-                "exec_batch",
-                "Running command batch…",
-                "Command batch finished",
-            ),
-            ("exec_start", "Starting command…", "Command started"),
+            ("job", "Checking job…", "Job result received"),
         ] {
             let tool = tools
                 .iter()

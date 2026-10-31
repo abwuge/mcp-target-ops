@@ -2,8 +2,11 @@ mod command_session;
 mod edit;
 mod stream;
 
+pub mod batch;
+pub mod command_api;
 pub mod download;
 pub mod exec;
+pub mod file_api;
 pub mod file_backup;
 pub mod file_bridge;
 pub mod file_transfer;

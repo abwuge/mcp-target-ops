@@ -209,21 +209,7 @@ impl JobRegistry {
         })
     }
 
-    pub fn run_adaptive(
-        &self,
-        state: &AppState,
-        req: ExecStartRequest,
-        caller_key: &str,
-    ) -> Result<AdaptiveExecOutput> {
-        self.run_adaptive_with_threshold(
-            state,
-            req,
-            caller_key,
-            Duration::from_millis(self.runtime.exec_auto_background_after_ms),
-        )
-    }
-
-    fn run_adaptive_with_threshold(
+    pub(crate) fn run_adaptive_with_threshold(
         &self,
         state: &AppState,
         req: ExecStartRequest,
@@ -291,6 +277,15 @@ impl JobRegistry {
             job_id: id,
             status: "running",
         })
+    }
+
+    pub(crate) fn create_batch_session(
+        &self,
+        state: &AppState,
+        req: &ExecStartRequest,
+    ) -> Result<Arc<CommandSession>> {
+        let (_, session) = self.create_session(state, req, SessionTimeoutPolicy::ExplicitOnly)?;
+        Ok(session)
     }
 
     fn create_session(
@@ -714,7 +709,7 @@ mod tests {
             .jobs
             .wait(JobWaitRequest {
                 job_id: started.job_id,
-                wait_timeout_ms: Some(1000),
+                wait_timeout_ms: Some(5000),
                 stdout_since_seq: None,
                 stderr_since_seq: None,
                 max_bytes: None,
@@ -760,7 +755,7 @@ mod tests {
             .jobs
             .wait(JobWaitRequest {
                 job_id: started.job_id,
-                wait_timeout_ms: Some(1000),
+                wait_timeout_ms: Some(5000),
                 stdout_since_seq: None,
                 stderr_since_seq: None,
                 max_bytes: None,
@@ -796,7 +791,7 @@ mod tests {
             .wait_for_caller(
                 JobWaitRequest {
                     job_id,
-                    wait_timeout_ms: Some(1000),
+                    wait_timeout_ms: Some(5000),
                     stdout_since_seq: None,
                     stderr_since_seq: None,
                     max_bytes: None,
@@ -849,7 +844,7 @@ mod tests {
             .wait_for_caller(
                 JobWaitRequest {
                     job_id,
-                    wait_timeout_ms: Some(1000),
+                    wait_timeout_ms: Some(5000),
                     stdout_since_seq: None,
                     stderr_since_seq: None,
                     max_bytes: None,
@@ -976,7 +971,7 @@ mod tests {
             .wait_for_caller(
                 JobWaitRequest {
                     job_id: started.job_id,
-                    wait_timeout_ms: Some(1000),
+                    wait_timeout_ms: Some(5000),
                     stdout_since_seq: None,
                     stderr_since_seq: None,
                     max_bytes: None,

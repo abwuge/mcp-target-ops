@@ -49,7 +49,12 @@ pub struct TerminalOpenResponse {
 #[derive(Debug, Clone, Deserialize)]
 pub struct TerminalSendRequest {
     pub terminal_id: String,
-    pub input: String,
+    #[serde(default)]
+    pub input: Option<String>,
+    #[serde(default)]
+    pub rows: Option<u16>,
+    #[serde(default)]
+    pub cols: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -247,12 +252,40 @@ impl TerminalRegistry {
 
     pub fn send(&self, req: TerminalSendRequest) -> Result<TerminalSendResponse> {
         let session = self.get(&req.terminal_id)?;
-        let mut writer = session.writer.lock().unwrap();
-        writer.write_all(req.input.as_bytes())?;
-        writer.flush()?;
+        match (req.rows, req.cols) {
+            (Some(rows), Some(cols)) => {
+                session
+                    .master
+                    .lock()
+                    .unwrap()
+                    .resize(PtySize {
+                        rows,
+                        cols,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    })
+                    .map_err(|err| Error::Terminal(err.to_string()))?;
+            }
+            (None, None) => {}
+            _ => {
+                return Err(Error::Tool(
+                    "rows and cols must be supplied together".into(),
+                ))
+            }
+        }
+        let written = match req.input {
+            Some(input) => {
+                let mut writer = session.writer.lock().unwrap();
+                writer.write_all(input.as_bytes())?;
+                writer.flush()?;
+                input.len()
+            }
+            None if req.rows.is_some() => 0,
+            None => return Err(Error::Tool("provide input or rows and cols".into())),
+        };
         Ok(TerminalSendResponse {
             terminal_id: req.terminal_id,
-            bytes_written: req.input.len(),
+            bytes_written: written,
         })
     }
 
@@ -365,14 +398,23 @@ mod tests {
             .unwrap();
         let resized = state
             .terminals
-            .resize(TerminalResizeRequest {
+            .send(TerminalSendRequest {
                 terminal_id: opened.terminal_id.clone(),
-                rows: 40,
-                cols: 120,
+                input: None,
+                rows: Some(40),
+                cols: Some(120),
             })
             .unwrap();
-        assert_eq!(resized.rows, 40);
-        assert_eq!(resized.cols, 120);
+        assert_eq!(resized.bytes_written, 0);
+        assert!(state
+            .terminals
+            .send(TerminalSendRequest {
+                terminal_id: opened.terminal_id.clone(),
+                input: None,
+                rows: Some(40),
+                cols: None,
+            })
+            .is_err());
         state
             .terminals
             .close(TerminalCloseRequest {

@@ -6,7 +6,7 @@ use crate::{
         state::AppState,
         target::ResolvedTarget,
     },
-    tooling::job::{AdaptiveExecOutput, ExecStartRequest},
+    tooling::job::ExecStartRequest,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, thread, time::Instant};
@@ -82,7 +82,7 @@ pub struct ExecBatchCommandDetails {
 }
 
 impl ExecBatchCommand {
-    fn into_details(self) -> ExecBatchCommandDetails {
+    pub(crate) fn into_details(self) -> ExecBatchCommandDetails {
         match self {
             Self::Shell(command) => ExecBatchCommandDetails {
                 command,
@@ -150,59 +150,7 @@ pub struct RawExecOutput {
     pub timed_out: bool,
 }
 
-pub fn run_with_context(
-    state: &AppState,
-    req: ExecRequest,
-    caller_key: &str,
-) -> Result<ExecResponse> {
-    let request = ExecStartRequest {
-        target: req.target,
-        command: req.command,
-        cwd: req.cwd,
-        timeout_ms: req.timeout_ms,
-        max_output_bytes: req.max_output_bytes,
-        secret_env: req.secret_env,
-    };
-
-    match state
-        .jobs
-        .run_adaptive(state, request, caller_key)?
-    {
-        AdaptiveExecOutput::Completed(output) => Ok(ExecResponse {
-            resolved_target: output.resolved_target,
-            job_id: None,
-            status: None,
-            auto_backgrounded: false,
-            next_action: None,
-            exit_code: output.exit_code,
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            stdout_truncated: output.stdout_truncated,
-            stderr_truncated: output.stderr_truncated,
-            timed_out: output.timed_out,
-        }),
-        AdaptiveExecOutput::Backgrounded {
-            resolved_target,
-            job_id,
-        } => Ok(ExecResponse {
-            resolved_target,
-            job_id: Some(job_id),
-            status: Some("running"),
-            auto_backgrounded: true,
-            next_action: Some(
-                "Use job_wait to wait for completion, or continue with other work; do not repeatedly poll.",
-            ),
-            exit_code: None,
-            stdout: String::new(),
-            stderr: String::new(),
-            stdout_truncated: false,
-            stderr_truncated: false,
-            timed_out: false,
-        }),
-    }
-}
-
-fn run_to_completion(state: &AppState, req: ExecRequest) -> Result<ExecResponse> {
+pub(crate) fn run_to_completion(state: &AppState, req: ExecRequest) -> Result<ExecResponse> {
     let output = state.jobs.run_foreground(
         state,
         ExecStartRequest {
