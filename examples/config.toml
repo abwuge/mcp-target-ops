@@ -68,8 +68,9 @@ terminal_default_rows = 30
 terminal_default_cols = 120
 
 [activity]
-# Keep metadata-only MCP activity history in an embedded, indexed SQLite file.
-# No full commands, argument values, returned data, or secrets are logged.
+# MCP command + tool request/response audit in an embedded SQLite file.
+# Stores commands verbatim within size limits; explicitly credential-named JSON fields
+# are redacted. Shell commands and ordinary content may themselves contain secrets.
 enabled = true
 retention_days = 30
 max_calls = 100000

@@ -162,6 +162,59 @@ pub(super) fn handle(
             JS.as_bytes().to_vec(),
             false,
         ),
+        "/dashboard/api/call" => {
+            let params = match form::parse_query(request.url()) {
+                Ok(params) => params,
+                Err(_) => {
+                    return respond(
+                        request,
+                        400,
+                        "application/json",
+                        br#"{"error":"invalid query string"}"#.to_vec(),
+                        false,
+                    )
+                }
+            };
+            let id = params
+                .get("id")
+                .and_then(|s| s.parse::<i64>().ok())
+                .filter(|id| *id > 0);
+            let Some(id) = id else {
+                return respond(
+                    request,
+                    400,
+                    "application/json",
+                    br#"{"error":"invalid call id"}"#.to_vec(),
+                    false,
+                );
+            };
+            match store.call_details(id) {
+                Ok(Some(detail)) => respond(
+                    request,
+                    200,
+                    "application/json",
+                    serde_json::to_vec(&detail)?,
+                    false,
+                ),
+                Ok(None) => respond(
+                    request,
+                    404,
+                    "application/json",
+                    br#"{"error":"call not found"}"#.to_vec(),
+                    false,
+                ),
+                Err(err) => {
+                    eprintln!("mcp-target-ops detail query failed: {err}");
+                    respond(
+                        request,
+                        500,
+                        "application/json",
+                        br#"{"error":"detail query failed"}"#.to_vec(),
+                        false,
+                    )
+                }
+            }
+        }
         "/dashboard/api" => {
             let params = match form::parse_query(request.url()) {
                 Ok(params) => params,

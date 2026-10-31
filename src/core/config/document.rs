@@ -75,8 +75,8 @@ terminal_default_rows = 30
 terminal_default_cols = 120
 
 [activity]
-# Metadata-only history in a persistent SQLite database, independent of runtime_dir.
-# Never stores raw tool arguments, command strings, bearer tokens or responses.
+# Persistent command audit in SQLite, independent of runtime_dir.
+# Stores bounded command strings, tool parameters and outputs; known credential fields redacted.
 # The database defaults to $XDG_STATE_HOME/mcp-target-ops/calls.sqlite3 or
 # ~/.local/state/mcp-target-ops/calls.sqlite3, NOT the temporary runtime_dir.
 enabled = true

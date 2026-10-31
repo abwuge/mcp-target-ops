@@ -541,8 +541,8 @@ token type authorizes a protected request.
 Read-only monitoring is served at `GET /dashboard`, with query data at
 `GET /dashboard/api`. The self-contained UI shows call volume, top tools,
 success/failure rates, average and P95 latency, client and session groups,
-individual calls and their safe argument-key metadata. Filter by hour window,
-client, session, tool, outcome or search; refresh automatically every 15 seconds,
+individual calls with their actual shell commands, working directories, inputs and output summaries. Filter by hour window,
+client, session, tool, outcome or command/argument text search; refresh automatically every 15 seconds,
 or page through older calls. No frontend build tooling is required.
 
 ```toml
@@ -594,11 +594,27 @@ Session attribution is best effort:
   anonymous group), **not** a reliably distinct conversation.
 - stdio events are grouped by server process, not by conversation.
 
-**Metadata only:** timestamps, tool and protocol names, target, duration,
-outcome, error code, and argument field **names**. The database never stores
-command text, argument values, file contents, returned output, bearer tokens,
-or SSH secrets. Existing operational jobs, backups and OAuth-state files remain
-on their current storage mechanisms.
+**Command audit (enabled by default):** every new MCP `tools/call` stores
+the actual shell command(s) for `exec`, `exec_start`, and `exec_batch`,
+the working directory, input arguments, and the tool's structured result
+(including stdout/stderr, exit status and job IDs where available). Other file,
+terminal, and downstream MCP tools also retain their bounded request/response
+details. The call table shows a command/operation preview and supports
+content search; select a row to load the full recorded details through the
+password-protected `GET /dashboard/api/call?id=...` endpoint. Older records
+remain visible but cannot reconstruct command text that was never stored.
+
+**Storage and security:** command text is kept verbatim up to 128 KiB; input
+fields and result fields have a 48 KiB per-string ceiling and a 128 KiB
+per-payload ceiling. Truncation is clearly marked. Explicit credential fields
+such as `password`, `api_key`, or `access_token` are redacted in JSON,
+but text inside a shell command or ordinary file content is *not* redacted.
+Never pass secrets in shell command strings if you do not want them logged.
+Authorization headers, OAuth login bodies, and MCP access tokens are not
+recorded by the audit collector. Keep the SQLite database private (0700
+directory / 0600 file), protect the Dashboard behind HTTPS, and adjust
+retention to fit local disk capacity. Operational jobs, backups and OAuth state
+retain their original persistence mechanisms.
 
 ### OAuth for remote MCP and ChatGPT
 
@@ -654,6 +670,7 @@ state.
 | `POST /dashboard/login` | Validates the existing OAuth password and issues a browser-only cookie |
 | `POST /dashboard/logout` | Invalidates the active Dashboard cookie |
 | `GET /dashboard/api` | Read-only activity data requiring the Dashboard session cookie |
+| `GET /dashboard/api/call?id=<id>` | Full persisted command, parameters, and tool response for a call |
 
 Bearer authentication represents one shared service identity. It is not a
 multi-user authorization system and does not add per-user target permissions.

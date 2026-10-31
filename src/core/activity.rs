@@ -1,4 +1,4 @@
-use crate::core::{config::ActivityConfig, error::Result};
+use crate::core::{audit::CallDetails, config::ActivityConfig, error::Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use rand::{rngs::OsRng, RngCore};
 use rusqlite::{params, params_from_iter, types::Value as SqlValue, Connection};
@@ -65,6 +65,7 @@ pub struct Event {
     pub target: Option<String>,
     pub argument_keys: Vec<String>,
     pub rpc_error_code: Option<i64>,
+    pub details: Option<CallDetails>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -158,6 +159,15 @@ impl ActivityStore {
              CREATE INDEX IF NOT EXISTS idx_calls_session ON calls(session_key, started_ms DESC);
              CREATE INDEX IF NOT EXISTS idx_calls_name_time ON calls(name, started_ms DESC);
              CREATE INDEX IF NOT EXISTS idx_calls_status_time ON calls(status, started_ms DESC);
+             CREATE TABLE IF NOT EXISTS call_details (
+               call_id INTEGER PRIMARY KEY REFERENCES calls(id) ON DELETE CASCADE,
+               command_text TEXT,
+               cwd TEXT,
+               request_json TEXT NOT NULL,
+               response_json TEXT NOT NULL,
+               request_truncated INTEGER NOT NULL DEFAULT 0,
+               response_truncated INTEGER NOT NULL DEFAULT 0
+             );
              CREATE INDEX IF NOT EXISTS idx_sessions_last_seen ON sessions(last_seen_ms DESC);
              CREATE TABLE IF NOT EXISTS dashboard_sessions (
                token_hash TEXT PRIMARY KEY,
@@ -295,6 +305,23 @@ impl ActivityStore {
                 event.rpc_error_code
             ],
         )?;
+        if let Some(details) = event.details {
+            tx.execute(
+                "INSERT INTO call_details
+                    (call_id,command_text,cwd,request_json,response_json,
+                     request_truncated,response_truncated)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                params![
+                    tx.last_insert_rowid(),
+                    details.command,
+                    details.cwd,
+                    details.request_json,
+                    details.response_json,
+                    details.request_truncated,
+                    details.response_truncated
+                ],
+            )?;
+        }
         tx.execute(
             "UPDATE sessions SET total_calls=total_calls+1,
                 error_calls=error_calls+?2 WHERE session_key=?1",
@@ -339,6 +366,38 @@ impl ActivityStore {
         Ok(())
     }
 
+    pub fn call_details(&self, call_id: i64) -> Result<Option<Value>> {
+        if call_id <= 0 {
+            return Ok(None);
+        }
+        let conn = self.conn.lock().unwrap();
+        match conn.query_row(
+            "SELECT c.id, d.command_text, d.cwd, d.request_json, d.response_json,
+                    d.request_truncated, d.response_truncated
+             FROM calls c LEFT JOIN call_details d ON d.call_id = c.id
+             WHERE c.id=?1",
+            params![call_id],
+            |row| {
+                let arguments: Option<String> = row.get(3)?;
+                let result: Option<String> = row.get(4)?;
+                Ok(json!({
+                    "id": row.get::<_,i64>(0)?,
+                    "available": arguments.is_some(),
+                    "command": row.get::<_,Option<String>>(1)?,
+                    "cwd": row.get::<_,Option<String>>(2)?,
+                    "arguments": arguments.and_then(|value|serde_json::from_str::<Value>(&value).ok()),
+                    "result": result.and_then(|value|serde_json::from_str::<Value>(&value).ok()),
+                    "request_truncated": row.get::<_,Option<bool>>(5)?.unwrap_or(false),
+                    "response_truncated": row.get::<_,Option<bool>>(6)?.unwrap_or(false)
+                }))
+            }
+        ) {
+            Ok(row) => Ok(Some(row)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(err) => Err(err.into())
+        }
+    }
+
     pub fn query(&self, query: Query) -> Result<Value> {
         let hours = query.hours.unwrap_or(24).clamp(1, 24 * 30);
         let limit = query.limit.unwrap_or(60).clamp(1, 200);
@@ -375,8 +434,8 @@ impl ActivityStore {
                     .replace('%', "\\%")
                     .replace('_', "\\_")
             );
-            where_parts.push(format!("(c.name LIKE ? ESCAPE '\\' OR c.target LIKE ? ESCAPE '\\' OR {CLIENT_SQL} LIKE ? ESCAPE '\\')"));
-            for _ in 0..3 {
+            where_parts.push(format!("(c.name LIKE ? ESCAPE '\\' OR c.target LIKE ? ESCAPE '\\' OR {CLIENT_SQL} LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM call_details d WHERE d.call_id = c.id AND (d.command_text LIKE ? ESCAPE '\\' OR d.request_json LIKE ? ESCAPE '\\')))"));
+            for _ in 0..5 {
                 args.push(SqlValue::Text(value.clone()));
             }
         }
@@ -499,8 +558,10 @@ impl ActivityStore {
         let mut stmt = conn.prepare(&format!(
             "SELECT c.id,c.started_ms,c.duration_ms,c.kind,c.name,c.status,
                 c.target,c.argument_keys,c.rpc_error_code,s.session_key,s.grouping,
-                s.transport,{CLIENT_SQL},s.client_version
+                s.transport,{CLIENT_SQL},s.client_version,
+                SUBSTR(d.command_text,1,240),d.cwd,(d.call_id IS NOT NULL)
              FROM calls c JOIN sessions s ON c.session_key=s.session_key
+             LEFT JOIN call_details d ON d.call_id=c.id
              WHERE {call_where} ORDER BY c.id DESC LIMIT ?"
         ))?;
         for row in stmt.query_map(params_from_iter(call_args.iter()), |r| {
@@ -514,7 +575,10 @@ impl ActivityStore {
                 "rpc_error_code": r.get::<_,Option<i64>>(8)?,
                 "session_key": r.get::<_,String>(9)?,
                 "grouping": r.get::<_,String>(10)?, "transport": r.get::<_,String>(11)?,
-                "client": r.get::<_,String>(12)?, "client_version": r.get::<_,Option<String>>(13)?
+                "client": r.get::<_,String>(12)?, "client_version": r.get::<_,Option<String>>(13)?,
+                "command_preview": r.get::<_,Option<String>>(14)?,
+                "cwd": r.get::<_,Option<String>>(15)?,
+                "has_details": r.get::<_,bool>(16)?
             }))
         })? {
             calls.push(row?);
@@ -636,6 +700,7 @@ mod tests {
                 target: Some("ssh:mac".into()),
                 argument_keys: vec!["command".into(), "target".into()],
                 rpc_error_code: None,
+                details: None,
             })
             .unwrap();
         store
@@ -649,6 +714,7 @@ mod tests {
                 target: None,
                 argument_keys: vec!["path".into()],
                 rpc_error_code: None,
+                details: None,
             })
             .unwrap();
         let data = store
@@ -740,6 +806,7 @@ mod tests {
                     target: None,
                     argument_keys: vec![],
                     rpc_error_code: None,
+                    details: None,
                 })
                 .unwrap();
         }
@@ -789,6 +856,7 @@ mod tests {
                     target: None,
                     argument_keys: vec![],
                     rpc_error_code: None,
+                    details: None,
                 })
                 .unwrap();
         }

@@ -18,7 +18,7 @@ const app = {
   hours: 24, client: "", session: "", tool: "", status: "", search: "",
   calls: [], sessions: [], nextBefore: null, data: null,
   knownClients: new Set(), knownTools: new Set(), loading: false, requestSeq: 0,
-  pagesLoaded: 1, reloadQueued: false,
+  pagesLoaded: 1, reloadQueued: false, detailSeq: 0,
 };
 
 function node(tag, className, text) {
@@ -195,7 +195,7 @@ function renderCalls() {
   if (!app.calls.length) {
     const tr = node("tr");
     const td = node("td", "empty-cell", "该筛选范围内没有调用记录");
-    td.colSpan = 7; tr.append(td); body.append(tr);
+    td.colSpan = 8; tr.append(td); body.append(tr);
   }
   app.calls.forEach((call) => {
     const tr = node("tr");
@@ -204,13 +204,21 @@ function renderCalls() {
     client.append(node("div", "client-cell", call.client),
       node("span", "mini-session", idLabel(call.session_key)));
     const method = node("td", "tool-cell", call.name);
+    const operation = node("td", "command-cell");
+    const preview = call.command_preview || (call.has_details ?
+      "查看调用参数与执行结果" : "旧记录未保存命令内容");
+    const commandPreview = node("div",
+      call.command_preview ? "command-preview" : "command-fallback", preview);
+    operation.title = preview;
+    operation.append(commandPreview);
+    if (call.cwd) operation.append(node("div", "command-cwd", "cwd: " + call.cwd));
     const target = node("td");
     if (call.target) target.append(node("span", "target-pill", call.target));
     else target.append(node("span", "muted", "—"));
     const duration = node("td", "duration-cell", prettyDuration(call.duration_ms));
     const status = node("td");
     status.append(node("span", `status-pill ${call.status}`, call.status === "ok" ? "成功" : "失败"));
-    tr.append(time, client, method, target, duration, status, node("td", "more-glyph", "›"));
+    tr.append(time, client, method, operation, target, duration, status, node("td", "more-glyph", "›"));
     tr.tabIndex = 0;
     tr.setAttribute("aria-label", `查看 ${call.name} 调用详情`);
     tr.addEventListener("click", () => showCall(call));
@@ -233,7 +241,26 @@ function detailSection(parent, name) {
   parent.append(section);
   return section;
 }
-function showCall(call) {
+function detailCode(parent, title, value) {
+  const shell = node("div", "log-section");
+  const top = node("div", "log-head");
+  top.append(node("span", "log-label", title));
+  const copy = node("button", "log-copy", "复制");
+  copy.type = "button";
+  copy.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      copy.textContent = "已复制";
+    } catch (_) {
+      copy.textContent = "复制失败";
+    }
+  });
+  top.append(copy);
+  shell.append(top, node("pre", "log-pre", value));
+  parent.append(shell);
+}
+
+async function showCall(call) {
   const container = $("drawerContent"); container.replaceChildren();
   const s = app.sessions.find((session) => session.key === call.session_key);
   let section = detailSection(container, "EXECUTION");
@@ -245,7 +272,7 @@ function showCall(call) {
   detailRow(section, "结果", call.status === "ok" ? "成功" : "失败");
   detailRow(section, "JSON-RPC 错误码", call.rpc_error_code === null ? "—" : call.rpc_error_code);
   detailRow(section, "目标", call.target || "未指定");
-  section = detailSection(container, "CALLER");
+  section = detailSection(container, "CLIENT / SESSION");
   detailRow(section, "客户端", call.client);
   detailRow(section, "ClientInfo 版本", call.client_version || "未知");
   detailRow(section, "会话类型", groupName(call.grouping));
@@ -257,22 +284,58 @@ function showCall(call) {
     detailRow(section, "User-Agent", s.user_agent || "未知");
     detailRow(section, "结束时间", s.ended_ms ? prettyTime(s.ended_ms) : "未收到结束通知");
   }
-  section = detailSection(container, "ARGUMENT FIELDS");
-  if (call.argument_keys.length) {
-    call.argument_keys.forEach((key) => section.append(node("span", "argument-key", key)));
-  } else {
-    section.append(node("div", "muted small", "无参数字段"));
-  }
+
+  const detailArea = detailSection(container, "COMMAND / REQUEST / OUTPUT");
+  detailArea.append(node("div", "muted small", "正在加载调用详情…"));
   const note = node("div", "drawer-note",
-    "隐私保护：只记录参数名称，不存储命令、文件内容、完整请求、返回值或 Bearer Token。只有带有实际 Session ID 的请求可作为可验证的协议会话归组。");
+    "新版本记录实际命令、调用参数与执行结果。显式凭证字段会脱敏；大型字段有长度上限且会标记截断。命令文本若包含敏感内容，也会原样记录在仅管理员可访问的数据库中。");
   container.append(note);
   $("drawerOverlay").hidden = false;
   $("detailDrawer").classList.add("open");
   $("detailDrawer").setAttribute("aria-hidden", "false");
   $("closeDrawer").focus();
+
+  const seq = ++app.detailSeq;
+  try {
+    const resp = await fetch(`/dashboard/api/call?id=${encodeURIComponent(call.id)}`,
+      {credentials:"same-origin", cache:"no-store"});
+    if (!resp.ok) throw Error(`HTTP ${resp.status}`);
+    const details = await resp.json();
+    if (seq !== app.detailSeq || $("drawerOverlay").hidden) return;
+    detailArea.replaceChildren(node("div", "drawer-section-title", "COMMAND / REQUEST / OUTPUT"));
+    if (!details.available) {
+      detailArea.append(node("div", "legacy-notice",
+        "旧版调用只保存了工具名称和参数字段名，实际命令及执行结果未被记录，无法从数据库补回。新产生的调用会显示全部可用详情。"));
+      return;
+    }
+    if (details.command !== null) detailCode(detailArea, "执行命令 / 操作", details.command);
+    if (details.cwd) detailRow(detailArea, "工作目录", details.cwd);
+    if (details.request_truncated)
+      detailArea.append(node("div", "truncated-notice", "请求参数或命令超出审计长度上限，以下部分内容已标注截断。"));
+    if (details.arguments !== null && details.arguments !== undefined)
+      detailCode(detailArea, "完整调用参数（有明确长度上限）", JSON.stringify(details.arguments, null, 2));
+    const result = details.result;
+    if (result && typeof result === "object") {
+      if (typeof result.stdout === "string")
+        detailCode(detailArea, "STDOUT", result.stdout || "（空）");
+      if (typeof result.stderr === "string")
+        detailCode(detailArea, "STDERR", result.stderr || "（空）");
+      if (result.exit_code !== undefined && result.exit_code !== null)
+        detailRow(detailArea, "退出码", String(result.exit_code));
+    }
+    if (details.response_truncated)
+      detailArea.append(node("div", "truncated-notice", "执行结果超出审计长度上限，部分内容已标注截断。"));
+    if (result !== null && result !== undefined)
+      detailCode(detailArea, "执行结果 / JSON", JSON.stringify(result, null, 2));
+  } catch (err) {
+    if (seq === app.detailSeq && !$("drawerOverlay").hidden) {
+      detailArea.replaceChildren(node("div", "error-bar", "无法获取调用详情：" + err.message));
+    }
+  }
 }
 
 function closeDrawer() {
+  ++app.detailSeq;
   $("detailDrawer").classList.remove("open");
   $("detailDrawer").setAttribute("aria-hidden", "true");
   $("drawerOverlay").hidden = true;

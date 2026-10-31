@@ -1,6 +1,7 @@
 use crate::{
     core::{
         activity::{self, Caller, Event},
+        audit::CallDetails,
         error::{Error, Result},
         state::AppState,
     },
@@ -200,6 +201,7 @@ fn handle_request(
         .unwrap_or(&request.method)
         .to_string();
     let arguments = tool_params.and_then(|p| p.get("arguments"));
+    let request_details = tool_params.map(|_| CallDetails::from_arguments(&name, arguments));
     let mut keys: Vec<String> = arguments
         .and_then(Value::as_object)
         .map(|obj| {
@@ -278,6 +280,12 @@ fn handle_request(
             target: requested_target.or(response_target),
             argument_keys: keys,
             rpc_error_code: response.error.as_ref().map(|err| err.code),
+            details: request_details.map(|details| {
+                details.with_response(
+                    response.result.as_ref(),
+                    response.error.as_ref().map(|err| err.message.as_str()),
+                )
+            }),
         };
         if let Err(err) = store.record(event) {
             eprintln!("mcp-target-ops activity log failed: {err}");
@@ -523,6 +531,45 @@ mod tests {
         assert_eq!(data["sessions"][0]["grouping"], "mcp_session");
         assert_eq!(data["calls"][1]["argument_keys"], json!(["password"]));
         assert!(!data.to_string().contains("NEVER_SAVE_THIS_VALUE"));
+    }
+
+    #[test]
+    fn real_exec_command_output_and_search_are_persisted() {
+        let state = test_state();
+        let command = "printf 'audit-command-visible-2026'";
+        let response = call_tool_for(
+            Arc::clone(&state),
+            "session:command-audit",
+            101,
+            "exec",
+            json!({"target":"local","command":command}),
+        );
+        assert_eq!(response["result"]["isError"], false);
+        let history = state
+            .activity
+            .as_ref()
+            .unwrap()
+            .query(crate::core::activity::Query {
+                search: Some("audit-command-visible-2026".to_string()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(history["summary"]["count"], 1);
+        assert_eq!(history["calls"][0]["command_preview"], command);
+        assert_eq!(history["calls"][0]["has_details"], true);
+        let id = history["calls"][0]["id"].as_i64().unwrap();
+        let details = state
+            .activity
+            .as_ref()
+            .unwrap()
+            .call_details(id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(details["available"], true);
+        assert_eq!(details["command"], command);
+        assert_eq!(details["arguments"]["command"], command);
+        assert_eq!(details["result"]["stdout"], "audit-command-visible-2026");
+        assert_eq!(details["result"]["exit_code"], 0);
     }
 
     #[test]

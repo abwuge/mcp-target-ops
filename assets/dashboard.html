@@ -19,15 +19,15 @@
     <div class="nav-section">工作台</div>
     <nav class="nav">
       <a href="#overview" class="nav-link active" data-nav="overview"><span class="nav-icon">◫</span> 活动总览</a>
+      <a href="#calls" class="nav-link" data-nav="calls"><span class="nav-icon">≡</span> 命令与操作日志</a>
       <a href="#sessions" class="nav-link" data-nav="sessions"><span class="nav-icon">◎</span> 客户端与会话 <span id="sideSessionCount" class="nav-count">0</span></a>
-      <a href="#calls" class="nav-link" data-nav="calls"><span class="nav-icon">≡</span> 调用记录</a>
     </nav>
     <div class="sidebar-head">
       <span>最近会话与归组</span>
       <button class="icon-btn" id="clearSession" title="取消会话筛选" aria-label="取消会话筛选">×</button>
     </div>
     <div id="sessionList" class="sidebar-sessions"><p class="muted small">读取中…</p></div>
-    <div class="sidebar-foot"><span class="dot dot-green"></span> METADATA ONLY <span class="foot-note">/ SQLite</span></div>
+    <div class="sidebar-foot"><span class="dot dot-green"></span> COMMAND AUDIT <span class="foot-note">/ SQLite</span></div>
   </aside>
 
   <main class="main">
@@ -69,6 +69,28 @@
         <div class="metric"><div class="metric-label">P95 调用耗时 <span>◷</span></div><div class="metric-number" id="metricLatency">—</div><div class="metric-description" id="avgDetail">平均耗时 —</div></div>
       </section>
 
+      <section class="panel calls-panel" id="calls">
+        <div class="panel-head"><div><div class="panel-kicker">AUDIT TRAIL</div><h2>调用与命令日志</h2></div><span class="panel-caption">实际命令、调用参数与执行结果 · 大型内容有长度上限</span></div>
+        <div class="filters">
+          <label class="search-wrapper"><span>⌕</span><input id="search" placeholder="搜索命令内容、工具、文件路径、目标或客户端" autocomplete="off" aria-label="搜索命令、工具、目标或客户端"></label>
+          <select id="clientFilter" aria-label="筛选客户端"><option value="">全部客户端</option></select>
+          <select id="toolFilter" aria-label="筛选工具"><option value="">全部工具</option></select>
+          <select id="statusFilter" aria-label="筛选状态"><option value="">全部状态</option><option value="ok">成功</option><option value="error">失败</option></select>
+          <button id="resetFilters" class="text-button">清除筛选</button>
+        </div>
+        <div id="activeFilters" class="active-filters" hidden></div>
+        <div class="table-container">
+          <table>
+            <thead><tr><th>时间</th><th>客户端 / 会话</th><th>工具</th><th>执行命令 / 操作</th><th>目标</th><th>耗时</th><th>状态</th><th></th></tr></thead>
+            <tbody id="callsTable"><tr><td colspan="8" class="empty-cell">读取中…</td></tr></tbody>
+          </table>
+        </div>
+        <div class="table-foot">
+          <div id="listCount">—</div>
+          <button id="loadMore" class="secondary-button" hidden>加载更多 ↓</button>
+        </div>
+      </section>
+
       <section class="charts">
         <div class="panel chart-main">
           <div class="panel-head"><div><div class="panel-kicker">CALL VOLUME</div><h2>请求趋势</h2></div><span class="panel-caption" id="chartWindow">最近 24 小时</span></div>
@@ -88,28 +110,8 @@
         <div id="sessionGrid" class="session-grid"><div class="muted">读取中…</div></div>
       </section>
 
-      <section class="panel calls-panel" id="calls">
-        <div class="panel-head"><div><div class="panel-kicker">AUDIT TRAIL</div><h2>调用日志</h2></div><span class="panel-caption">只存储元数据，不存储请求与响应正文</span></div>
-        <div class="filters">
-          <label class="search-wrapper"><span>⌕</span><input id="search" placeholder="搜索工具、目标或客户端" autocomplete="off" aria-label="搜索工具、目标或客户端"></label>
-          <select id="clientFilter" aria-label="筛选客户端"><option value="">全部客户端</option></select>
-          <select id="toolFilter" aria-label="筛选工具"><option value="">全部工具</option></select>
-          <select id="statusFilter" aria-label="筛选状态"><option value="">全部状态</option><option value="ok">成功</option><option value="error">失败</option></select>
-          <button id="resetFilters" class="text-button">清除筛选</button>
-        </div>
-        <div id="activeFilters" class="active-filters" hidden></div>
-        <div class="table-container">
-          <table>
-            <thead><tr><th>时间</th><th>客户端 / 会话</th><th>工具 / 方法</th><th>目标</th><th>耗时</th><th>状态</th><th></th></tr></thead>
-            <tbody id="callsTable"><tr><td colspan="7" class="empty-cell">读取中…</td></tr></tbody>
-          </table>
-        </div>
-        <div class="table-foot">
-          <div id="listCount">—</div>
-          <button id="loadMore" class="secondary-button" hidden>加载更多 ↓</button>
-        </div>
-      </section>
-      <footer class="footer">TARGET OPS / ACTIVITY <span>·</span> 所有时间按浏览器本地时区显示 <span>·</span> 独立管理员只读面板</footer>
+
+      <footer class="footer">TARGET OPS / ACTIVITY <span>·</span> 所有时间按浏览器本地时区显示 <span>·</span> 命令、调用参数与执行结果仅对已认证用户可见</footer>
     </div>
   </main>
 </div>
