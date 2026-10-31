@@ -77,8 +77,11 @@ max_calls = 100000
 # Defaults to $XDG_STATE_HOME/mcp-target-ops/calls.sqlite3, or
 # ~/.local/state/mcp-target-ops/calls.sqlite3 without XDG_STATE_HOME.
 # database_path = "/home/me/.local/state/mcp-target-ops/calls.sqlite3"
-# To enable read-only browser dashboard, set the environment variable
-# MCP_TARGET_OPS_DASHBOARD_PASSWORD. Do not expose Basic auth over plain HTTP.
+# Dashboard defaults to server.oauth_authorization_password when OAuth is enabled.
+# Only configure an independent password if the admin needs separate credentials:
+# MCP_TARGET_OPS_DASHBOARD_PASSWORD or the override below.
+# Without either password, the dashboard stays disabled.
+# Do not expose HTTP Basic auth over plain HTTP.
 # dashboard_password = "do-not-put-secrets-here"
 
 [server]

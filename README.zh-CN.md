@@ -515,12 +515,19 @@ max_calls = 100000
 Unix 下数据库权限为 `0600`，存储目录为 `0700`。备份时请使用 SQLite
 备份接口或停机后复制，并留意 WAL/SHM 文件。
 
-监控页面与 MCP 工具权限完全分离。**没有设置管理员密码时返回 404，默认无法访问**。
-在服务的运行环境中设置 `MCP_TARGET_OPS_DASHBOARD_PASSWORD`，然后访问
-`https://你的域名/dashboard`；浏览器会要求 HTTP Basic 身份验证，
-用户名为 `admin`，密码为该环境变量。线上请配合 HTTPS 和反向代理访问控制；
-不要把管理密码写进链接、启动命令历史或公开配置。此密码不授予任何 MCP 操作权限，
-OAuth/Bearer 客户端也不能仅凭其工具访问令牌读取监控历史。
+**个人使用默认复用 OAuth 授权密码，无需再设置一套密码。**
+当 `server.oauth_enabled = true` 且配置了 `server.oauth_authorization_password`
+（或 `MCP_TARGET_OPS_OAUTH_PASSWORD`）时，访问 `https://你的域名/dashboard`，
+浏览器会弹出 HTTP Basic 身份验证，用户名固定为 `admin`，
+密码就是**已有的 OAuth 授权密码**。这意味着共用同一个密码，
+但授权页面与 Dashboard 仍分别登录，暂不实现跨页面单点登录。
+
+若未来需要权限隔离，可用 `MCP_TARGET_OPS_DASHBOARD_PASSWORD` 或
+`activity.dashboard_password` **覆盖**默认密码。若两个密码都未设置，
+Dashboard 返回 404，不会因为关闭 OAuth 密码门禁而开放监控页面。
+建议通过 HTTPS 和反向代理访问控制保护 Dashboard，
+不要把密码写进 URL、命令历史或公开配置。Dashboard 不接受 MCP 的
+Bearer/OAuth 工具访问令牌；监控认证也不能授权执行 MCP 工具。
 
 **会话识别的真实性边界：**
 

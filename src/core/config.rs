@@ -116,7 +116,8 @@ pub struct ActivityConfig {
     pub max_calls: usize,
     #[serde(default = "default_activity_database_path")]
     pub database_path: PathBuf,
-    // If unset, the dashboard and its API do not exist. Do not reuse MCP OAuth tokens.
+    // Optional override; otherwise reuse OAuth authorization password if OAuth is enabled.
+    // Without either password the dashboard is disabled. Never accept MCP OAuth tokens.
     #[serde(default = "default_dashboard_password")]
     pub dashboard_password: Option<String>,
 }

@@ -19,7 +19,7 @@ pub(super) fn handle(
     method: Method,
     path: &str,
 ) -> Result<()> {
-    let Some(password) = state.config.activity.dashboard_password.as_deref() else {
+    let Some(password) = dashboard_password(&state.config) else {
         return respond(
             request,
             404,
@@ -139,7 +139,19 @@ pub(super) fn handle(
     }
 }
 
-// Dashboard authentication is deliberately independent of tool access and OAuth.
+// One password is enough for single-user deployments: if no dashboard-specific
+// password is configured, reuse the OAuth consent password when OAuth is enabled.
+// Authentication still happens separately via HTTP Basic, never with MCP tokens.
+fn dashboard_password(config: &crate::core::config::Config) -> Option<&str> {
+    config.activity.dashboard_password.as_deref().or_else(|| {
+        config
+            .server
+            .oauth_enabled
+            .then_some(config.server.oauth_authorization_password.as_deref())
+            .flatten()
+    })
+}
+
 // Browser-native Basic authentication avoids putting a credential in URL, JS or storage.
 fn authorized(request: &Request, password: &str) -> bool {
     let encoded = request
@@ -195,6 +207,27 @@ mod tests {
     use super::*;
 
     // The HTTP integration tests exercise unauthorized access and API data.
+    #[test]
+    fn dashboard_reuses_existing_oauth_consent_password_by_default() {
+        let mut config = crate::core::config::Config::default();
+        config.activity.dashboard_password = None;
+        config.server.oauth_enabled = true;
+        config.server.oauth_authorization_password = Some("same-password".into());
+
+        assert_eq!(dashboard_password(&config), Some("same-password"));
+
+        config.activity.dashboard_password = Some("admin-override".into());
+        assert_eq!(dashboard_password(&config), Some("admin-override"));
+
+        config.activity.dashboard_password = None;
+        config.server.oauth_enabled = false;
+        assert_eq!(dashboard_password(&config), None);
+
+        config.server.oauth_enabled = true;
+        config.server.oauth_authorization_password = None;
+        assert_eq!(dashboard_password(&config), None);
+    }
+
     #[test]
     fn dashboard_assets_are_embedded() {
         assert!(HTML.contains("id=\"callsTable\""));

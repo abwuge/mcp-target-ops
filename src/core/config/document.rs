@@ -84,8 +84,10 @@ retention_days = 30
 max_calls = 100000
 # Optional absolute path for persistent SQLite (including -wal and -shm files).
 # database_path = "/home/me/.local/state/mcp-target-ops/calls.sqlite3"
-# The dashboard is disabled unless MCP_TARGET_OPS_DASHBOARD_PASSWORD or
-# activity.dashboard_password is set. Use a strong password and HTTPS.
+# Dashboard defaults to the existing OAuth consent password when OAuth is enabled.
+# Optional separate override: MCP_TARGET_OPS_DASHBOARD_PASSWORD or
+# activity.dashboard_password. Without either password, dashboard is disabled.
+# Use a strong password and HTTPS.
 
 [server]
 # Server name advertised during MCP initialize.

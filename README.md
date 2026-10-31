@@ -562,13 +562,22 @@ retroactively recovered. On Unix, the state directory has mode `0700`
 and the DB file `0600`. Use the SQLite backup API or take a stopped-server
 backup with its WAL files included.
 
-The dashboard is **disabled unless** `MCP_TARGET_OPS_DASHBOARD_PASSWORD`
-(or `activity.dashboard_password`) is configured. Open
-`https://your-domain/dashboard` and authenticate with Basic username `admin`
-and that password. Keep the management endpoint behind HTTPS and preferably
-a reverse-proxy access restriction; never put the password in a URL or shell
-history. Dashboard access is independent of MCP Bearer/OAuth tool permissions
-and never grants permission to operate a target.
+For a single-user installation, the Dashboard **reuses the existing OAuth
+consent password** (`server.oauth_authorization_password`, or
+`MCP_TARGET_OPS_OAUTH_PASSWORD`) when `server.oauth_enabled = true`.
+No additional Dashboard password is needed. Open
+`https://your-domain/dashboard` and authenticate with HTTP Basic username
+`admin` and the **same OAuth consent password**. The browser still prompts
+for credentials separately: this is password reuse, not a shared login session.
+
+For optional separation, `MCP_TARGET_OPS_DASHBOARD_PASSWORD` or
+`activity.dashboard_password` **overrides** the OAuth consent password.
+If neither is set, the Dashboard is disabled (404); an unprotected OAuth
+authorization endpoint does not silently open the Dashboard. Keep the management
+endpoint behind HTTPS and preferably a reverse-proxy access restriction;
+never put the password in a URL or shell history. The Dashboard never accepts
+MCP Bearer/OAuth access tokens as credentials, and Dashboard authentication
+never grants permission to operate a target.
 
 Session attribution is best effort:
 
