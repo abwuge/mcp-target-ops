@@ -455,6 +455,7 @@ mod tests {
             local.enabled = true;
             local.policy.allow_exec = true;
             local.policy.allow_file_read = true;
+            local.policy.allow_file_write = true;
             local.policy.allowed_roots = vec![path.to_string_lossy().to_string()];
         }
         config.server.default_target = Some("local".to_string());
@@ -545,6 +546,13 @@ mod tests {
             json!({"target":"local","command":command}),
         );
         assert_eq!(response["result"]["isError"], false);
+        assert!(response["result"]["structuredContent"]
+            .get("command")
+            .is_none());
+        assert_eq!(
+            response["result"]["structuredContent"]["stdout"],
+            "audit-command-visible-2026"
+        );
         let history = state
             .activity
             .as_ref()
@@ -570,6 +578,149 @@ mod tests {
         assert_eq!(details["arguments"]["command"], command);
         assert_eq!(details["result"]["stdout"], "audit-command-visible-2026");
         assert_eq!(details["result"]["exit_code"], 0);
+    }
+
+    #[test]
+    fn batch_and_async_responses_do_not_repeat_commands_or_working_directories() {
+        let state = test_state();
+        let root = state
+            .config
+            .server
+            .runtime_dir
+            .parent()
+            .unwrap()
+            .display()
+            .to_string();
+        let batch = call_tool_for(
+            Arc::clone(&state),
+            "session:clean-output",
+            1,
+            "exec_batch",
+            json!({"target":"local","commands":[
+                {"command":"printf one","cwd":root},
+                {"command":"printf two","cwd":root}
+            ]}),
+        );
+        let output = &batch["result"]["structuredContent"];
+        assert_eq!(batch["result"]["isError"], false);
+        assert_eq!(output["succeeded"], 2);
+        assert_eq!(output["results"][0]["stdout"], "one");
+        assert_eq!(output["results"][1]["stdout"], "two");
+        for item in output["results"].as_array().unwrap() {
+            assert!(item.get("command").is_none());
+            assert!(item.get("cwd").is_none());
+            assert!(item.get("index").is_some());
+        }
+
+        let started = call_tool_for(
+            Arc::clone(&state),
+            "session:clean-output",
+            2,
+            "exec_start",
+            json!({
+                "target":"local", "command":"sleep 0.02; printf async",
+                "cwd":root, "timeout_ms":1000
+            }),
+        );
+        let job_id = started["result"]["structuredContent"]["job_id"]
+            .as_str()
+            .unwrap();
+        assert!(started["result"]["structuredContent"]
+            .get("command")
+            .is_none());
+        assert!(started["result"]["structuredContent"].get("cwd").is_none());
+        let waited = call_tool_for(
+            Arc::clone(&state),
+            "session:clean-output",
+            3,
+            "job_wait",
+            json!({"job_id":job_id,"wait_timeout_ms":1000}),
+        );
+        assert_eq!(waited["result"]["structuredContent"]["stdout"], "async");
+        assert!(waited["result"]["structuredContent"]
+            .get("command")
+            .is_none());
+
+        let history = state
+            .activity
+            .as_ref()
+            .unwrap()
+            .query(crate::core::activity::Query {
+                search: Some("printf one".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(history["summary"]["count"].as_i64().unwrap() >= 1);
+        let id = history["calls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|call| call["name"] == "exec_batch")
+            .unwrap()["id"]
+            .as_i64()
+            .unwrap();
+        let audit = state
+            .activity
+            .as_ref()
+            .unwrap()
+            .call_details(id)
+            .unwrap()
+            .unwrap();
+        assert!(audit["command"].as_str().unwrap().contains("printf one"));
+        assert_eq!(audit["arguments"]["commands"][0]["cwd"], root);
+    }
+
+    #[test]
+    fn file_write_and_patch_do_not_repeat_submitted_payloads() {
+        let state = test_state();
+        let root = state.config.server.runtime_dir.parent().unwrap();
+        let file = root.join("clean-input.txt");
+        let path = file.to_string_lossy().to_string();
+        let written = call_tool_for(
+            Arc::clone(&state),
+            "session:file-clean",
+            1,
+            "file_write",
+            json!({"target":"local","path":path,"content":"before\n"}),
+        );
+        let output = &written["result"]["structuredContent"];
+        assert_eq!(written["result"]["isError"], false);
+        assert!(output.get("content").is_none());
+        assert_eq!(output["written"], true);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "before\n");
+
+        let patch = "--- a/clean-input.txt\n+++ b/clean-input.txt\n@@ -1 +1 @@\n-before\n+after\n";
+        let patched = call_tool_for(
+            Arc::clone(&state),
+            "session:file-clean",
+            2,
+            "file_patch",
+            json!({"target":"local","path":path,"patch":patch}),
+        );
+        assert_eq!(patched["result"]["isError"], false, "{patched}");
+        let result = &patched["result"]["structuredContent"];
+        assert_eq!(result["changed"], true);
+        assert!(result.get("diff").is_none());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "after\n");
+
+        let read = call_tool_for(
+            Arc::clone(&state),
+            "session:file-clean",
+            3,
+            "file_read",
+            json!({"target":"local","path":path}),
+        );
+        assert_eq!(read["result"]["structuredContent"]["content"], "after\n");
+        let audit = state
+            .activity
+            .as_ref()
+            .unwrap()
+            .query(crate::core::activity::Query {
+                search: Some("+after".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(audit["summary"]["count"], 1);
     }
 
     #[test]
@@ -746,6 +897,8 @@ mod tests {
         assert_eq!(completed.len(), 1);
         assert_eq!(completed[0]["job_id"], job_id);
         assert_eq!(completed[0]["stdout"], "queued");
+        assert!(completed[0].get("command").is_none());
+        assert!(completed[0].get("cwd").is_none());
 
         let drained = call_tool_for(
             Arc::clone(&state),

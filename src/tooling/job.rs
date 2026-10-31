@@ -157,9 +157,6 @@ pub enum AdaptiveExecOutput {
 pub struct CompletedJobResult {
     pub job_id: String,
     pub target: String,
-    pub command: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cwd: Option<String>,
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
@@ -176,8 +173,6 @@ pub struct CompletedJobResult {
 struct JobEntry {
     session: Arc<CommandSession>,
     caller_key: String,
-    command: String,
-    cwd: Option<String>,
     order: u64,
     delivered: bool,
 }
@@ -257,8 +252,6 @@ impl JobRegistry {
             JobEntry {
                 session,
                 caller_key: caller_key.to_string(),
-                command: req.command,
-                cwd: req.cwd,
                 order,
                 delivered: false,
             },
@@ -289,8 +282,6 @@ impl JobRegistry {
             JobEntry {
                 session,
                 caller_key: caller_key.to_string(),
-                command: req.command,
-                cwd: req.cwd,
                 order,
                 delivered: false,
             },
@@ -497,8 +488,6 @@ impl JobRegistry {
                 Some(CompletedJobResult {
                     job_id: id,
                     target: entry.session.target.to_string(),
-                    command: entry.command.clone(),
-                    cwd: entry.cwd.clone(),
                     status: entry.session.state().to_string(),
                     exit_code: status.exit_code,
                     elapsed_ms: status.elapsed_ms,

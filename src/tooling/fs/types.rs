@@ -183,8 +183,6 @@ pub struct FileWriteResponse {
     pub new_sha256: String,
     pub bytes: usize,
     pub encoding: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
     pub diff: String,
 }
 
@@ -235,7 +233,6 @@ pub struct FilePatchResponse {
     pub written: bool,
     pub old_sha256: Option<String>,
     pub new_sha256: Option<String>,
-    pub diff: String,
     pub files: Vec<FilePatchFileResponse>,
 }
 

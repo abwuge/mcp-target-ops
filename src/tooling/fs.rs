@@ -298,12 +298,10 @@ pub fn write(state: &AppState, req: FileWriteRequest) -> Result<FileWriteRespons
         .zip(new_text)
         .map(|(old, new)| unified_diff(old, new))
         .unwrap_or_default();
-    let (encoding, ui_content) = match new_text {
-        Some(text) => ("utf-8".to_string(), (!exists).then(|| text.to_string())),
-        None => (
-            "base64".to_string(),
-            (!exists).then(|| BASE64.encode(&content)),
-        ),
+    let encoding = if new_text.is_some() {
+        "utf-8"
+    } else {
+        "base64"
     };
 
     write_bytes(state, &target, config, &req.path, &content, mode, timeout)?;
@@ -316,8 +314,7 @@ pub fn write(state: &AppState, req: FileWriteRequest) -> Result<FileWriteRespons
         old_sha256,
         new_sha256,
         bytes: content.len(),
-        encoding,
-        content: ui_content,
+        encoding: encoding.to_string(),
         diff,
     })
 }
@@ -418,7 +415,6 @@ pub fn patch(state: &AppState, req: FilePatchRequest) -> Result<FilePatchRespons
             written: changed && !req.dry_run,
             old_sha256: Some(old_sha256),
             new_sha256: Some(new_sha256),
-            diff: if changed { req.patch } else { String::new() },
             files,
         });
     }
@@ -506,7 +502,6 @@ pub fn patch(state: &AppState, req: FilePatchRequest) -> Result<FilePatchRespons
         written: changed && !req.dry_run,
         old_sha256: None,
         new_sha256: None,
-        diff: if changed { req.patch } else { String::new() },
         files,
     })
 }

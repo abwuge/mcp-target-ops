@@ -382,6 +382,16 @@ them with shell separators.
 
 Use `exec_start` for long commands and `job_output` to read incremental stdout/stderr.
 
+MCP tool responses contain **results rather than a copy of the request**.
+`exec`, per-command `exec_batch` results, and asynchronous `completed_jobs`
+no longer repeat `command` or `cwd`; they retain target attribution, status,
+stdout/stderr, exit codes, timings and job IDs. Likewise, `file_write` and
+`file_import` no longer echo the uploaded `content`, and `file_patch` does
+not echo the submitted patch as `diff`. Readable file data (`file_read`),
+deleted-file recovery content (`file_delete`), and generated edit/write diffs
+remain results and are not removed. Submitted inputs and results remain
+available in the authenticated Dashboard command audit log.
+
 For model-side workflows that only need to continue after a background command finishes, prefer `job_wait` over repeated `job_poll` or `job_output` calls. Its server-side default and cap come from `runtime.job_wait_default_timeout_ms` and `runtime.job_wait_max_timeout_ms`, and a call may request a shorter window.
 
 `exec` and `exec_start` share the same `CommandSession` implementation for

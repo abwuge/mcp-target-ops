@@ -79,7 +79,6 @@ pub(super) fn output_schema(name: &str) -> Value {
         "exec" => json!({
             "type": "object",
             "properties": {
-                "command": { "type": "string" },
                 "resolved_target": resolved_target_schema(),
                 "job_id": { "type": "string" },
                 "status": { "type": "string", "enum": ["running"] },
@@ -92,7 +91,7 @@ pub(super) fn output_schema(name: &str) -> Value {
                 "stderr_truncated": { "type": "boolean" },
                 "timed_out": { "type": "boolean" }
             },
-            "required": ["command", "resolved_target"],
+            "required": ["resolved_target"],
             "additionalProperties": false
         }),
         "exec_batch" => json!({
@@ -307,7 +306,6 @@ pub(super) fn output_schema(name: &str) -> Value {
                 "new_sha256": { "type": "string" },
                 "bytes": { "type": "integer", "minimum": 0 },
                 "encoding": { "type": "string", "enum": ["utf-8", "base64"] },
-                "content": nullable_string_schema(),
                 "diff": { "type": "string" }
             },
             "required": ["resolved_target", "path", "created", "written", "new_sha256", "bytes", "encoding", "diff"],
@@ -351,7 +349,6 @@ pub(super) fn output_schema(name: &str) -> Value {
                 "new_sha256": { "type": "string" },
                 "bytes": { "type": "integer", "minimum": 0 },
                 "encoding": { "type": "string", "enum": ["utf-8", "base64"] },
-                "content": nullable_string_schema(),
                 "diff": { "type": "string" }
             },
             "required": ["source", "resolved_target", "path", "created", "written", "new_sha256", "bytes", "encoding", "diff"],
@@ -416,7 +413,6 @@ pub(super) fn output_schema(name: &str) -> Value {
                 "written": { "type": "boolean" },
                 "old_sha256": nullable_string_schema(),
                 "new_sha256": nullable_string_schema(),
-                "diff": { "type": "string" },
                 "files": {
                     "type": "array",
                     "items": {
@@ -433,7 +429,7 @@ pub(super) fn output_schema(name: &str) -> Value {
                     }
                 }
             },
-            "required": ["resolved_target", "path", "changed", "written", "old_sha256", "new_sha256", "diff", "files"],
+            "required": ["resolved_target", "path", "changed", "written", "old_sha256", "new_sha256", "files"],
             "additionalProperties": false
         }),
         "file_find" => json!({
@@ -539,9 +535,6 @@ pub(super) fn output_schema(name: &str) -> Value {
         _ => unreachable!("output schema missing for tool {name}"),
     };
 
-    if matches!(name, "exec" | "exec_start") {
-        schema["properties"]["command"] = json!({"type":"string"});
-    }
     schema["properties"]["completed_jobs"] = json!({
         "type": "array",
         "items": completed_job_schema()
@@ -555,8 +548,6 @@ fn completed_job_schema() -> Value {
         "properties": {
             "job_id": { "type": "string" },
             "target": { "type": "string" },
-            "command": { "type": "string" },
-            "cwd": { "type": "string" },
             "status": { "type": "string", "enum": ["completed", "failed", "cancelled", "timed_out"] },
             "exit_code": nullable_integer_schema(),
             "elapsed_ms": { "type": "integer", "minimum": 0 },
@@ -566,7 +557,7 @@ fn completed_job_schema() -> Value {
             "stdout_truncated": { "type": "boolean" },
             "stderr_truncated": { "type": "boolean" }
         },
-        "required": ["job_id", "target", "command", "status", "elapsed_ms", "timed_out", "stdout_truncated", "stderr_truncated"],
+        "required": ["job_id", "target", "status", "elapsed_ms", "timed_out", "stdout_truncated", "stderr_truncated"],
         "additionalProperties": false
     })
 }
@@ -616,8 +607,6 @@ fn exec_batch_item_schema() -> Value {
         "type": "object",
         "properties": {
             "index": { "type": "integer", "minimum": 0 },
-            "command": { "type": "string" },
-            "cwd": { "type": "string" },
             "exit_code": nullable_integer_schema(),
             "stdout": { "type": "string" },
             "stderr": { "type": "string" },
@@ -628,7 +617,7 @@ fn exec_batch_item_schema() -> Value {
             "elapsed_ms": { "type": "integer", "minimum": 0 },
             "success": { "type": "boolean" }
         },
-        "required": ["index", "command", "elapsed_ms", "success"],
+        "required": ["index", "elapsed_ms", "success"],
         "additionalProperties": false
     })
 }

@@ -792,6 +792,39 @@ mod tests {
     }
 
     #[test]
+    fn output_schemas_do_not_advertise_echoed_request_payloads() {
+        let descriptors = list_tools(None);
+        let descriptors = descriptors.as_array().unwrap();
+        let schema = |name: &str| -> &Value {
+            &descriptors
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .expect("tool is present")["outputSchema"]
+        };
+        assert!(schema("exec")["properties"].get("command").is_none());
+        assert!(!schema("exec")["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|required| required == "command"));
+        let batch = &schema("exec_batch")["properties"]["results"]["items"];
+        assert!(batch["properties"].get("command").is_none());
+        assert!(batch["properties"].get("cwd").is_none());
+        let completed = &schema("target_current")["properties"]["completed_jobs"]["items"];
+        assert!(completed["properties"].get("command").is_none());
+        assert!(completed["properties"].get("cwd").is_none());
+        assert!(schema("file_write")["properties"].get("content").is_none());
+        assert!(schema("file_import")["properties"].get("content").is_none());
+        assert!(schema("file_patch")["properties"].get("diff").is_none());
+
+        // These are actual results, not repeated request payloads.
+        assert!(schema("file_read")["properties"].get("content").is_some());
+        assert!(schema("file_delete")["properties"].get("content").is_some());
+        assert!(schema("file_edit")["properties"].get("diff").is_some());
+        assert!(schema("file_write")["properties"].get("diff").is_some());
+    }
+
+    #[test]
     fn exec_tools_return_data_without_rendering() {
         let tools = list_tools(None);
         let tools = tools.as_array().unwrap();

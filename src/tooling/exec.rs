@@ -30,7 +30,6 @@ pub struct ExecRequest {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ExecResponse {
-    pub command: String,
     pub resolved_target: ResolvedTarget,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub job_id: Option<String>,
@@ -89,9 +88,6 @@ pub struct ExecBatchRequest {
 #[derive(Debug, Clone, Serialize)]
 pub struct ExecBatchItemResponse {
     pub index: usize,
-    pub command: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cwd: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -136,7 +132,6 @@ pub fn run_with_context(
     req: ExecRequest,
     caller_key: &str,
 ) -> Result<ExecResponse> {
-    let command = req.command.clone();
     let request = ExecStartRequest {
         target: req.target,
         command: req.command,
@@ -151,7 +146,6 @@ pub fn run_with_context(
         .run_adaptive(state, request, caller_key)?
     {
         AdaptiveExecOutput::Completed(output) => Ok(ExecResponse {
-            command,
             resolved_target: output.resolved_target,
             job_id: None,
             status: None,
@@ -168,7 +162,6 @@ pub fn run_with_context(
             resolved_target,
             job_id,
         } => Ok(ExecResponse {
-            command,
             resolved_target,
             job_id: Some(job_id),
             status: Some("running"),
@@ -187,7 +180,6 @@ pub fn run_with_context(
 }
 
 fn run_to_completion(state: &AppState, req: ExecRequest) -> Result<ExecResponse> {
-    let command = req.command.clone();
     let output = state.jobs.run_foreground(
         state,
         ExecStartRequest {
@@ -200,7 +192,6 @@ fn run_to_completion(state: &AppState, req: ExecRequest) -> Result<ExecResponse>
         },
     )?;
     Ok(ExecResponse {
-        command,
         resolved_target: output.resolved_target,
         job_id: None,
         status: None,
@@ -301,8 +292,8 @@ fn run_batch_item(
     let started = Instant::now();
     let request = ExecRequest {
         target: Some(target.to_string()),
-        command: command.command.clone(),
-        cwd: command.cwd.clone(),
+        command: command.command,
+        cwd: command.cwd,
         timeout_ms: command.timeout_ms,
         max_output_bytes: command.max_output_bytes,
         secret_env: secret_env.clone(),
@@ -313,8 +304,6 @@ fn run_batch_item(
             let success = response.exit_code == Some(0) && !response.timed_out;
             ExecBatchItemResponse {
                 index,
-                command: response.command,
-                cwd: command.cwd,
                 exit_code: response.exit_code,
                 stdout: response.stdout,
                 stderr: response.stderr,
@@ -328,8 +317,6 @@ fn run_batch_item(
         }
         Err(error) => ExecBatchItemResponse {
             index,
-            command: command.command,
-            cwd: command.cwd,
             exit_code: None,
             stdout: String::new(),
             stderr: String::new(),
@@ -360,7 +347,6 @@ mod tests {
     #[test]
     fn omits_empty_and_inactive_exec_fields() {
         let response = ExecResponse {
-            command: "true".to_string(),
             resolved_target: ResolvedTarget::new(TargetId::Local, TargetSource::Explicit),
             job_id: None,
             status: None,
@@ -377,7 +363,6 @@ mod tests {
         assert_eq!(
             serde_json::to_value(response).unwrap(),
             json!({
-                "command": "true",
                 "resolved_target": { "target": "local", "source": "explicit" },
                 "exit_code": 0
             })

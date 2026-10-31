@@ -366,6 +366,14 @@ scope。
 
 长命令使用 `exec_start`，通过 `job_output` 增量读取 stdout/stderr。
 
+**MCP 返回结果不再重复原始调用参数。** `exec`、`exec_batch`
+每条结果及后台任务完成通知中的 `command`、`cwd` 输入回显已移除，
+但目标、执行状态、stdout/stderr、退出码、耗时和任务 ID 均保留。
+`file_write` / `file_import` 不再回显新写入的 `content`，
+`file_patch` 不再把提交的补丁原样作为 `diff` 返回。
+真正的操作结果（文件读取内容、删除文件的恢复数据、计算得出的编辑/覆盖差异）
+仍然保留；所有请求参数和审计记录仍可在已认证的 Dashboard 中查询。
+
 对于模型侧只需要“等后台命令结束后再继续”的工作流，应优先使用 `job_wait`，而不是反复调用 `job_poll` 或 `job_output`。其服务端默认等待窗口与最大等待窗口分别来自 `runtime.job_wait_default_timeout_ms` 和 `runtime.job_wait_max_timeout_ms`，单次调用可以请求更短的等待时间。
 
 `exec` 与 `exec_start` 现在共用同一套 `CommandSession`，统一处理进程生命周期、
