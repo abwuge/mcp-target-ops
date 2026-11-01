@@ -21,6 +21,8 @@ const HTML: &str = include_str!("../../../assets/dashboard.html");
 const LOGIN: &str = include_str!("../../../assets/dashboard-login.html");
 const CSS: &str = include_str!("../../../assets/dashboard.css");
 const JS: &str = include_str!("../../../assets/dashboard.js");
+const DIFF_JS: &str = include_str!("../../../assets/dashboard-diff.js");
+const DETAIL_JS: &str = include_str!("../../../assets/dashboard-detail.js");
 const COOKIE_NAME: &str = "target_ops_dashboard";
 const COOKIE_LIFETIME_SECS: u64 = 12 * 60 * 60;
 const MAX_LOGIN_BODY: u64 = 4096;
@@ -160,6 +162,20 @@ pub(super) fn handle(
             200,
             "text/javascript; charset=utf-8",
             JS.as_bytes().to_vec(),
+            false,
+        ),
+        "/dashboard/diff.js" => respond(
+            request,
+            200,
+            "text/javascript; charset=utf-8",
+            DIFF_JS.as_bytes().to_vec(),
+            false,
+        ),
+        "/dashboard/detail.js" => respond(
+            request,
+            200,
+            "text/javascript; charset=utf-8",
+            DETAIL_JS.as_bytes().to_vec(),
             false,
         ),
         "/dashboard/api/call" => {
@@ -433,6 +449,26 @@ mod tests {
         assert!(HTML.contains("id=\"callsTable\""));
         assert!(CSS.contains(".sidebar"));
         assert!(JS.contains("fetch("));
+        assert!(HTML.contains("/dashboard/diff.js"));
+        assert!(HTML.contains("/dashboard/detail.js"));
+        assert!(DIFF_JS.contains("diff-line"));
+        assert!(DETAIL_JS.contains("raw-details"));
+        assert!(DETAIL_JS.contains("DashboardDiff.renderDiff"));
+        for boilerplate in [
+            "mcp:activity:read",
+            "识别置信度",
+            "MCP Session",
+            "大型内容有长度上限",
+            "/ SQLite",
+            "JSON-RPC 错误码",
+        ] {
+            assert!(
+                !HTML.contains(boilerplate),
+                "unexpected UI boilerplate: {boilerplate}"
+            );
+        }
+        assert!(!LOGIN.contains("无需用户名"));
+        assert!(!LOGIN.contains("只读访问"));
     }
 
     #[test]

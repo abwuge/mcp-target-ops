@@ -1,12 +1,6 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const GROUPS = {
-  mcp_session: ["MCP Session", false],
-  credential_group: ["凭证归组", true],
-  anonymous_group: ["匿名归组", true],
-  stdio_process: ["stdio 进程", true],
-};
 const fmtTime = new Intl.DateTimeFormat("zh-CN", {
   month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
 });
@@ -15,8 +9,8 @@ const fmtShortTime = new Intl.DateTimeFormat("zh-CN", {
 });
 const nf = new Intl.NumberFormat("zh-CN");
 const app = {
-  hours: 24, client: "", session: "", tool: "", status: "", search: "",
-  calls: [], sessions: [], nextBefore: null, data: null,
+  hours: 24, client: "", tool: "", status: "", search: "",
+  calls: [], clients: [], nextBefore: null, data: null,
   knownClients: new Set(), knownTools: new Set(), loading: false, requestSeq: 0,
   pagesLoaded: 1, reloadQueued: false, detailSeq: 0,
 };
@@ -32,26 +26,18 @@ function prettyDuration(ms) {
     ms < 10 ? `${ms.toFixed(2)} ms` : ms < 1000 ? `${ms.toFixed(1)} ms` : `${(ms / 1000).toFixed(2)} s`;
 }
 function prettyTime(ms) { return ms ? fmtTime.format(new Date(ms)) : "—"; }
-function idLabel(key) {
-  if (!key) return "—";
-  const raw = key.split(":").slice(-1)[0];
-  return raw.length > 22 ? `${raw.slice(0, 11)}…${raw.slice(-5)}` : raw;
-}
-function groupName(grouping) { return (GROUPS[grouping] || ["未知来源", true])[0]; }
-function groupApprox(grouping) { return (GROUPS[grouping] || ["", true])[1]; }
 function empty(container, message) { container.replaceChildren(node("div", "muted", message)); }
 
 function renderSummary(data) {
   const s = data.summary;
   $("metricCalls").textContent = nf.format(s.count);
-  $("metricSessions").textContent = nf.format(s.sessions);
   $("metricClients").textContent = nf.format(s.clients);
   $("metricError").textContent = s.count ? `${(s.errors * 100 / s.count).toFixed(1)}%` : "0%";
-  $("metricError").style.color = s.errors ? "var(--orange)" : "";
+  $("metricError").style.color = s.errors ? "var(--danger)" : "";
   $("errorDetail").textContent = `${nf.format(s.errors)} 次失败`;
   $("metricLatency").textContent = prettyDuration(s.p95_ms);
-  $("avgDetail").textContent = `平均耗时 ${prettyDuration(s.avg_ms)}`;
-  $("sideSessionCount").textContent = nf.format(s.sessions);
+  $("avgDetail").textContent = `平均 ${prettyDuration(s.avg_ms)}`;
+  $("sideSessionCount").textContent = nf.format(s.clients);
   $("chartWindow").textContent = $("hours").selectedOptions[0].textContent;
 }
 
@@ -95,8 +81,7 @@ function renderTopTools(data) {
     const row = node("div", "tool-row");
     const info = node("div", "tool-row-info");
     const head = node("div", "tool-row-head");
-    head.append(node("span", "tool-label", tool.name),
-      node("span", "tool-percent", `${(tool.count * 100 / max).toFixed(0)}%`));
+    head.append(node("span", "tool-label", tool.name));
     const track = node("div", "tool-track");
     const fill = node("div", "tool-fill");
     fill.style.width = `${100 * tool.count / max}%`;
@@ -126,67 +111,67 @@ function updateOptionCatalog(data) {
   $("statusFilter").value = app.status;
 }
 
-function sessionClick(key) {
-  app.session = app.session === key ? "" : key;
-  if (app.session) app.client = "";
+function filterClient(name) {
+  app.client = app.client === name ? "" : name;
   $("clientFilter").value = app.client;
+  $("clearSession").hidden = !app.client;
   refresh();
 }
 
-function sessionButton(s, sidebar) {
+function clientButton(client, sidebar) {
   const btn = node("button", sidebar ? "sidebar-session" : "session-card");
   btn.type = "button";
-  if (app.session === s.key) btn.classList.add("selected");
-  btn.title = `${s.client} · ${groupName(s.grouping)}\n${s.key}`;
+  if (app.client === client.name) btn.classList.add("selected");
+  btn.title = client.name;
   if (sidebar) {
-    const line = node("div", "session-line");
-    line.append(node("span", "session-title", s.client));
-    btn.append(line, node("span", "session-id", idLabel(s.key)));
-    const meta = node("div", "session-meta");
-    meta.append(node("span", "", `${s.count} 次`),
-      document.createTextNode(` · ${groupName(s.grouping)}`));
-    btn.append(meta);
+    btn.append(node("div", "session-title", client.name),
+      node("div", "session-meta", `${nf.format(client.count)} 次调用`));
   } else {
     const head = node("div", "session-card-head");
-    head.append(node("span", "session-client", s.client));
-    head.lastChild.title = s.client;
-    const badge = node("span", "group-label", groupName(s.grouping));
-    if (groupApprox(s.grouping)) badge.classList.add("approx");
-    head.append(badge);
+    head.append(node("span", "session-client", client.name));
     const bottom = node("div", "session-card-bottom");
-    const count = node("span");
-    count.append(node("strong", "", nf.format(s.count)), document.createTextNode(" 次调用"));
-    const when = node("span", "", fmtShortTime.format(new Date(s.last_call_ms)));
-    bottom.append(count, when);
-    btn.append(head, node("div", "session-card-id", idLabel(s.key)), bottom);
+    bottom.append(node("span", "", `${nf.format(client.count)} 次调用`),
+      node("span", "", fmtShortTime.format(new Date(client.last))));
+    btn.append(head, bottom);
   }
-  btn.addEventListener("click", () => { sessionClick(s.key); document.getElementById("calls").scrollIntoView({behavior:"smooth"}); });
+  btn.addEventListener("click", () => {
+    filterClient(client.name);
+    $("calls").scrollIntoView({behavior: "smooth"});
+  });
   return btn;
 }
 
 function renderSessions(data) {
-  app.sessions = data.sessions;
+  const groups = new Map();
+  for (const session of data.sessions) {
+    const name = session.client || "未知客户端";
+    const previous = groups.get(name) || {name, count: 0, last: 0};
+    previous.count += Number(session.count) || 0;
+    previous.last = Math.max(previous.last, Number(session.last_call_ms) || 0);
+    groups.set(name, previous);
+  }
+  app.clients = [...groups.values()].sort((a, b) => b.last - a.last);
   const sidebar = $("sessionList"), grid = $("sessionGrid");
   sidebar.replaceChildren(); grid.replaceChildren();
-  if (!app.sessions.length) {
-    empty(sidebar, "暂无会话");
-    empty(grid, "当前范围暂无会话或归组");
+  if (!app.clients.length) {
+    empty(sidebar, "暂无客户端");
+    empty(grid, "暂无调用记录");
     return;
   }
-  app.sessions.slice(0, 60).forEach((s) => sidebar.append(sessionButton(s, true)));
-  app.sessions.slice(0, 12).forEach((s) => grid.append(sessionButton(s, false)));
+  app.clients.forEach((c) => sidebar.append(clientButton(c, true)));
+  app.clients.forEach((c) => grid.append(clientButton(c, false)));
+  $("clearSession").hidden = !app.client;
 }
 
 function showActiveFilters() {
   const el = $("activeFilters");
   const labels = [];
-  if (app.session) labels.push(`会话: ${idLabel(app.session)}`);
   if (app.client) labels.push(`客户端: ${app.client}`);
   if (app.tool) labels.push(`工具: ${app.tool}`);
   if (app.status) labels.push(`状态: ${app.status === "error" ? "失败" : "成功"}`);
   if (app.search) labels.push(`搜索: ${app.search}`);
   el.hidden = !labels.length;
-  el.textContent = labels.length ? `当前筛选 · ${labels.join(" / ")}` : "";
+  el.textContent = labels.join(" · ");
 }
 
 function renderCalls() {
@@ -201,17 +186,16 @@ function renderCalls() {
     const tr = node("tr");
     const time = node("td", "time-cell", prettyTime(call.started_ms));
     const client = node("td");
-    client.append(node("div", "client-cell", call.client),
-      node("span", "mini-session", idLabel(call.session_key)));
+    client.append(node("div", "client-cell", call.client));
     const method = node("td", "tool-cell", call.name);
     const operation = node("td", "command-cell");
-    const preview = call.command_preview || (call.has_details ?
-      "查看调用参数与执行结果" : "旧记录未保存命令内容");
+    let preview = call.command_preview || "—";
+    if (preview.startsWith(call.name + " ")) preview = preview.slice(call.name.length + 1).replace(/^path=/, "");
     const commandPreview = node("div",
       call.command_preview ? "command-preview" : "command-fallback", preview);
     operation.title = preview;
     operation.append(commandPreview);
-    if (call.cwd) operation.append(node("div", "command-cwd", "cwd: " + call.cwd));
+    if (call.cwd) operation.append(node("div", "command-cwd", call.cwd));
     const target = node("td");
     if (call.target) target.append(node("span", "target-pill", call.target));
     else target.append(node("span", "muted", "—"));
@@ -225,71 +209,25 @@ function renderCalls() {
     tr.addEventListener("keydown", (e) => { if (e.key === "Enter") showCall(call); });
     body.append(tr);
   });
-  $("listCount").textContent = `已显示 ${nf.format(app.calls.length)} 条调用 · 每次最多返回 200 条`;
+  const total = app.data?.summary?.count ?? app.calls.length;
+  $("listCount").textContent = `${nf.format(app.calls.length)} / ${nf.format(total)} 条`;
   $("loadMore").hidden = app.nextBefore === null;
   $("loadMore").disabled = app.loading;
 }
 
-function detailRow(parent, key, value) {
-  const row = node("div", "detail-row");
-  row.append(node("span", "detail-name", key), node("span", "detail-value", value ?? "—"));
-  parent.append(row);
-}
-function detailSection(parent, name) {
-  const section = node("div", "drawer-section");
-  section.append(node("div", "drawer-section-title", name));
-  parent.append(section);
-  return section;
-}
-function detailCode(parent, title, value) {
-  const shell = node("div", "log-section");
-  const top = node("div", "log-head");
-  top.append(node("span", "log-label", title));
-  const copy = node("button", "log-copy", "复制");
-  copy.type = "button";
-  copy.addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText(value);
-      copy.textContent = "已复制";
-    } catch (_) {
-      copy.textContent = "复制失败";
-    }
-  });
-  top.append(copy);
-  shell.append(top, node("pre", "log-pre", value));
-  parent.append(shell);
-}
-
 async function showCall(call) {
-  const container = $("drawerContent"); container.replaceChildren();
-  const s = app.sessions.find((session) => session.key === call.session_key);
-  let section = detailSection(container, "EXECUTION");
-  detailRow(section, "事件 ID", `#${call.id}`);
-  detailRow(section, "调用方法", call.name);
-  detailRow(section, "类别", call.kind === "tool" ? "MCP 工具" : "MCP 协议");
-  detailRow(section, "时间", prettyTime(call.started_ms));
-  detailRow(section, "耗时", prettyDuration(call.duration_ms));
-  detailRow(section, "结果", call.status === "ok" ? "成功" : "失败");
-  detailRow(section, "JSON-RPC 错误码", call.rpc_error_code === null ? "—" : call.rpc_error_code);
-  detailRow(section, "目标", call.target || "未指定");
-  section = detailSection(container, "CLIENT / SESSION");
-  detailRow(section, "客户端", call.client);
-  detailRow(section, "ClientInfo 版本", call.client_version || "未知");
-  detailRow(section, "会话类型", groupName(call.grouping));
-  detailRow(section, "传输", call.transport.toUpperCase());
-  detailRow(section, "归组键", call.session_key);
-  if (s) {
-    detailRow(section, "Mcp-Session-Id", s.session_id || "无");
-    detailRow(section, "OAuth 客户端", s.oauth_client_name || "未知");
-    detailRow(section, "User-Agent", s.user_agent || "未知");
-    detailRow(section, "结束时间", s.ended_ms ? prettyTime(s.ended_ms) : "未收到结束通知");
-  }
-
-  const detailArea = detailSection(container, "COMMAND / REQUEST / OUTPUT");
-  detailArea.append(node("div", "muted small", "正在加载调用详情…"));
-  const note = node("div", "drawer-note",
-    "新版本记录实际命令、调用参数与执行结果。显式凭证字段会脱敏；大型字段有长度上限且会标记截断。命令文本若包含敏感内容，也会原样记录在仅管理员可访问的数据库中。");
-  container.append(note);
+  const content = $("drawerContent");
+  content.replaceChildren(node("div", "muted small", "加载中…"));
+  $("drawerTitle").textContent = DashboardDetail.readableName(call.name);
+  const meta = $("drawerMeta");
+  meta.replaceChildren();
+  const facts = [call.client, call.target, prettyTime(call.started_ms), prettyDuration(call.duration_ms)].filter(Boolean);
+  facts.forEach((fact, i) => {
+    if (i) meta.append(node("span", "drawer-meta-separator", "·"));
+    meta.append(node("span", "", fact));
+  });
+  meta.append(node("span", "status-pill " + call.status,
+    call.status === "ok" ? "成功" : "失败"));
   $("drawerOverlay").hidden = false;
   $("detailDrawer").classList.add("open");
   $("detailDrawer").setAttribute("aria-hidden", "false");
@@ -298,38 +236,15 @@ async function showCall(call) {
   const seq = ++app.detailSeq;
   try {
     const resp = await fetch(`/dashboard/api/call?id=${encodeURIComponent(call.id)}`,
-      {credentials:"same-origin", cache:"no-store"});
-    if (!resp.ok) throw Error(`HTTP ${resp.status}`);
+      {credentials: "same-origin", cache: "no-store"});
+    if (!resp.ok) throw new Error(resp.status === 401 ? "登录已过期，请重新登录" : "详情加载失败");
     const details = await resp.json();
     if (seq !== app.detailSeq || $("drawerOverlay").hidden) return;
-    detailArea.replaceChildren(node("div", "drawer-section-title", "COMMAND / REQUEST / OUTPUT"));
-    if (!details.available) {
-      detailArea.append(node("div", "legacy-notice",
-        "旧版调用只保存了工具名称和参数字段名，实际命令及执行结果未被记录，无法从数据库补回。新产生的调用会显示全部可用详情。"));
-      return;
-    }
-    if (details.command !== null) detailCode(detailArea, "执行命令 / 操作", details.command);
-    if (details.cwd) detailRow(detailArea, "工作目录", details.cwd);
-    if (details.request_truncated)
-      detailArea.append(node("div", "truncated-notice", "请求参数或命令超出审计长度上限，以下部分内容已标注截断。"));
-    if (details.arguments !== null && details.arguments !== undefined)
-      detailCode(detailArea, "完整调用参数（有明确长度上限）", JSON.stringify(details.arguments, null, 2));
-    const result = details.result;
-    if (result && typeof result === "object") {
-      if (typeof result.stdout === "string")
-        detailCode(detailArea, "STDOUT", result.stdout || "（空）");
-      if (typeof result.stderr === "string")
-        detailCode(detailArea, "STDERR", result.stderr || "（空）");
-      if (result.exit_code !== undefined && result.exit_code !== null)
-        detailRow(detailArea, "退出码", String(result.exit_code));
-    }
-    if (details.response_truncated)
-      detailArea.append(node("div", "truncated-notice", "执行结果超出审计长度上限，部分内容已标注截断。"));
-    if (result !== null && result !== undefined)
-      detailCode(detailArea, "执行结果 / JSON", JSON.stringify(result, null, 2));
+    $("drawerTitle").textContent = DashboardDetail.title(call, details);
+    DashboardDetail.render(content, call, details);
   } catch (err) {
     if (seq === app.detailSeq && !$("drawerOverlay").hidden) {
-      detailArea.replaceChildren(node("div", "error-bar", "无法获取调用详情：" + err.message));
+      content.replaceChildren(node("div", "error-bar", err.message));
     }
   }
 }
@@ -346,10 +261,8 @@ async function refresh(more = false) {
   app.loading = true;
   const seq = ++app.requestSeq;
   $("refresh").disabled = true;
-  $("connectionState").textContent = "正在同步";
   $("errorBar").hidden = true;
   const params = new URLSearchParams({ hours: app.hours, limit: 60 });
-  if (app.session) params.set("session", app.session);
   if (app.client) params.set("client", app.client);
   if (app.tool) params.set("tool", app.tool);
   if (app.status) params.set("status", app.status);
@@ -372,9 +285,7 @@ async function refresh(more = false) {
     updateOptionCatalog(data);
     renderSummary(data); renderTrend(data); renderTopTools(data);
     renderSessions(data); renderCalls();
-    $("connectionState").textContent = "已同步";
   } catch (err) {
-    $("connectionState").textContent = "连接失败";
     $("errorBar").textContent = `读取调用记录失败：${err.message}`;
     $("errorBar").hidden = false;
   } finally {
@@ -386,7 +297,7 @@ async function refresh(more = false) {
 }
 
 function resetFilters() {
-  app.client = ""; app.session = ""; app.tool = ""; app.status = ""; app.search = "";
+  app.client = ""; app.tool = ""; app.status = ""; app.search = "";
   $("clientFilter").value = ""; $("toolFilter").value = "";
   $("statusFilter").value = ""; $("search").value = "";
   refresh();
@@ -398,11 +309,11 @@ function bind() {
     app.hours = Number(e.target.value); app.knownClients.clear(); app.knownTools.clear();
     refresh();
   });
-  $("clientFilter").addEventListener("change", (e) => { app.client = e.target.value; app.session = ""; refresh(); });
+  $("clientFilter").addEventListener("change", (e) => { app.client = e.target.value; refresh(); });
   $("toolFilter").addEventListener("change", (e) => { app.tool = e.target.value; refresh(); });
   $("statusFilter").addEventListener("change", (e) => { app.status = e.target.value; refresh(); });
   $("resetFilters").addEventListener("click", resetFilters);
-  $("clearSession").addEventListener("click", () => { app.session = ""; refresh(); });
+  $("clearSession").addEventListener("click", () => { app.client = ""; $("clientFilter").value = ""; refresh(); });
   $("loadMore").addEventListener("click", () => refresh(true));
   $("closeDrawer").addEventListener("click", closeDrawer);
   $("drawerOverlay").addEventListener("click", closeDrawer);

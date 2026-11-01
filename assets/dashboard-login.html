@@ -6,30 +6,23 @@
   <meta name="color-scheme" content="light dark">
   <meta name="robots" content="noindex, nofollow">
   <link rel="icon" href="/favicon.ico" type="image/x-icon">
-  <title>访问调用记录 · @@SERVER_NAME@@</title>
-  <style>@@AUTH_STYLES@@</style>
+  <title>登录 · Target Ops</title>
+  <style>@@AUTH_STYLES@@
+    #page-title { margin-bottom: 22px; }
+  </style>
 </head>
 <body>
 <main class="shell">
-  <div class="brand" aria-label="Target Ops access">
+  <div class="brand">
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7 10V7a5 5 0 0 1 10 0v3m-9 0h8a2 2 0 0 1 2 2v7H6v-7a2 2 0 0 1 2-2Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-    @@SERVER_NAME@@
+    Target Ops
   </div>
   <section class="card" aria-labelledby="page-title">
     <div class="content">
-      <div class="app-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="m5 7 5 5-5 5m8 0h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
-      <h1 id="page-title">查看调用记录</h1>
-      <p class="lead">输入与 MCP 客户端授权时相同的密码，即可进入 Target Ops 监控面板。</p>
-      <div class="request">
-        <div class="request-title">
-          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m9 12 2 2 4-4m6 2a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          只读访问
-        </div>
-        <div class="scope-list"><span class="scope-chip">mcp:activity:read</span></div>
-      </div>
+      <h1 id="page-title">调用记录</h1>
       @@ERROR_BLOCK@@
       <form action="/dashboard/login" method="post">
-        <label for="password">授权密码</label>
+        <label for="password">密码</label>
         <div class="password-field">
           <input id="password" name="password" type="password" autocomplete="current-password"
             aria-invalid="@@ARIA_INVALID@@" required autofocus spellcheck="false">
@@ -37,12 +30,8 @@
             <svg viewBox="0 0 24 24" fill="none"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="12" r="2.8" stroke="currentColor" stroke-width="1.7"/></svg>
           </button>
         </div>
-        <div class="form-actions"><button class="authorize" type="submit">解锁监控面板</button></div>
+        <div class="form-actions"><button class="authorize" type="submit">登录</button></div>
       </form>
-    </div>
-    <div class="security-note">
-      <svg viewBox="0 0 24 24" fill="none"><path d="M12 3 5 6v5c0 4.5 2.8 8.1 7 10 4.2-1.9 7-5.5 7-10V6l-7-3Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
-      <span>无需用户名。密码仅发送给 Target Ops，不会记录在调用历史中。验证成功后浏览器将保留 12 小时的安全登录状态。</span>
     </div>
   </section>
 </main>

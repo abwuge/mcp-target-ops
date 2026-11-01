@@ -15,6 +15,11 @@ jobs:
         run: command -v rg || (sudo apt-get update && sudo apt-get install -y ripgrep)
       - name: Format
         run: cargo fmt --all -- --check
+      - name: Dashboard JavaScript
+        run: |
+          node --check assets/dashboard.js
+          node --check assets/dashboard-diff.js
+          node --check assets/dashboard-detail.js
       - name: Test
         run: cargo test --locked --all-targets -- --test-threads=2
       - name: Clippy
