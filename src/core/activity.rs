@@ -34,7 +34,10 @@ impl Caller {
         let (grouping, transport, session_id, stable_key) =
             if let Some(id) = key.strip_prefix("session:") {
                 ("mcp_session", "http", Some(id.to_string()), key.to_string())
-            } else if key.starts_with("bearer:") {
+            } else if key.starts_with("bearer:")
+                || key.starts_with("static-bearer:")
+                || key.starts_with("oauth-grant:")
+            {
                 ("credential_group", "http", None, key.to_string())
             } else if key == "http:anonymous" {
                 ("anonymous_group", "http", None, key.to_string())
@@ -834,6 +837,18 @@ mod tests {
             fs::metadata(&public_dir).unwrap().permissions().mode() & 0o777,
             0o755
         );
+    }
+
+    #[test]
+    fn credential_group_survives_http_client_recreation() {
+        for key in ["bearer:hash", "static-bearer:hash", "oauth-grant:principal"] {
+            let caller = Caller::from_key(key, "http");
+            assert_eq!(caller.key, key);
+            assert_eq!(caller.job_owner_key, key);
+            assert_eq!(caller.transport, "http");
+            assert_eq!(caller.grouping, "credential_group");
+            assert_eq!(caller.session_id, None);
+        }
     }
 
     #[test]

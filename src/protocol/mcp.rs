@@ -245,16 +245,25 @@ fn handle_request(
         Ok(modern) => {
             let response = match request.method.as_str() {
                 "initialize" => initialize(&state, request.params.unwrap_or_else(|| json!({}))),
-                "server/discover" if *modern => Ok(discover(&state)),
+                "server/discover" if *modern => Ok(state
+                    .mcp_discovery_cache
+                    .get_or_init(|| discover(&state))
+                    .clone()),
                 "tools/list" => {
-                    let mut result = json!({ "tools": tools::list_tools(
-                        state.config.server.oauth_enabled
-                            .then_some(state.config.server.oauth_scopes.as_slice()),
-                        &mcp_client::enabled_servers(&state.config),
-                    ) });
+                    let tools = state.mcp_tool_catalog_cache.get_or_init(|| {
+                        tools::list_tools(
+                            state
+                                .config
+                                .server
+                                .oauth_enabled
+                                .then_some(state.config.server.oauth_scopes.as_slice()),
+                            &mcp_client::enabled_servers(&state.config),
+                        )
+                    });
+                    let mut result = json!({ "tools": tools });
                     if *modern {
                         result["resultType"] = json!("complete");
-                        result["ttlMs"] = json!(0);
+                        result["ttlMs"] = json!(60_000);
                         result["cacheScope"] = json!("private");
                     }
                     Ok(result)
@@ -420,7 +429,9 @@ fn discover(state: &AppState) -> Value {
             }
         },
         "instructions": mcp_client::discovery_instructions(&mcp_client::enabled_servers(&state.config)),
-        "ttlMs": 0,
+        // Server capabilities/instructions are stable until this process restarts.
+        // A client may cache them; the server must still handle every request itself.
+        "ttlMs": 300_000,
         "cacheScope": "private",
     })
 }
@@ -591,6 +602,7 @@ mod tests {
         assert_eq!(discovery["result"]["resultType"], "complete");
         assert_eq!(discovery["result"]["supportedVersions"][0], MODERN_PROTOCOL);
         assert_eq!(discovery["result"]["cacheScope"], "private");
+        assert_eq!(discovery["result"]["ttlMs"], 300_000);
         assert_eq!(
             discovery["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]["name"],
             state.config.server.name
@@ -600,7 +612,7 @@ mod tests {
         let listed = send(modern_request("tools/list", 2, json!({})));
         assert_eq!(listed["result"]["resultType"], "complete");
         assert!(listed["result"]["tools"].as_array().unwrap().len() >= 20);
-        assert_eq!(listed["result"]["ttlMs"], 0);
+        assert_eq!(listed["result"]["ttlMs"], 60_000);
         assert_eq!(listed["result"]["cacheScope"], "private");
 
         let call = send(modern_request(
@@ -622,6 +634,36 @@ mod tests {
             "params":{"protocolVersion":"2025-06-18"}}));
         assert_eq!(legacy["result"]["protocolVersion"], LEGACY_PROTOCOL);
         assert!(legacy["result"].get("resultType").is_none());
+    }
+
+    #[test]
+    fn stateless_catalog_cache_survives_distinct_caller_keys() {
+        let state = test_state();
+        assert!(state.mcp_discovery_cache.get().is_none());
+        assert!(state.mcp_tool_catalog_cache.get().is_none());
+        for caller in ["bearer:first", "bearer:second"] {
+            for (id, method) in [(101, "server/discover"), (102, "tools/list")] {
+                let response = handle_json_value_for_caller(
+                    Arc::clone(&state),
+                    modern_request(method, id, json!({})),
+                    caller,
+                )
+                .unwrap()
+                .unwrap();
+                assert_eq!(response["result"]["resultType"], "complete");
+            }
+        }
+        assert_eq!(state.mcp_discovery_cache.get().unwrap()["ttlMs"], 300_000);
+        assert_eq!(
+            state
+                .mcp_tool_catalog_cache
+                .get()
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            24
+        );
     }
 
     #[test]

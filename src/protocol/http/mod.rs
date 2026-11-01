@@ -103,8 +103,10 @@ fn handle_request(state: Arc<AppState>, mut request: Request) -> Result<()> {
             // Modern requests have no protocol session. Stable application ownership
             // (e.g. jobs and terminals) is derived from the authenticated grant.
             let incoming_session = (!modern).then(|| auth::mcp_session_id(&request)).flatten();
+            let grant_key = auth::job_owner_key(&state, &request);
             let fallback_caller_key = if modern {
-                auth::credential_caller_key(&request)
+                // Same principal across access-token refresh and per-tool transports.
+                grant_key.clone()
             } else {
                 auth::caller_key(&request)
             };
@@ -116,7 +118,7 @@ fn handle_request(state: Arc<AppState>, mut request: Request) -> Result<()> {
                 .map(|session| format!("session:{session}"))
                 .unwrap_or(fallback_caller_key);
             let mut caller = Caller::from_key(&caller_key, "http");
-            caller.job_owner_key = auth::job_owner_key(&state, &request);
+            caller.job_owner_key = grant_key;
             caller.user_agent = user_agent;
             caller.oauth_client_id = oauth_client_id;
             caller.oauth_client_name = oauth_client_name;

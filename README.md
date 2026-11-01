@@ -34,6 +34,12 @@ legacy initialization exchange.
 Run `cargo build --locked && python3 tests/mcp_http_smoke.py` to check both
 protocol eras on an isolated localhost HTTP instance.
 
+Modern discovery advertises a five-minute private cache hint; the tool
+catalog advertises a one-minute private cache hint. Static response bodies are
+also memoized per server process, so a short-lived client does not force another
+schema construction. The client decides whether to reuse connections or honor
+cache hints; the server cannot force it.
+
 ## Highlights
 
 - One interface for local and SSH targets: 24 tools

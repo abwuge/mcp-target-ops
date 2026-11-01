@@ -13,9 +13,10 @@ use crate::{
     transport::ssh::SshSessionRegistry,
 };
 use serde::Serialize;
+use serde_json::Value;
 use std::{
     str::FromStr,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
     time::SystemTime,
 };
 
@@ -30,6 +31,10 @@ pub struct AppState {
     pub backups: Arc<FileBackupStore>,
     pub activity: Option<ActivityStore>,
     pub oauth: Mutex<OAuthState>,
+    // Tool descriptors and discovery instructions are fixed by the loaded config.
+    // Keep them across transient HTTP client connections, not within a MCP session.
+    pub(crate) mcp_discovery_cache: OnceLock<Value>,
+    pub(crate) mcp_tool_catalog_cache: OnceLock<Value>,
     started_at: SystemTime,
 }
 
@@ -92,6 +97,8 @@ impl AppState {
             oauth: Mutex::new(OAuthState::load(config.server.oauth_state_file.clone())?),
             config,
             active_target: Mutex::new(None),
+            mcp_discovery_cache: OnceLock::new(),
+            mcp_tool_catalog_cache: OnceLock::new(),
             started_at: SystemTime::now(),
         })
     }

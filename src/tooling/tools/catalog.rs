@@ -38,7 +38,7 @@ pub fn list_tools(
         tool("server_info", "Return server configuration summary, active target state, and enabled/disabled downstream MCP service names; discover their tools with mcp_tools_list(server).", object_schema(vec![])),
         tool("target_list", "List configured local and SSH targets, including policy summaries and active marker.", object_schema(vec![])),
         tool("target_current", "Return the currently selected active target, if any.", object_schema(vec![])),
-        tool("target_select", "Select a session-scoped active target. Later calls may omit target and use this sticky target.", object_schema(vec![required_string("target", "Target id: local or ssh:<profile>")])),
+        tool("target_select", "Select a process-scoped active target. Later calls may omit target; use explicit targets when multiple clients share this server.", object_schema(vec![required_string("target", "Target id: local or ssh:<profile>")])),
         tool("target_connect", "Connect or warm an SSH target persistent worker.", object_schema(vec![required_string("target", "Target id: local or ssh:<profile>")])),
         tool("target_disconnect", "Disconnect an SSH target persistent worker, or no-op for local targets.", object_schema(vec![required_string("target", "Target id: local or ssh:<profile>")])),
         tool("mcp_server_list", &format!("List configured downstream MCP servers, including disabled entries. Enabled: {server_inventory}."), object_schema(vec![])),
