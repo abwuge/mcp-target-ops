@@ -16,9 +16,22 @@ SSH 主机上执行命令、管理文件、持续读取后台任务输出，以�
 > SSH 使用低权限账户；严格限制 `allowed_roots`；写操作要求显式目标；对外提供
 > HTTP 服务时必须同时使用 HTTPS 与身份验证。
 
+## MCP 协议
+
+Target Ops 的 stdio 和 Streamable HTTP 均支持 **MCP 2026-07-28**。
+新版客户端可以直接调用 `server/discover`、`tools/list` 和 `tools/call`，
+无需 `initialize` 握手或协议会话。每次请求在 `params._meta` 中携带版本及
+客户端能力；HTTP 请求还需传入相符的 `MCP-Protocol-Version`、`Mcp-Method`
+及调用工具时的 `Mcp-Name`。新版响应包含 `resultType: "complete"`；
+discovery 和工具列表提供缓存提示。后台任务与终端继续使用显式 ID，
+不依赖协议会话。尚在使用 MCP 2025-06-18 的客户端仍能通过旧版握手连接。
+
+可运行 `cargo build --locked && python3 tests/mcp_http_smoke.py`
+对独立的本地 HTTP 实例做端到端验证。
+
 ## 核心能力
 
-- 本机与 SSH 目标共用一套包含 38 个工具的接口
+- 本机与 SSH 目标共用一套包含 24 个工具的接口
 - 普通远程命令与文件操作复用持久 OpenSSH worker
 - 支持前台命令，以及可取消、可增量读取输出的后台任务
 - 支持持久 PTY 终端和实时窗口尺寸调整

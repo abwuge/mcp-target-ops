@@ -18,9 +18,25 @@ ChatGPT. HTTP mode also includes OAuth and ChatGPT file import/export metadata.
 > `allowed_roots`, require explicit targets for writes, and never expose HTTP
 > mode without authentication and HTTPS.
 
+## MCP protocol
+
+Target Ops supports **MCP 2026-07-28** over both stdio and Streamable HTTP.
+Modern clients may call `server/discover`, `tools/list`, or `tools/call`
+directly: no `initialize` handshake or protocol session is required.
+Modern requests carry protocol version and client capabilities in `params._meta`;
+HTTP callers must also provide matching `MCP-Protocol-Version`,
+`Mcp-Method`, and (for `tools/call`) `Mcp-Name` headers.
+Modern responses include `resultType: "complete"`, with cache hints for
+discovery and tool listings. Durable jobs and terminals use explicit IDs rather
+than protocol sessions. Existing MCP 2025-06-18 clients can still use the
+legacy initialization exchange.
+
+Run `cargo build --locked && python3 tests/mcp_http_smoke.py` to check both
+protocol eras on an isolated localhost HTTP instance.
+
 ## Highlights
 
-- One interface for local and SSH targets: 38 tools
+- One interface for local and SSH targets: 24 tools
 - Persistent OpenSSH workers for remote file operations
 - Foreground commands plus cancellable background jobs with live incremental output
 - Persistent PTY terminals with live resize support

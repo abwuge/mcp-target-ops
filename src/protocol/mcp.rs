@@ -15,6 +15,10 @@ use std::{
     time::{Instant, UNIX_EPOCH},
 };
 
+pub(crate) const MODERN_PROTOCOL: &str = "2026-07-28";
+const LEGACY_PROTOCOL: &str = "2025-06-18";
+const SUPPORTED_PROTOCOLS: [&str; 2] = [MODERN_PROTOCOL, LEGACY_PROTOCOL];
+
 #[derive(Debug, Deserialize)]
 struct RpcRequest {
     #[serde(default, rename = "jsonrpc")]
@@ -36,10 +40,12 @@ struct RpcResponse {
     error: Option<RpcError>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 struct RpcError {
     code: i64,
     message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<Value>,
 }
 
 pub fn serve_stdio(state: Arc<AppState>) -> Result<()> {
@@ -166,6 +172,7 @@ fn parse_error(message: String) -> RpcResponse {
         error: Some(RpcError {
             code: -32700,
             message,
+            data: None,
         }),
     }
 }
@@ -181,17 +188,25 @@ fn handle_request(
     let started_ms = activity::now_ms();
     let start = Instant::now();
     let mut observed_caller = caller.clone();
-    if request.method == "initialize" {
-        let info = request.params.as_ref().and_then(|p| p.get("clientInfo"));
-        observed_caller.client_name = info
-            .and_then(|v| v.get("name"))
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        observed_caller.client_version = info
-            .and_then(|v| v.get("version"))
-            .and_then(Value::as_str)
-            .map(str::to_string);
-    }
+    let info = if request.method == "initialize" {
+        request.params.as_ref().and_then(|p| p.get("clientInfo"))
+    } else {
+        request
+            .params
+            .as_ref()
+            .and_then(|p| p.get("_meta"))
+            .and_then(|meta| meta.get("io.modelcontextprotocol/clientInfo"))
+    };
+    observed_caller.client_name = info
+        .and_then(|v| v.get("name"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or(observed_caller.client_name);
+    observed_caller.client_version = info
+        .and_then(|v| v.get("version"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or(observed_caller.client_version);
     let tool_params = (request.method == "tools/call")
         .then_some(request.params.as_ref())
         .flatten();
@@ -224,24 +239,52 @@ fn handle_request(
 
     let id = request.id.clone();
     let mut audit_result = None;
-    let result = match request.method.as_str() {
-        "initialize" => initialize(&state, request.params.unwrap_or_else(|| json!({}))),
-        "tools/list" => Ok(json!({ "tools": tools::list_tools(
-            state.config.server.oauth_enabled
-                .then_some(state.config.server.oauth_scopes.as_slice()),
-            &mcp_client::enabled_servers(&state.config),
-        ) })),
-        "tools/call" => tools_call(
-            Arc::clone(&state),
-            request.params.unwrap_or_else(|| json!({})),
-            &caller.job_owner_key,
-        )
-        .map(|output| {
-            audit_result = Some(output.audit);
-            output.response
-        }),
-        "ping" => Ok(json!({})),
-        other => Err(Error::Tool(format!("unsupported method: {other}"))),
+    let protocol = check_protocol(&request);
+    let result = match protocol.as_ref() {
+        Err(error) => Err(error.clone()),
+        Ok(modern) => {
+            let response = match request.method.as_str() {
+                "initialize" => initialize(&state, request.params.unwrap_or_else(|| json!({}))),
+                "server/discover" if *modern => Ok(discover(&state)),
+                "tools/list" => {
+                    let mut result = json!({ "tools": tools::list_tools(
+                        state.config.server.oauth_enabled
+                            .then_some(state.config.server.oauth_scopes.as_slice()),
+                        &mcp_client::enabled_servers(&state.config),
+                    ) });
+                    if *modern {
+                        result["resultType"] = json!("complete");
+                        result["ttlMs"] = json!(0);
+                        result["cacheScope"] = json!("private");
+                    }
+                    Ok(result)
+                }
+                "tools/call" => tools_call(
+                    Arc::clone(&state),
+                    request.params.unwrap_or_else(|| json!({})),
+                    &caller.job_owner_key,
+                )
+                .map(|output| {
+                    audit_result = Some(output.audit);
+                    let mut result = output.response;
+                    if *modern {
+                        result["resultType"] = json!("complete");
+                    }
+                    result
+                }),
+                "ping" if !*modern => Ok(json!({})),
+                other => Err(Error::Tool(format!("unsupported method: {other}"))),
+            };
+            response.map_err(|error| RpcError {
+                code: if matches!(&error, Error::Tool(message) if message.starts_with("unsupported method:")) {
+                    -32601
+                } else {
+                    error.json_rpc_code()
+                },
+                message: error.to_string(),
+                data: None,
+            })
+        }
     };
     let response = match result {
         Ok(value) => RpcResponse {
@@ -250,14 +293,11 @@ fn handle_request(
             result: Some(value),
             error: None,
         },
-        Err(err) => RpcResponse {
+        Err(error) => RpcResponse {
             jsonrpc: "2.0",
             id,
             result: None,
-            error: Some(RpcError {
-                code: err.json_rpc_code(),
-                message: err.to_string(),
-            }),
+            error: Some(error),
         },
     };
     if let Some(store) = &state.activity {
@@ -300,14 +340,103 @@ fn handle_request(
     Some(response)
 }
 
+/// Modern MCP requests are self-describing and do not establish protocol sessions.
+/// Legacy initialize remains available for the clients still using it.
+fn check_protocol(request: &RpcRequest) -> std::result::Result<bool, RpcError> {
+    if request.method == "initialize" {
+        let requested = request
+            .params
+            .as_ref()
+            .and_then(|p| p.get("protocolVersion"))
+            .and_then(Value::as_str)
+            .unwrap_or(LEGACY_PROTOCOL);
+        if requested != LEGACY_PROTOCOL {
+            return Err(RpcError {
+                code: -32022,
+                message: "Unsupported initialize protocol version".to_string(),
+                data: Some(json!({"supported": SUPPORTED_PROTOCOLS, "requested": requested})),
+            });
+        }
+        return Ok(false);
+    }
+    let meta = request.params.as_ref().and_then(|p| p.get("_meta"));
+    let modern = request.method == "server/discover"
+        || meta.and_then(Value::as_object).is_some_and(|fields| {
+            fields
+                .keys()
+                .any(|name| name.starts_with("io.modelcontextprotocol/"))
+        });
+    if !modern {
+        return Ok(false);
+    }
+    let version = meta
+        .and_then(|meta| meta.get("io.modelcontextprotocol/protocolVersion"))
+        .and_then(Value::as_str);
+    let Some(version) = version else {
+        return Err(rpc_error(-32602, "missing params._meta protocolVersion"));
+    };
+    if version != MODERN_PROTOCOL {
+        return Err(RpcError {
+            code: -32022,
+            message: "Unsupported protocol version".to_string(),
+            data: Some(json!({ "supported": SUPPORTED_PROTOCOLS, "requested": version })),
+        });
+    }
+    if request._jsonrpc.as_deref() != Some("2.0") || request.id.as_ref().is_none_or(Value::is_null)
+    {
+        return Err(rpc_error(-32600, "invalid JSON-RPC request"));
+    }
+    if !meta
+        .and_then(|meta| meta.get("io.modelcontextprotocol/clientCapabilities"))
+        .is_some_and(Value::is_object)
+    {
+        return Err(rpc_error(
+            -32602,
+            "missing or invalid params._meta clientCapabilities",
+        ));
+    }
+    Ok(true)
+}
+
+fn rpc_error(code: i64, message: &str) -> RpcError {
+    RpcError {
+        code,
+        message: message.to_string(),
+        data: None,
+    }
+}
+
+fn discover(state: &AppState) -> Value {
+    json!({
+        "resultType": "complete",
+        "supportedVersions": SUPPORTED_PROTOCOLS,
+        "capabilities": {
+            "tools": { "listChanged": false },
+        },
+        "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+                "name": state.config.server.name.clone(),
+                "version": state.config.server.version.clone(),
+            }
+        },
+        "instructions": mcp_client::discovery_instructions(&mcp_client::enabled_servers(&state.config)),
+        "ttlMs": 0,
+        "cacheScope": "private",
+    })
+}
+
 fn initialize(state: &AppState, params: Value) -> Result<Value> {
     let requested_protocol = params
         .get("protocolVersion")
-        .and_then(|v| v.as_str())
-        .unwrap_or("2025-06-18");
-
+        .and_then(Value::as_str)
+        .unwrap_or(LEGACY_PROTOCOL);
+    if requested_protocol != LEGACY_PROTOCOL {
+        return Err(Error::Tool(format!(
+            "unsupported initialize protocol version {requested_protocol}; supported: {LEGACY_PROTOCOL}"
+        )));
+    }
     Ok(json!({
-        "protocolVersion": requested_protocol,
+        "protocolVersion": LEGACY_PROTOCOL,
         "capabilities": {
             "tools": { "listChanged": false }
         },
@@ -437,6 +566,105 @@ mod tests {
         config.server.runtime_dir = path.join("runtime");
         config.activity.database_path = path.join("activity/calls.sqlite3");
         Arc::new(AppState::new(config).unwrap())
+    }
+
+    fn modern_request(method: &str, id: u64, params: Value) -> Value {
+        let mut params = params;
+        params["_meta"] = json!({
+            "io.modelcontextprotocol/protocolVersion": MODERN_PROTOCOL,
+            "io.modelcontextprotocol/clientCapabilities": {},
+            "io.modelcontextprotocol/clientInfo": {"name":"test-modern-client", "version":"1"},
+        });
+        json!({"jsonrpc":"2.0", "id":id, "method":method, "params":params})
+    }
+
+    #[test]
+    fn modern_protocol_supports_stateless_discovery_catalog_and_calls() {
+        let state = test_state();
+        let send = |message| {
+            handle_json_value_for_caller(Arc::clone(&state), message, "bearer:one")
+                .unwrap()
+                .unwrap()
+        };
+        // Every operation can be the first request: no initialize or session is needed.
+        let discovery = send(modern_request("server/discover", 1, json!({})));
+        assert_eq!(discovery["result"]["resultType"], "complete");
+        assert_eq!(discovery["result"]["supportedVersions"][0], MODERN_PROTOCOL);
+        assert_eq!(discovery["result"]["cacheScope"], "private");
+        assert_eq!(
+            discovery["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]["name"],
+            state.config.server.name
+        );
+        assert!(discovery["result"]["instructions"].is_string());
+
+        let listed = send(modern_request("tools/list", 2, json!({})));
+        assert_eq!(listed["result"]["resultType"], "complete");
+        assert!(listed["result"]["tools"].as_array().unwrap().len() >= 20);
+        assert_eq!(listed["result"]["ttlMs"], 0);
+        assert_eq!(listed["result"]["cacheScope"], "private");
+
+        let call = send(modern_request(
+            "tools/call",
+            3,
+            json!({
+                "name":"target_list", "arguments":{}
+            }),
+        ));
+        assert_eq!(call["result"]["resultType"], "complete");
+        assert_eq!(call["result"]["isError"], false);
+        assert!(call["result"]["structuredContent"]["targets"].is_array());
+
+        let unknown = send(modern_request("does/not-exist", 4, json!({})));
+        assert_eq!(unknown["error"]["code"], -32601);
+
+        // Existing legacy clients remain usable while they migrate.
+        let legacy = send(json!({"jsonrpc":"2.0","id":5,"method":"initialize",
+            "params":{"protocolVersion":"2025-06-18"}}));
+        assert_eq!(legacy["result"]["protocolVersion"], LEGACY_PROTOCOL);
+        assert!(legacy["result"].get("resultType").is_none());
+    }
+
+    #[test]
+    fn modern_protocol_rejects_unsupported_versions_and_missing_capabilities() {
+        let state = test_state();
+        let send = |message| {
+            handle_json_value_for_caller(Arc::clone(&state), message, "bearer:two")
+                .unwrap()
+                .unwrap()
+        };
+        let mut unsupported = modern_request(
+            "tools/call",
+            1,
+            json!({
+                "name":"target_list","arguments":{}
+            }),
+        );
+        unsupported["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"] =
+            json!("2099-01-01");
+        let rejected = send(unsupported);
+        assert_eq!(rejected["error"]["code"], -32022);
+        assert_eq!(rejected["error"]["data"]["requested"], "2099-01-01");
+        assert!(rejected["error"]["data"]["supported"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(MODERN_PROTOCOL)));
+
+        let mut missing = modern_request(
+            "tools/call",
+            2,
+            json!({
+                "name":"target_list","arguments":{}
+            }),
+        );
+        missing["params"]["_meta"]
+            .as_object_mut()
+            .unwrap()
+            .remove("io.modelcontextprotocol/clientCapabilities");
+        assert_eq!(send(missing)["error"]["code"], -32602);
+
+        let invalid_initialize = send(json!({"jsonrpc":"2.0","id":3,"method":"initialize",
+            "params":{"protocolVersion":"2026-07-28"}}));
+        assert_eq!(invalid_initialize["error"]["code"], -32022);
     }
 
     fn call_tool_for(

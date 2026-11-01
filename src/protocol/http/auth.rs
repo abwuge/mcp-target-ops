@@ -62,8 +62,12 @@ pub(super) fn caller_key(request: &Request) -> String {
     if let Some(session_id) = mcp_session_id(request) {
         return format!("session:{session_id}");
     }
-    // Current OAuth clients may omit the optional MCP session ID; group their
-    // requests by the credential fingerprint without exposing the token.
+    credential_caller_key(request)
+}
+
+/// Modern MCP ignores Mcp-Session-Id completely; do not let an old header
+/// silently split the caller's activity or application-owned handles.
+pub(super) fn credential_caller_key(request: &Request) -> String {
     if let Some(token) = bearer_token(request) {
         return format!("bearer:{}", token_fingerprint(token));
     }

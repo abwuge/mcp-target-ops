@@ -17,6 +17,7 @@ use crate::{
     },
     protocol::mcp,
 };
+use base64::Engine as _;
 use rand::{rngs::OsRng, RngCore};
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, sync::Arc, thread};
@@ -73,15 +74,42 @@ fn handle_request(state: Arc<AppState>, mut request: Request) -> Result<()> {
 
     match (method, path.as_str()) {
         (Method::Post, MCP_PATH) => {
-            let incoming_session = auth::mcp_session_id(&request);
-            let fallback_caller_key = auth::caller_key(&request);
             let user_agent = header_value(&request, "user-agent").map(str::to_string);
             let (oauth_client_id, oauth_client_name) =
                 auth::oauth_client_metadata(&state, &request);
             let mut body = Vec::new();
             request.as_reader().read_to_end(&mut body)?;
-            let new_session =
-                (incoming_session.is_none() && is_initialize_body(&body)).then(new_mcp_session_id);
+            let parsed = serde_json::from_slice::<Value>(&body).ok();
+            let modern = parsed.as_ref().is_some_and(|value| {
+                value.get("method").and_then(Value::as_str) == Some("server/discover")
+                    || value
+                        .pointer("/params/_meta/io.modelcontextprotocol~1protocolVersion")
+                        .is_some()
+            }) || header_value(&request, "MCP-Protocol-Version")
+                == Some(mcp::MODERN_PROTOCOL);
+
+            if modern {
+                let header_error = validate_modern_headers(
+                    parsed.as_ref(),
+                    header_value(&request, "MCP-Protocol-Version"),
+                    header_value(&request, "Mcp-Method"),
+                    header_value(&request, "Mcp-Name"),
+                );
+                if let Err(message) = header_error {
+                    return respond_mcp_error(request, parsed.as_ref(), 400, -32020, &message);
+                }
+            }
+
+            // Modern requests have no protocol session. Stable application ownership
+            // (e.g. jobs and terminals) is derived from the authenticated grant.
+            let incoming_session = (!modern).then(|| auth::mcp_session_id(&request)).flatten();
+            let fallback_caller_key = if modern {
+                auth::credential_caller_key(&request)
+            } else {
+                auth::caller_key(&request)
+            };
+            let new_session = (!modern && incoming_session.is_none() && is_initialize_body(&body))
+                .then(new_mcp_session_id);
             let caller_key = new_session
                 .as_ref()
                 .or(incoming_session.as_ref())
@@ -94,15 +122,25 @@ fn handle_request(state: Arc<AppState>, mut request: Request) -> Result<()> {
             caller.oauth_client_name = oauth_client_name;
             match mcp::handle_json_bytes_for_context(state, &body, &caller)? {
                 Some(response) => {
+                    let status = if modern {
+                        let value: Value = serde_json::from_slice(&response)?;
+                        match value.pointer("/error/code").and_then(Value::as_i64) {
+                            Some(-32601) => 404,
+                            Some(-32022 | -32020 | -32602 | -32600 | -32700) => 400,
+                            _ => 200,
+                        }
+                    } else {
+                        200
+                    };
                     if let Some(session_id) = new_session.as_deref() {
                         respond_bytes_with_headers(
                             request,
-                            200,
+                            status,
                             response,
                             vec![("Mcp-Session-Id", session_id)],
                         )
                     } else {
-                        respond_bytes(request, 200, response)
+                        respond_bytes(request, status, response)
                     }
                 }
                 None => respond_empty(request, 202),
@@ -138,6 +176,90 @@ fn handle_request(state: Arc<AppState>, mut request: Request) -> Result<()> {
             }),
         ),
     }
+}
+
+/// The HTTP envelope is routing metadata. Verify it against the JSON-RPC body
+/// before executing anything, so a proxy and Target Ops cannot disagree.
+fn validate_modern_headers(
+    value: Option<&Value>,
+    protocol: Option<&str>,
+    method: Option<&str>,
+    name: Option<&str>,
+) -> std::result::Result<(), String> {
+    let value = value.ok_or("invalid modern JSON-RPC body")?;
+    if !value.is_object() {
+        return Err("modern MCP requires one JSON-RPC request per POST".into());
+    }
+    let body_version = value
+        .pointer("/params/_meta/io.modelcontextprotocol~1protocolVersion")
+        .and_then(Value::as_str)
+        .ok_or("missing params._meta protocolVersion")?;
+    if protocol != Some(body_version) {
+        return Err("MCP-Protocol-Version header does not match params._meta".into());
+    }
+    let body_method = value
+        .get("method")
+        .and_then(Value::as_str)
+        .ok_or("missing JSON-RPC method")?;
+    if method != Some(body_method) {
+        return Err("Mcp-Method header does not match method".into());
+    }
+    if body_method == "tools/call"
+        || body_method == "prompts/get"
+        || body_method == "resources/read"
+    {
+        let body_name = value
+            .pointer(if body_method == "resources/read" {
+                "/params/uri"
+            } else {
+                "/params/name"
+            })
+            .and_then(Value::as_str)
+            .ok_or("missing MCP name in request parameters")?;
+        let header_name = name
+            .ok_or_else(|| "missing Mcp-Name header".to_string())
+            .and_then(decode_header_value)?;
+        if header_name != body_name {
+            return Err("Mcp-Name header does not match request parameters".into());
+        }
+    }
+    Ok(())
+}
+
+fn decode_header_value(value: &str) -> std::result::Result<String, String> {
+    if let Some(encoded) = value
+        .strip_prefix("=?base64?")
+        .and_then(|encoded| encoded.strip_suffix("?="))
+    {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .map_err(|_| "invalid Base64 Mcp-Name header")?;
+        String::from_utf8(bytes).map_err(|_| "invalid UTF-8 Mcp-Name header".into())
+    } else {
+        Ok(value.to_owned())
+    }
+}
+
+fn respond_mcp_error(
+    request: Request,
+    body: Option<&Value>,
+    status: u16,
+    code: i64,
+    message: &str,
+) -> Result<()> {
+    let id = body
+        .and_then(|body| body.get("id"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    respond_bytes(
+        request,
+        status,
+        serde_json::to_vec(&json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {"code": code, "message": message},
+        }))?,
+    )
 }
 
 fn is_initialize_body(body: &[u8]) -> bool {
@@ -303,6 +425,31 @@ mod tests {
         ));
         assert!(!is_public_endpoint(&Method::Get, "/openapi.json"));
         assert!(!is_public_endpoint(&Method::Get, "/actions/v1/targets"));
+    }
+
+    #[test]
+    fn modern_http_routing_headers_must_match_request_body() {
+        use super::{decode_header_value, validate_modern_headers};
+        use serde_json::json;
+        let body = json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{
+            "name":"target_list","arguments":{},"_meta":{
+                "io.modelcontextprotocol/protocolVersion":"2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities":{}
+            }
+        }});
+        let check =
+            |protocol, method, name| validate_modern_headers(Some(&body), protocol, method, name);
+        assert!(check(Some("2026-07-28"), Some("tools/call"), Some("target_list")).is_ok());
+        assert!(check(None, Some("tools/call"), Some("target_list")).is_err());
+        assert!(check(Some("2025-06-18"), Some("tools/call"), Some("target_list")).is_err());
+        assert!(check(Some("2026-07-28"), Some("tools/list"), Some("target_list")).is_err());
+        assert!(check(Some("2026-07-28"), Some("tools/call"), None).is_err());
+        assert!(check(Some("2026-07-28"), Some("tools/call"), Some("other")).is_err());
+
+        let encoded = "=?base64?dGFyZ2V0X2xpc3Q=?=";
+        assert_eq!(decode_header_value(encoded).unwrap(), "target_list");
+        assert!(check(Some("2026-07-28"), Some("tools/call"), Some(encoded)).is_ok());
+        assert!(decode_header_value("=?base64?not-base64?=").is_err());
     }
 
     #[test]
