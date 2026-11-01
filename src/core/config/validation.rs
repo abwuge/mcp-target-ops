@@ -296,6 +296,18 @@ fn validate_mcp_servers(config: &Config) -> Result<()> {
             ));
         }
 
+        if let Some(description) = &mcp.description {
+            if description.trim().is_empty()
+                || description.trim() != description
+                || description.chars().any(char::is_control)
+                || description.chars().count() > 200
+            {
+                return Err(Error::Config(format!(
+                    "mcp_servers.{name}.description must be a non-empty single line of at most 200 characters without surrounding whitespace"
+                )));
+            }
+        }
+
         let source_count = usize::from(mcp.config_file.is_some())
             + usize::from(mcp.url.is_some())
             + usize::from(mcp.url_secret.is_some());

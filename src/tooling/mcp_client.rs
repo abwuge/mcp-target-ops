@@ -1,5 +1,6 @@
 use crate::{
     core::{
+        config::Config,
         error::{Error, Result},
         secret::SecretRef,
         state::AppState,
@@ -25,6 +26,7 @@ const SESSION_HEADER: &str = "mcp-session-id";
 #[derive(Debug, Clone, Serialize)]
 pub struct McpServerSummary {
     pub name: String,
+    pub description: Option<String>,
     pub enabled: bool,
     pub config_source: String,
     pub secret_target: Option<String>,
@@ -41,6 +43,7 @@ pub fn list_servers(state: &AppState) -> Vec<McpServerSummary> {
         .iter()
         .map(|(name, config)| McpServerSummary {
             name: name.clone(),
+            description: config.description.clone(),
             enabled: config.enabled,
             config_source: if config.config_file.is_some() {
                 "file".to_string()
@@ -61,6 +64,45 @@ pub fn list_servers(state: &AppState) -> Vec<McpServerSummary> {
             max_response_bytes: config.max_response_bytes,
         })
         .collect()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdvertisedMcpServer {
+    pub name: String,
+    pub description: Option<String>,
+}
+
+pub fn enabled_servers(config: &Config) -> Vec<AdvertisedMcpServer> {
+    config
+        .mcp_servers
+        .iter()
+        .filter(|(_, server)| server.enabled)
+        .map(|(name, server)| AdvertisedMcpServer {
+            name: name.clone(),
+            description: server.description.clone(),
+        })
+        .collect()
+}
+
+pub fn describe_enabled_servers(servers: &[AdvertisedMcpServer]) -> String {
+    if servers.is_empty() {
+        return "none".to_string();
+    }
+    servers
+        .iter()
+        .map(|server| match &server.description {
+            Some(description) => format!("{} ({description})", server.name),
+            None => server.name.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+pub fn discovery_instructions(servers: &[AdvertisedMcpServer]) -> String {
+    format!(
+        "Target Ops enabled downstream MCP servers: {}. These services are accessed through the Target Ops gateway, not exposed as separate top-level tools. Call mcp_tools_list(server) to discover exact downstream tool names and input schemas, then mcp_tool_call(server, tool, arguments) to invoke them. mcp_server_list also shows disabled configured services; disabled services cannot be invoked.",
+        describe_enabled_servers(servers)
+    )
 }
 
 pub fn tools_list(state: &AppState, server: &str) -> Result<Value> {
@@ -442,6 +484,27 @@ fn compact_json(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovery_stays_local_and_filters_disabled_servers() {
+        let mut config = Config::default();
+        config.mcp_servers.insert(
+            "memory".into(),
+            toml::from_str("enabled = true\ndescription = 'Private memory'\nurl = 'https://hidden.invalid/mcp'").unwrap(),
+        );
+        config.mcp_servers.insert(
+            "unlisted_service".into(),
+            toml::from_str("enabled = false\nurl = 'https://hidden2.invalid/mcp'").unwrap(),
+        );
+        let enabled = enabled_servers(&config);
+        assert_eq!(enabled.len(), 1);
+        assert_eq!(enabled[0].name, "memory");
+        let instructions = discovery_instructions(&enabled);
+        assert!(instructions.contains("memory (Private memory)"));
+        assert!(!instructions.contains("unlisted_service"));
+        assert!(!instructions.contains("hidden.invalid"));
+        assert!(discovery_instructions(&[]).contains("servers: none"));
+    }
 
     #[test]
     fn parses_sse_json_rpc_response() {

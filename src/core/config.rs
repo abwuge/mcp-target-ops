@@ -229,6 +229,9 @@ pub struct McpServerConfig {
     pub enabled: bool,
 
     #[serde(default)]
+    pub description: Option<String>,
+
+    #[serde(default)]
     pub config_file: Option<PathBuf>,
 
     #[serde(default)]
@@ -744,6 +747,31 @@ mod tests {
         assert!(err.to_string().contains(
             "mcp_servers.memory.secret_target refers to unconfigured target ssh:missing"
         ));
+    }
+
+    #[test]
+    fn validates_downstream_server_descriptions() {
+        let mut config = parse_config(
+            r#"
+            [mcp_servers.memory]
+            url = "https://memory.example.com/mcp"
+            description = "Personal memory search"
+            "#,
+        );
+        config.validate().unwrap();
+        for invalid in [
+            " ".to_string(),
+            " leading".to_string(),
+            "two\nlines".to_string(),
+            "x".repeat(201),
+        ] {
+            config.mcp_servers.get_mut("memory").unwrap().description = Some(invalid);
+            assert!(config
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("description"));
+        }
     }
 
     #[test]

@@ -346,6 +346,7 @@ fn mcp_server_summary_schema() -> Value {
         "type": "object",
         "properties": {
             "name": { "type": "string" },
+            "description": nullable_string_schema(),
             "enabled": { "type": "boolean" },
             "config_source": { "type": "string", "enum": ["file", "secret_ref", "inline"] },
             "secret_target": nullable_string_schema(),
@@ -354,7 +355,7 @@ fn mcp_server_summary_schema() -> Value {
             "timeout_ms": { "type": "integer", "minimum": 1 },
             "max_response_bytes": { "type": "integer", "minimum": 1 }
         },
-        "required": ["name", "enabled", "config_source", "secret_target", "static_header_names", "secret_header_names", "timeout_ms", "max_response_bytes"],
+        "required": ["name", "description", "enabled", "config_source", "secret_target", "static_header_names", "secret_header_names", "timeout_ms", "max_response_bytes"],
         "additionalProperties": false
     })
 }

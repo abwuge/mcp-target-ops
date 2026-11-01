@@ -1,7 +1,23 @@
 use super::schema::output_schema;
+use crate::tooling::mcp_client::{self, AdvertisedMcpServer};
 use serde_json::{json, Value};
 
-pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
+pub fn list_tools(
+    oauth_scopes: Option<&[String]>,
+    enabled_mcp_servers: &[AdvertisedMcpServer],
+) -> Value {
+    let server_names: Vec<&str> = enabled_mcp_servers
+        .iter()
+        .map(|server| server.name.as_str())
+        .collect();
+    let server_inventory = mcp_client::describe_enabled_servers(enabled_mcp_servers);
+    let server_parameter = || {
+        let mut server = required_string("server", "Enabled downstream MCP server name.");
+        if !server_names.is_empty() {
+            server.value["enum"] = json!(server_names);
+        }
+        server
+    };
     let security_schemes = oauth_scopes.map(|scopes| {
         json!([{
             "type": "oauth2",
@@ -25,12 +41,12 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
         tool("target_select", "Select a session-scoped active target. Later calls may omit target and use this sticky target.", object_schema(vec![required_string("target", "Target id: local or ssh:<profile>")])),
         tool("target_connect", "Connect or warm an SSH target persistent worker.", object_schema(vec![required_string("target", "Target id: local or ssh:<profile>")])),
         tool("target_disconnect", "Disconnect an SSH target persistent worker, or no-op for local targets.", object_schema(vec![required_string("target", "Target id: local or ssh:<profile>")])),
-        tool("mcp_server_list", "List downstream MCP servers.", object_schema(vec![])),
-        tool("mcp_tools_list", "Initialize one configured downstream MCP server and return its tools/list result.", object_schema(vec![
-            required_string("server", "Configured downstream MCP server name."),
+        tool("mcp_server_list", &format!("List configured downstream MCP servers, including disabled entries. Enabled: {server_inventory}."), object_schema(vec![])),
+        tool("mcp_tools_list", &format!("Discover tool names and schemas for one enabled downstream MCP server. Enabled: {server_inventory}."), object_schema(vec![
+            server_parameter(),
         ])),
-        tool("mcp_tool_call", "Initialize a configured downstream MCP server and call one of its tools.", object_schema(vec![
-            required_string("server", "Configured downstream MCP server name."),
+        tool("mcp_tool_call", &format!("Invoke a downstream MCP tool after discovering its schema with mcp_tools_list. Enabled servers: {server_inventory}."), object_schema(vec![
+            server_parameter(),
             required_string("tool", "Downstream MCP tool name."),
             optional_value("arguments", "JSON object passed as downstream tool arguments. Defaults to an empty object.", json!({"type":"object","additionalProperties":true})),
         ])),
@@ -642,8 +658,46 @@ mod tests {
     use super::*;
 
     #[test]
+    fn downstream_inventory_is_visible_without_calling_discovery_tools() {
+        let servers = vec![
+            AdvertisedMcpServer {
+                name: "memory".into(),
+                description: Some("Personal memory search".into()),
+            },
+            AdvertisedMcpServer {
+                name: "research".into(),
+                description: None,
+            },
+        ];
+        let tools = list_tools(None, &servers);
+        let tools = tools.as_array().unwrap();
+        assert_eq!(tools.len(), 24);
+        for name in ["mcp_tools_list", "mcp_tool_call"] {
+            let descriptor = tools.iter().find(|tool| tool["name"] == name).unwrap();
+            assert_eq!(
+                descriptor["inputSchema"]["properties"]["server"]["enum"],
+                json!(["memory", "research"]),
+            );
+            assert!(descriptor["description"]
+                .as_str()
+                .unwrap()
+                .contains("memory (Personal memory search), research"));
+        }
+        let empty = list_tools(None, &[]);
+        let empty_tools = empty.as_array().unwrap();
+        let discover = empty_tools
+            .iter()
+            .find(|tool| tool["name"] == "mcp_tools_list")
+            .unwrap();
+        assert!(discover["inputSchema"]["properties"]["server"]
+            .get("enum")
+            .is_none());
+        assert!(discover["description"].as_str().unwrap().contains("none"));
+    }
+
+    #[test]
     fn catalog_contains_only_model_tools_without_app_metadata() {
-        let tools = list_tools(None);
+        let tools = list_tools(None, &[]);
         let tools = tools.as_array().unwrap();
         assert_eq!(tools.len(), 24);
         for tool in tools {
@@ -668,7 +722,7 @@ mod tests {
 
     #[test]
     fn every_tool_declares_an_object_output_schema() {
-        let tools = list_tools(None);
+        let tools = list_tools(None, &[]);
         let tools = tools.as_array().expect("tool list is an array");
 
         for tool in tools {
@@ -682,7 +736,7 @@ mod tests {
 
     #[test]
     fn inventory_tools_keep_invocation_metadata() {
-        let tools = list_tools(None);
+        let tools = list_tools(None, &[]);
         let tools = tools.as_array().unwrap();
 
         for (name, invoking, invoked) in [
@@ -706,7 +760,7 @@ mod tests {
 
     #[test]
     fn file_read_returns_data_without_rendering() {
-        let tools = list_tools(None);
+        let tools = list_tools(None, &[]);
         let file_read = tools
             .as_array()
             .unwrap()
@@ -728,7 +782,7 @@ mod tests {
 
     #[test]
     fn output_schemas_do_not_advertise_echoed_request_payloads() {
-        let descriptors = list_tools(None);
+        let descriptors = list_tools(None, &[]);
         let descriptors = descriptors.as_array().unwrap();
         let schema = |name: &str| -> &Value {
             &descriptors
@@ -761,7 +815,7 @@ mod tests {
 
     #[test]
     fn unified_exec_supports_single_and_batch_commands() {
-        let tools = list_tools(None);
+        let tools = list_tools(None, &[]);
         let tools = tools.as_array().unwrap();
         let exec = tools.iter().find(|t| t["name"] == "exec").unwrap();
         let items = &exec["inputSchema"]["properties"]["commands"]["items"]["oneOf"];
@@ -775,7 +829,7 @@ mod tests {
 
     #[test]
     fn exec_tools_return_data_without_rendering() {
-        let tools = list_tools(None);
+        let tools = list_tools(None, &[]);
         let tools = tools.as_array().unwrap();
 
         for (name, invoking, invoked) in [

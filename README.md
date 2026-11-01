@@ -333,6 +333,7 @@ mode-`0600` file:
 # ~/.config/mcp-target-ops/config.toml
 [mcp_servers.memory]
 enabled = true
+description = "Search personal memories and notes"
 config_file = "/home/me/.config/mcp-target-ops/mcp/memory.toml"
 timeout_ms = 20000
 max_response_bytes = 1048576
@@ -352,9 +353,23 @@ are disabled, so headers are never forwarded to a redirect destination.
 exposed. Inline URLs and file-backed URL/header references remain available for
 advanced deployments; see the example configuration.
 
+At connection time, `initialize.instructions` lists **enabled** downstream MCP
+servers and their optional `description` fields. The schemas of `mcp_tools_list`
+and `mcp_tool_call` also enumerate those enabled server names, so clients that
+do not forward initialization instructions can still show the inventory without
+a tool call. Descriptions are administrator-supplied, single-line summaries (up
+to 200 characters). Discovery does not contact downstream endpoints; full tool
+schemas are fetched only when `mcp_tools_list(server)` is called. Disabled
+servers are not advertised or callable. The top-level tool count stays at 24.
+
+The inventory is derived from the configuration loaded at process startup.
+After adding, disabling, or renaming a server, restart Target Ops and refresh
+the MCP tool list in the client (or reconnect if the client caches metadata).
+No live `tools/list_changed` notification is emitted.
+
 ## Tool catalog
 
-Target Ops publishes 38 tools.
+Target Ops publishes 24 tools.
 
 | Area | Tools |
 | --- | --- |

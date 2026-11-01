@@ -321,6 +321,7 @@ Target Ops 可以初始化和调用预先配置的 Streamable HTTP MCP 服务。
 # ~/.config/mcp-target-ops/config.toml
 [mcp_servers.memory]
 enabled = true
+description = "搜索个人记忆与笔记"
 config_file = "/home/me/.config/mcp-target-ops/mcp/memory.toml"
 timeout_ms = 20000
 max_response_bytes = 1048576
@@ -337,6 +338,18 @@ Authorization = "Bearer replace-me"
 在 Unix 上，若凭据文件可被组或其他用户读取，服务会拒绝使用。网关禁用重定向，
 因此不会把认证头转发到重定向目标。`mcp_server_list` 只返回安全元数据，不暴露
 URL 或秘密值。高级部署仍可使用内联 URL 或文件秘密引用，详见示例配置。
+
+连接时，`initialize.instructions` 会自动列出所有**已启用**的下游 MCP 服务及
+可选的 `description` 用途说明；`mcp_tools_list` 和 `mcp_tool_call` 的 `server`
+参数 Schema 也会提供相同的服务名枚举。因此，即使客户端没有把初始化说明传给
+模型，也能通过工具定义直接得知下游清单，而不必先发起工具调用。用途说明由配置者
+填写，限单行、最多 200 字符。此发现过程不会请求下游网络；只有调用
+`mcp_tools_list(server)` 时才获取具体工具 Schema。禁用的服务不会被公布为可用，
+也不能调用。顶层工具始终为 24 个。
+
+清单来自进程启动时加载的配置。新增、禁用或重命名下游服务后，需要重启
+Target Ops，并在客户端刷新 MCP 工具列表（或重新连接以更新缓存）；当前不会
+发送实时 `tools/list_changed` 通知。
 
 ## 工具列表
 

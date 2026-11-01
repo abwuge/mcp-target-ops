@@ -5,7 +5,7 @@ use crate::{
         error::{Error, Result},
         state::AppState,
     },
-    tooling::tools,
+    tooling::{mcp_client, tools},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -228,7 +228,8 @@ fn handle_request(
         "initialize" => initialize(&state, request.params.unwrap_or_else(|| json!({}))),
         "tools/list" => Ok(json!({ "tools": tools::list_tools(
             state.config.server.oauth_enabled
-                .then_some(state.config.server.oauth_scopes.as_slice())
+                .then_some(state.config.server.oauth_scopes.as_slice()),
+            &mcp_client::enabled_servers(&state.config),
         ) })),
         "tools/call" => tools_call(
             Arc::clone(&state),
@@ -313,7 +314,8 @@ fn initialize(state: &AppState, params: Value) -> Result<Value> {
         "serverInfo": {
             "name": state.config.server.name.clone(),
             "version": state.config.server.version.clone(),
-        }
+        },
+        "instructions": mcp_client::discovery_instructions(&mcp_client::enabled_servers(&state.config)),
     }))
 }
 
@@ -1226,6 +1228,66 @@ mod tests {
     }
 
     #[test]
+    fn initialize_and_tool_schemas_advertise_only_enabled_downstream_servers() {
+        let mut config = test_state().config.clone();
+        config.activity.enabled = false;
+        config.mcp_servers.insert(
+            "nocturne_memory".into(),
+            toml::from_str("enabled = true\ndescription = 'Personal memory search'\nurl = 'https://private.example.invalid/mcp'").unwrap(),
+        );
+        config.mcp_servers.insert(
+            "disabled_search".into(),
+            toml::from_str("enabled = false\ndescription = 'Disabled search'\nurl = 'https://disabled.example.invalid/mcp'").unwrap(),
+        );
+        let state = Arc::new(AppState::new(config).unwrap());
+        let initialized = handle_json_value_for_caller(
+            Arc::clone(&state),
+            json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}),
+            "session:discovery",
+        ).unwrap().unwrap();
+        let instructions = initialized["result"]["instructions"].as_str().unwrap();
+        assert!(instructions.contains("nocturne_memory (Personal memory search)"));
+        assert!(instructions.contains("mcp_tools_list(server)"));
+        assert!(!instructions.contains("disabled_search"));
+        assert!(!instructions.contains("private.example.invalid"));
+        let listed = handle_json_value_for_caller(
+            Arc::clone(&state),
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
+            "session:discovery",
+        )
+        .unwrap()
+        .unwrap();
+        let tools = listed["result"]["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 24);
+        for name in ["mcp_tools_list", "mcp_tool_call"] {
+            let descriptor = tools.iter().find(|tool| tool["name"] == name).unwrap();
+            assert_eq!(
+                descriptor["inputSchema"]["properties"]["server"]["enum"],
+                json!(["nocturne_memory"])
+            );
+            assert!(!descriptor.to_string().contains("disabled_search"));
+            assert!(!descriptor.to_string().contains("private.example.invalid"));
+        }
+        let inventory = call_tool_for(state, "session:discovery", 3, "mcp_server_list", json!({}));
+        let servers = inventory["result"]["structuredContent"]["servers"]
+            .as_array()
+            .unwrap();
+        assert_eq!(servers.len(), 2);
+        let memory = servers
+            .iter()
+            .find(|server| server["name"] == "nocturne_memory")
+            .unwrap();
+        assert_eq!(memory["description"], "Personal memory search");
+        assert_eq!(memory["enabled"], true);
+        assert!(inventory["result"]["structuredContent"]
+            .to_string()
+            .contains("disabled_search"));
+        assert!(!inventory["result"]["structuredContent"]
+            .to_string()
+            .contains("private.example.invalid"));
+    }
+
+    #[test]
     fn protocol_exposes_tools_without_app_resources() {
         let state = test_state();
         let initialized = initialize(&state, json!({})).unwrap();
@@ -1261,7 +1323,14 @@ mod tests {
         let state = Arc::new(AppState::new(Config::load_from_path(&config_path).unwrap()).unwrap());
 
         let initialized = initialize(&state, json!({})).unwrap();
-        assert!(initialized.get("instructions").is_none());
+        assert!(initialized["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("downstream MCP servers"));
+        assert!(!initialized["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("RULE-SENTINEL"));
         for caller in ["session:a", "session:b"] {
             let result = call_tool_for(
                 Arc::clone(&state),
