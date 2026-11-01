@@ -404,6 +404,18 @@ ripgrep must be installed on targets used for search.
 restores a selected snapshot otherwise. `terminal_send` accepts optional
 `rows` and `cols` together to resize a live PTY.
 
+**Compact MCP results:** `file_edit` returns `changed`, `written`, and a
+short `revision`: the first 24 hexadecimal digits of SHA-256 (96 bits).
+Both `write` and file content `read` also return this revision, enabling
+guarded follow-up edits through `expected_revision` without another read.
+The full `expected_sha256` input remains supported.
+
+Other operations omit echoed diffs, full old/new hashes, and deleted contents.
+Request `include_diff=true` or `include_sha256=true` for details;
+`file_delete` supports `include_content=true`. A dry run includes its
+computed diff when available. Audit records still contain full operation
+details for the Dashboard.
+
 The underlying server still accepts a selection of legacy tool names for
 existing MCP clients, but the new tool list exposes only the simplified APIs.
 
@@ -430,15 +442,15 @@ command can still reveal it by printing or transmitting its environment.
 
 ### File safety and patching
 
-- `file_read` returns SHA-256 metadata and supports 1-based UTF-8 line ranges. It accepts either legacy single `path` mode or up to 32 independent `files[]` reads in one call; repeating a path with different ranges reads multiple ranges efficiently. Batch failures are isolated per item and the batch shares one bounded output budget.
+- `read` returns a short SHA-256 `revision` by default (full digest with `include_sha256=true`) and supports 1-based UTF-8 line ranges. It accepts either legacy single `path` mode or up to 32 independent `files[]` reads in one call; repeating a path with different ranges reads multiple ranges efficiently. Batch failures are isolated per item and the batch shares one bounded output budget.
 - `file_find` performs bounded literal matching with optional context.
 - `file_write` is atomic. Replacing an existing file requires
   `expected_sha256` or `overwrite = true`.
 - `file_edit`, single-file `file_patch`, and `file_delete` support SHA-256
   compare-and-swap guards and dry-run/preview behavior where applicable.
 - Existing Unix modes are preserved unless a new mode is supplied.
-- `file_delete` refuses directories and returns the pre-delete content for
-  review.
+- `file_delete` refuses directories and returns the deletion outcome by default;
+  set `include_content=true` to retrieve the original contents, including for a dry run.
 - Multi-file `file_patch` treats `path` as a base directory, validates all UTF-8
   inputs before writing, rejects paths that escape the base, and rolls back
   earlier writes if a later write fails. Multi-file create, delete, and rename

@@ -223,6 +223,7 @@ fn handle_request(
     };
 
     let id = request.id.clone();
+    let mut audit_result = None;
     let result = match request.method.as_str() {
         "initialize" => initialize(&state, request.params.unwrap_or_else(|| json!({}))),
         "tools/list" => Ok(json!({ "tools": tools::list_tools(
@@ -233,7 +234,11 @@ fn handle_request(
             Arc::clone(&state),
             request.params.unwrap_or_else(|| json!({})),
             &caller.key,
-        ),
+        )
+        .map(|output| {
+            audit_result = Some(output.audit);
+            output.response
+        }),
         "ping" => Ok(json!({})),
         other => Err(Error::Tool(format!("unsupported method: {other}"))),
     };
@@ -262,9 +267,9 @@ fn handle_request(
                 .and_then(|v| v.get("isError"))
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-        let response_target = response
-            .result
+        let response_target = audit_result
             .as_ref()
+            .or(response.result.as_ref())
             .and_then(|v| v.get("structuredContent"))
             .and_then(|v| v.get("resolved_target"))
             .and_then(|v| v.get("target"))
@@ -282,7 +287,7 @@ fn handle_request(
             rpc_error_code: response.error.as_ref().map(|err| err.code),
             details: request_details.map(|details| {
                 details.with_response(
-                    response.result.as_ref(),
+                    audit_result.as_ref().or(response.result.as_ref()),
                     response.error.as_ref().map(|err| err.message.as_str()),
                 )
             }),
@@ -312,7 +317,12 @@ fn initialize(state: &AppState, params: Value) -> Result<Value> {
     }))
 }
 
-fn tools_call(state: Arc<AppState>, params: Value, caller_key: &str) -> Result<Value> {
+struct ToolCallOutput {
+    response: Value,
+    audit: Value,
+}
+
+fn tools_call(state: Arc<AppState>, params: Value, caller_key: &str) -> Result<ToolCallOutput> {
     #[derive(Deserialize)]
     struct ToolCallParams {
         name: String,
@@ -321,16 +331,13 @@ fn tools_call(state: Arc<AppState>, params: Value, caller_key: &str) -> Result<V
     }
 
     let params: ToolCallParams = serde_json::from_value(params)?;
+    let arguments = params.arguments.unwrap_or_else(|| json!({}));
+    let options = tools::ResultOptions::from_arguments(&arguments);
     let attach_completed = !matches!(
         params.name.as_str(),
         "job" | "job_poll" | "job_output" | "job_wait"
     );
-    match tools::call_tool_with_context(
-        Arc::clone(&state),
-        &params.name,
-        params.arguments.unwrap_or_else(|| json!({})),
-        caller_key,
-    ) {
+    match tools::call_tool_with_context(Arc::clone(&state), &params.name, arguments, caller_key) {
         Ok(mut value) => {
             let completed_jobs = if attach_completed {
                 state.jobs.take_completed_for_caller(caller_key)
@@ -403,11 +410,20 @@ fn tools_call(state: Arc<AppState>, params: Value, caller_key: &str) -> Result<V
                 }));
             }
 
-            Ok(json!({
-                "content": content,
-                "structuredContent": value,
-                "isError": false,
-            }))
+            let mut compact = tools::compact_result(&params.name, &value, &options);
+            if let Some(completed) = value.get("completed_jobs") {
+                if let Some(object) = compact.as_object_mut() {
+                    object.insert("completed_jobs".to_string(), completed.clone());
+                }
+            }
+            Ok(ToolCallOutput {
+                response: json!({
+                    "content": content,
+                    "structuredContent": compact,
+                    "isError": false,
+                }),
+                audit: json!({"structuredContent": value}),
+            })
         }
         Err(err) => {
             let completed_jobs = if attach_completed {
@@ -436,7 +452,10 @@ fn tools_call(state: Arc<AppState>, params: Value, caller_key: &str) -> Result<V
             if !completed_jobs.is_empty() {
                 response["structuredContent"] = json!({ "completed_jobs": completed_jobs });
             }
-            Ok(response)
+            Ok(ToolCallOutput {
+                audit: response.clone(),
+                response,
+            })
         }
     }
 }
@@ -723,6 +742,386 @@ mod tests {
             })
             .unwrap();
         assert_eq!(audit["summary"]["count"], 1);
+    }
+
+    #[test]
+    fn file_results_are_small_and_audit_retains_full_details() {
+        let state = test_state();
+        let root = state.config.server.runtime_dir.parent().unwrap();
+        let file = root.join("compact-edit.txt");
+        let path = file.to_string_lossy().to_string();
+        std::fs::write(&file, "before\n").unwrap();
+
+        let read = call_tool_for(
+            Arc::clone(&state),
+            "session:compact",
+            1,
+            "read",
+            json!({"target":"local","path":path}),
+        );
+        let read_output = &read["result"]["structuredContent"];
+        let current_revision = read_output["revision"].as_str().unwrap();
+        assert_eq!(current_revision.len(), 24);
+        assert!(read_output.get("sha256").is_none());
+        assert_eq!(read_output["content"], "before\n");
+        assert!(read_output.get("path").is_none());
+        assert!(read_output.get("bytes").is_none());
+
+        let edit = call_tool_for(
+            Arc::clone(&state),
+            "session:compact",
+            2,
+            "file_edit",
+            json!({"target":"local","path":path,"expected_revision":current_revision,
+                "edits":[{"old":"before","new":"after"}]}),
+        );
+        let returned = &edit["result"]["structuredContent"];
+        assert_eq!(returned["changed"], true);
+        assert_eq!(returned["written"], true);
+        assert_eq!(returned["revision"].as_str().unwrap().len(), 24);
+        assert!(returned.get("diff").is_none());
+        assert!(returned.get("new_sha256").is_none());
+        let next_revision = returned["revision"].as_str().unwrap().to_string();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "after\n");
+
+        let query = state
+            .activity
+            .as_ref()
+            .unwrap()
+            .query(crate::core::activity::Query {
+                tool: Some("file_edit".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        let id = query["calls"][0]["id"].as_i64().unwrap();
+        let details = state
+            .activity
+            .as_ref()
+            .unwrap()
+            .call_details(id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(details["arguments"]["edits"][0]["new"], "after");
+        assert!(details["result"]["diff"]
+            .as_str()
+            .unwrap()
+            .contains("-before"));
+        assert!(details["result"]["diff"]
+            .as_str()
+            .unwrap()
+            .contains("+after"));
+        assert_eq!(details["result"]["new_sha256"].as_str().unwrap().len(), 64);
+        assert!(
+            serde_json::to_vec(returned).unwrap().len()
+                < serde_json::to_vec(&details["result"]).unwrap().len() / 3
+        );
+
+        let expanded = call_tool_for(
+            Arc::clone(&state),
+            "session:compact",
+            3,
+            "file_edit",
+            json!({"target":"local","path":path,"expected_revision":next_revision,"include_diff":true,
+                "include_sha256":true,"edits":[{"old":"after","new":"third"}]}),
+        );
+        let expanded = &expanded["result"]["structuredContent"];
+        assert!(expanded["diff"].as_str().unwrap().contains("+third"));
+        assert_eq!(expanded["old_sha256"].as_str().unwrap().len(), 64);
+        assert_eq!(expanded["new_sha256"].as_str().unwrap().len(), 64);
+        assert_eq!(
+            expanded["revision"].as_str().unwrap(),
+            &expanded["new_sha256"].as_str().unwrap()[..24]
+        );
+
+        let preview = call_tool_for(
+            Arc::clone(&state),
+            "session:compact",
+            4,
+            "file_edit",
+            json!({"target":"local","path":path,"dry_run":true,
+                "edits":[{"old":"third","new":"fourth"}]}),
+        );
+        assert_eq!(preview["result"]["structuredContent"]["written"], false);
+        assert!(preview["result"]["structuredContent"]["diff"]
+            .as_str()
+            .unwrap()
+            .contains("+fourth"));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "third\n");
+        assert!(preview["result"]["structuredContent"]
+            .get("revision")
+            .is_none());
+
+        let overwritten = call_tool_for(
+            Arc::clone(&state),
+            "session:compact",
+            5,
+            "write",
+            json!({"target":"local","path":path,"content":"replacement\n",
+                "expected_revision":expanded["revision"]}),
+        );
+        assert_eq!(overwritten["result"]["structuredContent"]["created"], false);
+        assert_eq!(overwritten["result"]["structuredContent"]["written"], true);
+        assert_eq!(
+            overwritten["result"]["structuredContent"]["revision"]
+                .as_str()
+                .unwrap()
+                .len(),
+            24
+        );
+        let other = root.join("compact-created.txt");
+        let created = call_tool_for(
+            Arc::clone(&state),
+            "session:compact",
+            6,
+            "write",
+            json!({"target":"local","path":other,"content":"private text\n"}),
+        );
+        assert_eq!(created["result"]["structuredContent"]["created"], true);
+        assert_eq!(created["result"]["structuredContent"]["written"], true);
+        assert_eq!(
+            created["result"]["structuredContent"]["revision"]
+                .as_str()
+                .unwrap()
+                .len(),
+            24
+        );
+
+        let deleted = call_tool_for(
+            Arc::clone(&state),
+            "session:compact",
+            7,
+            "file_delete",
+            json!({"target":"local","path":other}),
+        );
+        let public = &deleted["result"]["structuredContent"];
+        assert_eq!(public, &json!({"deleted":true,"written":true}));
+        let records = state
+            .activity
+            .as_ref()
+            .unwrap()
+            .query(crate::core::activity::Query {
+                tool: Some("file_delete".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        let id = records["calls"][0]["id"].as_i64().unwrap();
+        let details = state
+            .activity
+            .as_ref()
+            .unwrap()
+            .call_details(id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(details["result"]["content"], "private text\n");
+        assert_eq!(details["result"]["old_sha256"].as_str().unwrap().len(), 64);
+        assert!(std::fs::metadata(&other).is_err());
+
+        std::fs::write(&other, "visible on request\n").unwrap();
+        let requested = call_tool_for(
+            Arc::clone(&state),
+            "session:compact",
+            8,
+            "file_delete",
+            json!({"target":"local","path":other,"include_content":true}),
+        );
+        assert_eq!(
+            requested["result"]["structuredContent"]["content"],
+            "visible on request\n"
+        );
+
+        let backup = call_tool_for(
+            Arc::clone(&state),
+            "session:compact",
+            9,
+            "file_backup",
+            json!({"target":"local","path":path}),
+        );
+        let public = &backup["result"]["structuredContent"];
+        let backup_id = public["backup"]["backup_id"].as_str().unwrap();
+        assert!(public["backup"].get("sha256").is_none());
+        assert!(public["backup"]["expires_at_unix_secs"].as_u64().unwrap() > 0);
+        let listing = call_tool_for(
+            Arc::clone(&state),
+            "session:compact",
+            10,
+            "file_restore",
+            json!({"target":"local","path":path}),
+        );
+        assert_eq!(
+            listing["result"]["structuredContent"]["backups"][0]["backup_id"],
+            backup_id
+        );
+        assert!(listing["result"]["structuredContent"]["backups"][0]
+            .get("sha256")
+            .is_none());
+        let restored = call_tool_for(
+            Arc::clone(&state),
+            "session:compact",
+            11,
+            "file_restore",
+            json!({"target":"local","backup_id":backup_id,"overwrite":true}),
+        );
+        assert_eq!(restored["result"]["structuredContent"]["restored"], true);
+        assert_eq!(
+            restored["result"]["structuredContent"]["revision"]
+                .as_str()
+                .unwrap()
+                .len(),
+            24
+        );
+        assert!(restored["result"]["structuredContent"]
+            .get("restored_sha256")
+            .is_none());
+
+        let exported = call_tool_for(
+            Arc::clone(&state),
+            "session:compact",
+            12,
+            "file_export",
+            json!({"target":"local","path":path}),
+        );
+        assert!(exported["result"]["structuredContent"]["download"]["url"]
+            .as_str()
+            .unwrap()
+            .starts_with("https://"));
+        assert!(exported["result"]["structuredContent"]["download"]
+            .get("sha256")
+            .is_none());
+
+        let legacy = call_tool_for(
+            Arc::clone(&state),
+            "session:compact",
+            13,
+            "file_read",
+            json!({"target":"local","path":path}),
+        );
+        assert!(legacy["result"]["structuredContent"]
+            .get("resolved_target")
+            .is_some());
+    }
+
+    #[test]
+    fn short_revisions_guard_serial_edits_and_reject_stale_changes() {
+        let state = test_state();
+        let file = state
+            .config
+            .server
+            .runtime_dir
+            .parent()
+            .unwrap()
+            .join("revision.txt");
+        let path = file.to_string_lossy().to_string();
+        std::fs::write(&file, "v1\n").unwrap();
+        let first_read = call_tool_for(
+            Arc::clone(&state),
+            "session:revision",
+            1,
+            "read",
+            json!({"target":"local","path":path}),
+        );
+        let rev1 = first_read["result"]["structuredContent"]["revision"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(rev1.len(), 24);
+        assert!(first_read["result"]["structuredContent"]
+            .get("sha256")
+            .is_none());
+        let edit = call_tool_for(
+            Arc::clone(&state),
+            "session:revision",
+            2,
+            "file_edit",
+            json!({"target":"local","path":path,"expected_revision":rev1,
+                "edits":[{"old":"v1","new":"v2"}]}),
+        );
+        assert_eq!(edit["result"]["isError"], false);
+        let rev2 = edit["result"]["structuredContent"]["revision"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_ne!(rev1, rev2);
+
+        let stale = call_tool_for(
+            Arc::clone(&state),
+            "session:revision",
+            3,
+            "file_edit",
+            json!({"target":"local","path":path,"expected_revision":rev1,
+                "edits":[{"old":"v2","new":"incorrect"}]}),
+        );
+        assert_eq!(stale["result"]["isError"], true);
+        assert!(stale["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("revision"));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "v2\n");
+
+        let overwrite = call_tool_for(
+            Arc::clone(&state),
+            "session:revision",
+            4,
+            "write",
+            json!({"target":"local","path":path,"expected_revision":rev2,"content":"v3\n"}),
+        );
+        assert_eq!(overwrite["result"]["isError"], false);
+        let rev3 = overwrite["result"]["structuredContent"]["revision"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_ne!(rev2, rev3);
+        let stale_write = call_tool_for(
+            Arc::clone(&state),
+            "session:revision",
+            5,
+            "write",
+            json!({"target":"local","path":path,"expected_revision":rev2,"content":"incorrect\n"}),
+        );
+        assert_eq!(stale_write["result"]["isError"], true);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "v3\n");
+
+        let stale_delete = call_tool_for(
+            Arc::clone(&state),
+            "session:revision",
+            6,
+            "file_delete",
+            json!({"target":"local","path":path,"expected_revision":rev2}),
+        );
+        assert_eq!(stale_delete["result"]["isError"], true);
+        let read_full = call_tool_for(
+            Arc::clone(&state),
+            "session:revision",
+            7,
+            "read",
+            json!({"target":"local","path":path,"include_sha256":true}),
+        );
+        assert_eq!(
+            read_full["result"]["structuredContent"]["sha256"]
+                .as_str()
+                .unwrap()
+                .len(),
+            64
+        );
+        assert_eq!(read_full["result"]["structuredContent"]["revision"], rev3);
+        assert_eq!(
+            read_full["result"]["structuredContent"]["sha256"]
+                .as_str()
+                .unwrap()[..24],
+            rev3
+        );
+
+        let deleted = call_tool_for(
+            Arc::clone(&state),
+            "session:revision",
+            8,
+            "file_delete",
+            json!({"target":"local","path":path,"expected_revision":rev3}),
+        );
+        assert_eq!(
+            deleted["result"]["structuredContent"],
+            json!({"deleted":true,"written":true})
+        );
+        assert!(std::fs::metadata(&file).is_err());
     }
 
     #[test]

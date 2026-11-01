@@ -24,6 +24,8 @@ pub struct FileImportRequest {
     #[serde(default)]
     pub expected_sha256: Option<String>,
     #[serde(default)]
+    pub expected_revision: Option<String>,
+    #[serde(default)]
     pub overwrite: bool,
     #[serde(default)]
     pub mode: Option<String>,
@@ -137,6 +139,7 @@ pub fn import(state: &AppState, req: FileImportRequest) -> Result<FileImportResp
             content: BASE64.encode(&bytes),
             encoding: FileContentEncoding::Base64,
             expected_sha256: req.expected_sha256,
+            expected_revision: req.expected_revision,
             overwrite: req.overwrite,
             mode: req.mode,
             timeout_ms: req.timeout_ms,

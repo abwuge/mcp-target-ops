@@ -5,7 +5,7 @@ use crate::{
         policy::{self, FileAccess},
         state::AppState,
         target::{ResolvedTarget, TargetId},
-        util::sha256_hex,
+        util::{revision_matches, sha256_hex},
     },
     tooling::fs::{self, file_mode},
 };
@@ -75,6 +75,8 @@ pub struct FileRestoreRequest {
     pub destination: Option<String>,
     #[serde(default)]
     pub expected_current_sha256: Option<String>,
+    #[serde(default)]
+    pub expected_revision: Option<String>,
     #[serde(default)]
     pub overwrite: bool,
     #[serde(default)]
@@ -556,6 +558,14 @@ pub fn restore(state: &AppState, req: FileRestoreRequest) -> Result<FileRestoreR
     } else {
         None
     };
+    if let Some(expected) = &req.expected_revision {
+        if !previous_sha256
+            .as_deref()
+            .is_some_and(|actual| revision_matches(actual, expected))
+        {
+            return Err(Error::Tool(format!("destination changed before restore: expected revision {expected} no longer matches")));
+        }
+    }
     if let Some(expected) = &req.expected_current_sha256 {
         if previous_sha256.as_deref() != Some(expected.as_str()) {
             return Err(Error::Tool(format!(
@@ -563,9 +573,9 @@ pub fn restore(state: &AppState, req: FileRestoreRequest) -> Result<FileRestoreR
                 previous_sha256.as_deref().unwrap_or("<missing>")
             )));
         }
-    } else if exists && !req.overwrite {
+    } else if exists && !req.overwrite && req.expected_revision.is_none() {
         return Err(Error::Tool(
-            "destination already exists; provide expected_current_sha256 or set overwrite=true"
+            "destination already exists; provide expected_revision, expected_current_sha256 or overwrite=true"
                 .to_string(),
         ));
     }
@@ -737,6 +747,7 @@ mod tests {
                 backup_id: backup.backup.backup_id.clone(),
                 destination: None,
                 expected_current_sha256: Some(current_sha),
+                expected_revision: None,
                 overwrite: false,
                 timeout_ms: None,
             },
@@ -778,6 +789,7 @@ mod tests {
                 backup_id: backup.backup.backup_id,
                 destination: None,
                 expected_current_sha256: None,
+                expected_revision: None,
                 overwrite: false,
                 timeout_ms: None,
             },

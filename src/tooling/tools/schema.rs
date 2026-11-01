@@ -1,6 +1,13 @@
+use super::compact;
 use serde_json::{json, Value};
 
 pub(super) fn output_schema(name: &str) -> Value {
+    if let Some(mut schema) = compact::output_schema(name) {
+        schema["properties"]["completed_jobs"] = json!({
+            "type":"array", "items":completed_job_schema()
+        });
+        return schema;
+    }
     let mut schema = match name {
         "server_info" => json!({
             "type": "object",

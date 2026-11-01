@@ -15,7 +15,7 @@ use crate::{
         policy::{self, FileAccess},
         state::AppState,
         target::{TargetId, TargetSource},
-        util::{sha256_hex, truncate_bytes},
+        util::{revision_matches, sha256_hex, truncate_bytes},
     },
     transport::ssh,
 };
@@ -200,6 +200,21 @@ pub fn list(state: &AppState, req: FileListRequest) -> Result<FileListResponse> 
     })
 }
 
+fn require_revision(
+    actual_sha256: &str,
+    expected_revision: Option<&str>,
+    operation: &str,
+) -> Result<()> {
+    if let Some(expected) = expected_revision {
+        if !revision_matches(actual_sha256, expected) {
+            return Err(Error::Tool(format!(
+                "file changed before {operation}: expected revision {expected} no longer matches"
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub fn edit(state: &AppState, req: FileEditRequest) -> Result<FileEditResponse> {
     let (target, source) = state.resolve_target(req.target.as_deref())?;
     let config = state.get_target_config(&target)?;
@@ -213,6 +228,11 @@ pub fn edit(state: &AppState, req: FileEditRequest) -> Result<FileEditResponse> 
     let original = String::from_utf8(original_bytes).map_err(|_| {
         Error::Tool("file_edit currently supports UTF-8 text files only".to_string())
     })?;
+
+    if req.expected_revision.is_some() {
+        let existing_hash = sha256_hex(original.as_bytes());
+        require_revision(&existing_hash, req.expected_revision.as_deref(), "edit")?;
+    }
 
     let EditOutcome {
         changed,
@@ -270,6 +290,17 @@ pub fn write(state: &AppState, req: FileWriteRequest) -> Result<FileWriteRespons
     };
     let old_sha256 = old_bytes.as_deref().map(sha256_hex);
 
+    if let Some(expected) = req.expected_revision.as_deref() {
+        match old_sha256.as_deref() {
+            Some(actual) => require_revision(actual, Some(expected), "write")?,
+            None => {
+                return Err(Error::Tool(
+                    "file does not exist but expected_revision was supplied".into(),
+                ))
+            }
+        }
+    }
+
     if let Some(expected) = req.expected_sha256.as_deref() {
         match old_sha256.as_deref() {
             Some(actual) if actual == expected => {}
@@ -284,9 +315,10 @@ pub fn write(state: &AppState, req: FileWriteRequest) -> Result<FileWriteRespons
                 )))
             }
         }
-    } else if exists && !req.overwrite {
+    } else if exists && !req.overwrite && req.expected_revision.is_none() {
         return Err(Error::Tool(
-            "file already exists; supply expected_sha256 or set overwrite=true".to_string(),
+            "file already exists; supply expected_revision, expected_sha256 or overwrite=true"
+                .to_string(),
         ));
     }
 
@@ -330,6 +362,7 @@ pub fn delete(state: &AppState, req: FileDeleteRequest) -> Result<FileDeleteResp
     );
     let bytes = read_bytes(state, &target, config, &req.path, timeout)?;
     let old_sha256 = sha256_hex(&bytes);
+    require_revision(&old_sha256, req.expected_revision.as_deref(), "delete")?;
     if let Some(expected) = req.expected_sha256.as_deref() {
         if expected != old_sha256 {
             return Err(Error::Tool(format!(
@@ -390,7 +423,10 @@ pub fn patch(state: &AppState, req: FilePatchRequest) -> Result<FilePatchRespons
             config,
             &req.path,
             patch_text,
-            req.expected_sha256.as_deref(),
+            (
+                req.expected_sha256.as_deref(),
+                req.expected_revision.as_deref(),
+            ),
             timeout,
         )?;
         if prepared.changed && !req.dry_run {
@@ -419,9 +455,10 @@ pub fn patch(state: &AppState, req: FilePatchRequest) -> Result<FilePatchRespons
         });
     }
 
-    if req.expected_sha256.is_some() {
+    if req.expected_sha256.is_some() || req.expected_revision.is_some() {
         return Err(Error::Tool(
-            "expected_sha256 is only valid for single-file patches".to_string(),
+            "expected_sha256 and expected_revision are only valid for single-file patches"
+                .to_string(),
         ));
     }
 
@@ -441,7 +478,7 @@ pub fn patch(state: &AppState, req: FilePatchRequest) -> Result<FilePatchRespons
             config,
             &patch_path,
             &section.patch,
-            None,
+            (None, None),
             timeout,
         )?);
     }
@@ -512,7 +549,7 @@ fn prepare_file_patch(
     config: &TargetConfig,
     path: &str,
     patch_text: &str,
-    expected_sha256: Option<&str>,
+    expected_guards: (Option<&str>, Option<&str>),
     timeout: Duration,
 ) -> Result<PreparedFilePatch> {
     let original_bytes = read_bytes(state, target, config, path, timeout)?;
@@ -522,7 +559,8 @@ fn prepare_file_patch(
         ))
     })?;
     let old_sha256 = sha256_hex(original.as_bytes());
-    if let Some(expected) = expected_sha256 {
+    require_revision(&old_sha256, expected_guards.1, "patch")?;
+    if let Some(expected) = expected_guards.0 {
         if expected != old_sha256 {
             return Err(Error::Tool(format!(
                 "file changed before patch: expected sha256 {expected}, got {old_sha256}"

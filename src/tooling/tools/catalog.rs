@@ -38,12 +38,12 @@ pub fn list_tools(oauth_scopes: Option<&[String]>) -> Value {
         tool("job", "Manage foreground-promoted or background jobs and batch groups by job_id. action=status/read/wait/cancel, default read; wait_ms controls blocking, output cursors for single jobs.", job_schema()),
         // COMPAT(COMPAT-006): Keep the original top-level path/range request shape
         // while newer callers migrate to the files[] batch form.
-        tool("read", "Read exact file/range data or search a directory with ripgrep regular expressions, glob filters, match lines and context. Accepts single path or batch files for reads; search with path + pattern. Returns bounded structured data.", read_schema()),
-        tool("file_backup", "Create a managed rollback snapshot of one file. Use this instead of cp/mv-based .bak, .old, timestamped, or in-place backup files. Snapshots are centrally tracked under the Target Ops runtime directory, expire automatically, preserve the original mode when available, and can be restored with file_restore.", file_backup_schema()),
+        tool("read", "Read files or search with ripgrep. Content reads return a 24-character SHA-256 revision for safe subsequent edits; request include_sha256=true for the full digest. Supports file ranges, batch reads, regex, globs and context.", read_schema()),
+        tool("file_backup", "Create a managed rollback snapshot of one file, returning a backup_id usable with file_restore. Expires automatically and preserves original file permissions.", file_backup_schema()),
         tool("file_restore", "List managed backups when backup_id is omitted; restore one backup when backup_id is supplied. Existing destinations require expected_current_sha256 or overwrite=true.", restore_schema()),
-        tool("file_edit", "Apply exact text replacements with sha256 compare-and-swap support. Existing file permissions are preserved. Writes require explicit target by default.", file_edit_schema()),
-        tool("write", "Atomically write file content or apply a unified patch (including multi-file patches); supply exactly one of content or patch. Supports expected_sha256 and dry-run for patches. Use file_edit for precise text substitutions.", write_schema()),
-        tool("file_delete", "Delete one file after optionally checking its sha256. Returns the deleted content for review. Directories are refused.", file_delete_schema()),
+        tool("file_edit", "Apply exact text replacements with optional content revision guard. Returns changed/written and a short revision for subsequent edits; include_diff or include_sha256 for details. dry_run returns a diff without writing.", file_edit_schema()),
+        tool("write", "Atomically write content or apply a unified patch, including multi-file changes. Supply exactly one of content or patch. Default result confirms the write without echoing diff or hashes; request details explicitly if needed.", write_schema()),
+        tool("file_delete", "Delete one file, optionally guarded by expected_sha256. Returns deletion status only; set include_content=true to retrieve the previous contents. Directories are refused.", file_delete_schema()),
         tool("file_import", "Import a ChatGPT or connector file reference into a target path. Accepts platform-rewritten local paths or HTTPS download URLs and preserves the normal target write policy.", file_import_schema()),
         tool("file_export", "Export one target file. IMPORTANT: file_export can trigger mandatory front-end review/approval. If the user is away, approval may time out and terminate the model's reasoning. Avoid this tool during active reasoning unless it is strictly necessary; prefer using it only after the substantive work is complete, especially with expensive Pro-tier models. The default link delivery returns a short-lived opaque HTTPS download URL; delivery=attachment preserves the embedded-resource compatibility path.", file_export_schema()),
         tool("file_transfer", "Copy one regular file between two different targets without materializing file data in the model. Both source_target and destination_target must be explicit. Uses rsync when available and falls back to scp. SSH-to-SSH transfers are direct between the two targets: Target Ops may initiate commands from either remote side, but the plugin host is never used as a file-data relay.", file_transfer_schema()),
@@ -378,6 +378,7 @@ fn read_schema() -> Value {
         json!({"type":"integer","minimum":1,"maximum":200}),
     );
     props.insert("max_output_bytes".into(),json!({"type":"integer","minimum":1024,"description":"Search byte budget; file reads use max_bytes."}));
+    props.insert("include_sha256".into(), json!({"type":"boolean","description":"Include full SHA-256 (default false). Short revision is always returned for file content reads."}));
     schema
 }
 
@@ -387,6 +388,11 @@ fn write_schema() -> Value {
     let properties = schema["properties"].as_object_mut().unwrap();
     properties.insert("patch".into(), patch["properties"]["patch"].clone());
     properties.insert("dry_run".into(), patch["properties"]["dry_run"].clone());
+    properties.insert("include_diff".into(), json!({"type":"boolean","description":"Include a computed diff (default false; dry_run includes diff when available)."}));
+    properties.insert(
+        "include_sha256".into(),
+        json!({"type":"boolean","description":"Include old/new SHA-256 hashes (default false)."}),
+    );
     schema["required"] = json!(["path"]);
     schema["oneOf"] = json!([{"required":["content"]},{"required":["patch"]}]);
     schema
@@ -482,6 +488,7 @@ fn file_backup_schema() -> Value {
             "target": { "type": "string", "description": "Target id. Omit to use active/default target; backup creation requires file-read permission." },
             "path": { "type": "string", "description": "Existing file to snapshot." },
             "ttl_secs": { "type": "integer", "minimum": 1, "maximum": 2592000, "description": "Optional retention lifetime. Defaults to runtime.file_backup_default_ttl_secs and cannot exceed the configured maximum." },
+            "include_sha256": { "type":"boolean", "description":"Include the backup SHA-256 (default false)." },
             "note": { "type": "string", "maxLength": 512, "description": "Optional short reason or checkpoint label, for example 'before service restart'." },
             "timeout_ms": { "type": "integer", "minimum": 1, "description": "Timeout for remote file access." }
         },
@@ -509,8 +516,10 @@ fn file_restore_schema() -> Value {
         "properties": {
             "target": { "type": "string", "description": "Target id. Must match the backup. Writes require an explicit target by default policy." },
             "backup_id": { "type": "string", "description": "Opaque managed backup id returned by file_backup or file_backup_list." },
+            "include_sha256": { "type":"boolean", "description":"Include stored SHA-256 hashes (default false)." },
             "destination": { "type": "string", "description": "Optional restore path. Defaults to the backup's original path." },
-            "expected_current_sha256": { "type": "string", "description": "Optional CAS guard for an existing destination. Prefer this over overwrite=true when the current hash is known." },
+            "expected_current_sha256": { "type": "string", "description": "Optional full SHA-256 CAS guard for an existing destination (legacy compatibility)." },
+            "expected_revision": { "type": "string", "minLength": 24, "maxLength": 24, "description": "Short content revision from read or previous edit; refuses restore if destination changed." },
             "overwrite": { "type": "boolean", "description": "Allow restoring over an existing destination without a CAS hash. Defaults to false." },
             "timeout_ms": { "type": "integer", "minimum": 1, "description": "Timeout for remote file access." }
         },
@@ -525,9 +534,12 @@ fn file_edit_schema() -> Value {
         "properties": {
             "target": { "type": "string", "description": "Target id. For writes this is required by default policy." },
             "path": { "type": "string", "description": "UTF-8 text file path." },
-            "expected_sha256": { "type": "string", "description": "Optional CAS guard from file_read." },
+            "expected_sha256": { "type": "string", "description": "Optional full SHA-256 CAS guard (legacy compatibility)." },
+            "expected_revision": { "type": "string", "minLength": 24, "maxLength": 24, "description": "Content revision returned by read or previous edit; refuses stale changes." },
             "dry_run": { "type": "boolean", "description": "Return diff without writing." },
             "timeout_ms": { "type": "integer", "description": "Timeout for remote read/write." },
+            "include_diff": { "type": "boolean", "description": "Return the computed diff. Dry-run always includes diff." },
+            "include_sha256": { "type": "boolean", "description": "Return old and new full SHA-256 hashes; revision is always included (default false)." },
             "edits": {
                 "type": "array",
                 "items": {
@@ -569,7 +581,8 @@ fn file_write_schema() -> Value {
             "path": { "type": "string", "description": "Destination file path." },
             "content": { "type": "string", "description": "File content encoded according to encoding." },
             "encoding": { "type": "string", "enum": ["utf8", "base64"], "description": "Content encoding. Defaults to utf8." },
-            "expected_sha256": { "type": "string", "description": "Optional CAS guard for an existing file." },
+            "expected_sha256": { "type": "string", "description": "Optional full SHA-256 CAS guard for an existing file (legacy compatibility)." },
+            "expected_revision": { "type": "string", "minLength": 24, "maxLength": 24, "description": "Short revision from read or previous edit; allows guarded overwrite without overwrite=true." },
             "overwrite": { "type": "boolean", "description": "Allow replacement without a CAS hash. Defaults to false." },
             "mode": { "type": "string", "description": "Optional octal mode such as 0644 or 0755. Existing mode is preserved when omitted." },
             "timeout_ms": { "type": "integer", "description": "Timeout for remote file access." }
@@ -585,8 +598,11 @@ fn file_delete_schema() -> Value {
         "properties": {
             "target": { "type": "string", "description": "Target id. For writes this is required by default policy." },
             "path": { "type": "string", "description": "Existing file path to delete." },
-            "expected_sha256": { "type": "string", "description": "Optional CAS guard from file_read." },
-            "dry_run": { "type": "boolean", "description": "Preview the deletion and return existing content without removing the file." },
+            "expected_sha256": { "type": "string", "description": "Optional full SHA-256 CAS guard (legacy compatibility)." },
+            "expected_revision": { "type": "string", "minLength": 24, "maxLength": 24, "description": "Content revision returned by read or previous edit; refuses stale changes." },
+            "dry_run": { "type": "boolean", "description": "Check the deletion without removing the file. Combine with include_content=true for a content preview." },
+            "include_content": { "type": "boolean", "description": "Return previous file contents (default false)." },
+            "include_sha256": { "type": "boolean", "description": "Return the previous file SHA-256 (default false)." },
             "timeout_ms": { "type": "integer", "description": "Timeout for remote file access." }
         },
         "required": ["path"],
@@ -605,11 +621,14 @@ fn file_import_schema() -> Value {
                 "format": "binary",
                 "description": "ChatGPT or connector file parameter. The runtime may rewrite this argument before tool delivery; Target Ops also accepts compatible file-reference objects at runtime."
             },
-            "expected_sha256": { "type": "string", "description": "Optional CAS guard for an existing destination file." },
+            "expected_sha256": { "type": "string", "description": "Optional full SHA-256 CAS guard for existing destination (legacy compatibility)." },
+            "expected_revision": { "type": "string", "minLength": 24, "maxLength": 24, "description": "Short content revision from read or previous write; refuses stale import." },
             "overwrite": { "type": "boolean", "description": "Allow replacement without a CAS hash. Defaults to false." },
             "mode": { "type": "string", "description": "Optional octal mode such as 0644 or 0755." },
             "timeout_ms": { "type": "integer", "minimum": 1, "description": "Transfer and target write timeout in milliseconds." },
-            "max_bytes": { "type": "integer", "minimum": 1, "maximum": 104857600, "description": "Maximum accepted source file size. Uses the configured default when omitted." }
+            "max_bytes": { "type": "integer", "minimum": 1, "maximum": 104857600, "description": "Maximum accepted source file size. Uses the configured default when omitted." },
+            "include_diff": { "type": "boolean", "description": "Return the computed diff when available (default false)." },
+            "include_sha256": { "type": "boolean", "description": "Return old/new SHA-256 hashes (default false)." }
         },
         "required": ["path", "file"],
         "additionalProperties": false
@@ -625,6 +644,7 @@ fn file_export_schema() -> Value {
             "mime_type": { "type": "string", "description": "Optional media type override. Otherwise inferred from the filename." },
             "delivery": { "type": "string", "enum": ["link", "attachment"], "description": "Delivery mode. Defaults to the configured mode (link by default). Link avoids ChatGPT attachment materialization; attachment returns the legacy embedded file output." },
             "link_ttl_secs": { "type": "integer", "minimum": 1, "maximum": 86400, "description": "Link lifetime in seconds for delivery=link. Uses the configured default (600 seconds by default)." },
+            "include_sha256": { "type": "boolean", "description": "Return file checksum (default false for link delivery)." },
             "single_use": { "type": "boolean", "description": "Consume a link after its first successful GET. Defaults to the configured value (false by default to tolerate link prefetching)." },
             "max_bytes": { "type": "integer", "minimum": 1, "maximum": 104857600, "description": "Maximum exported file size. Uses the configured default when omitted." },
             "timeout_ms": { "type": "integer", "minimum": 1, "description": "Timeout for remote file access." }
@@ -657,7 +677,8 @@ fn file_patch_schema() -> Value {
             "target": { "type": "string", "description": "Target id. For writes this is required by default policy." },
             "path": { "type": "string", "description": "UTF-8 text file path in single-file mode, or base directory for a multi-file unified diff." },
             "patch": { "type": "string", "description": "Unified diff. If it contains multiple ---/+++ file sections, each relative path is resolved under path; git a/ and b/ prefixes are stripped." },
-            "expected_sha256": { "type": "string", "description": "Optional CAS guard from file_read. Valid only for single-file patches." },
+            "expected_sha256": { "type": "string", "description": "Optional full SHA-256 guard for single-file patches (legacy compatibility)." },
+            "expected_revision": { "type": "string", "minLength": 24, "maxLength": 24, "description": "Short content revision for a single-file patch; rejects stale content." },
             "dry_run": { "type": "boolean", "description": "Validate and return the patch result without writing." },
             "timeout_ms": { "type": "integer", "description": "Timeout for remote read/write." }
         },

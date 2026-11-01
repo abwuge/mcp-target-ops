@@ -128,6 +128,8 @@ pub struct FileEditRequest {
     pub path: String,
     #[serde(default)]
     pub expected_sha256: Option<String>,
+    #[serde(default)]
+    pub expected_revision: Option<String>,
     pub edits: Vec<TextEdit>,
     #[serde(default)]
     pub dry_run: bool,
@@ -156,6 +158,8 @@ pub struct FileWriteRequest {
     pub encoding: FileContentEncoding,
     #[serde(default)]
     pub expected_sha256: Option<String>,
+    #[serde(default)]
+    pub expected_revision: Option<String>,
     #[serde(default)]
     pub overwrite: bool,
     #[serde(default)]
@@ -194,6 +198,8 @@ pub struct FileDeleteRequest {
     #[serde(default)]
     pub expected_sha256: Option<String>,
     #[serde(default)]
+    pub expected_revision: Option<String>,
+    #[serde(default)]
     pub dry_run: bool,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
@@ -219,6 +225,8 @@ pub struct FilePatchRequest {
     pub patch: String,
     #[serde(default)]
     pub expected_sha256: Option<String>,
+    #[serde(default)]
+    pub expected_revision: Option<String>,
     #[serde(default)]
     pub dry_run: bool,
     #[serde(default)]

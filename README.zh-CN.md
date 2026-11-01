@@ -381,6 +381,18 @@ scope。
 `file_restore` 无备份 ID 时列出托管快照，提供 ID 时恢复。
 `terminal_send` 可连同输入可选地提供 `rows` 和 `cols` 改变 PTY 尺寸。
 
+**精简的 MCP 返回：** `file_edit` 默认返回 `changed`、`written`
+以及 `revision`（SHA-256 前 24 个十六进制字符，即 96 位）。
+`write` 和 `read` 也提供相同格式的版本号，下一次编辑时传入
+`expected_revision` 即可进行内容版本校验，无须重新读取完整文件。
+旧的 `expected_sha256` 继续兼容。
+
+不再默认回显 Diff、完整旧新哈希和被删除文件正文。
+需要时传 `include_diff=true`、`include_sha256=true`，删除文件可传
+`include_content=true`。预览模式 `dry_run=true` 在可用时仍返回 Diff。
+`read` 默认返回短版本号，需要完整 SHA-256 时再显式请求。
+审计数据库仍保存完整的原始请求、Diff 和操作结果，Dashboard 的可视化保持不变。
+
 旧版工具名暂时只保留兼容性分发，**不再出现在新的 `tools/list` 中**。
 
 两个命令工具都支持 `secret_env`。值可以来自纯文本文件，也可以来自 TOML/JSON
@@ -405,14 +417,14 @@ MCP 请求参数中；但被启动的命令仍可通过输出环境或主动发�
 
 ### 文件安全与补丁
 
-- `file_read` 返回 SHA-256 元数据，并支持以 1 为起点的 UTF-8 行范围。它既兼容原有单 `path` 模式，也支持一次最多 32 个独立 `files[]` 读取；同一路径可用不同范围重复出现，从而一次读取多个区间。批量模式中的单项失败彼此隔离，整批共享一个有界输出预算。
+- `read` 默认返回短 `revision`（使用 `include_sha256=true` 可获取完整哈希），并支持以 1 为起点的 UTF-8 行范围。它既兼容原有单 `path` 模式，也支持一次最多 32 个独立 `files[]` 读取；同一路径可用不同范围重复出现，从而一次读取多个区间。批量模式中的单项失败彼此隔离，整批共享一个有界输出预算。
 - `file_find` 执行有界字面量搜索，可返回上下文。
 - `file_write` 原子写入；覆盖已有文件时必须提供 `expected_sha256` 或
   `overwrite = true`。
 - `file_edit`、单文件 `file_patch` 与 `file_delete` 支持 SHA-256 比较并交换；
   适用操作还支持 dry-run/预览。
 - 未显式指定新权限时，已有 Unix 文件模式会被保留。
-- `file_delete` 拒绝删除目录，并返回删除前的完整内容以供审阅。
+- `file_delete` 拒绝删除目录；默认仅返回删除结果，使用 `include_content=true` 可取回删除前的内容（或在 `dry_run` 时预览）。
 - 多文件 `file_patch` 将 `path` 视为基目录；写入前验证所有 UTF-8 文件；拒绝逃逸
   基目录的路径；后续写入失败时回滚之前已写入的文件。多文件创建、删除和重命名
   section 会被明确拒绝。
