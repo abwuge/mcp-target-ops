@@ -234,7 +234,7 @@ fn handle_request(
         "tools/call" => tools_call(
             Arc::clone(&state),
             request.params.unwrap_or_else(|| json!({})),
-            &caller.key,
+            &caller.job_owner_key,
         )
         .map(|output| {
             audit_result = Some(output.audit);
@@ -458,6 +458,247 @@ mod tests {
         )
         .unwrap()
         .unwrap()
+    }
+
+    fn call_tool_for_owner(
+        state: Arc<AppState>,
+        session_key: &str,
+        owner_key: &str,
+        id: u64,
+        name: &str,
+        arguments: Value,
+    ) -> Value {
+        let mut caller = caller_for_key(&state, session_key);
+        caller.job_owner_key = owner_key.to_string();
+        handle_json_value_for_context(
+            state,
+            json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": { "name": name, "arguments": arguments }
+            }),
+            &caller,
+        )
+        .unwrap()
+        .unwrap()
+    }
+
+    #[test]
+    fn jobs_can_be_read_from_another_session_with_same_grant() {
+        let state = test_state();
+        let owner = "oauth-grant:first";
+        let other_owner = "oauth-grant:second";
+        let started = call_tool_for_owner(
+            Arc::clone(&state),
+            "session:one",
+            owner,
+            1,
+            "exec",
+            json!({
+                "target":"local",
+                "command":"sleep 0.05; printf cross-session",
+                "yield_time_ms":0
+            }),
+        );
+        let id = started["result"]["structuredContent"]["job_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            started["result"]["structuredContent"]["auto_backgrounded"],
+            true
+        );
+
+        let denied = call_tool_for_owner(
+            Arc::clone(&state),
+            "session:other",
+            other_owner,
+            2,
+            "job",
+            json!({"job_id":id,"action":"status"}),
+        );
+        assert_eq!(denied["result"]["isError"], true);
+        assert!(denied["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("not found"));
+        let hidden = call_tool_for_owner(
+            Arc::clone(&state),
+            "session:other",
+            other_owner,
+            3,
+            "server_info",
+            json!({}),
+        );
+        assert_eq!(hidden["result"]["structuredContent"]["job_ids"], json!([]));
+
+        let visible = call_tool_for_owner(
+            Arc::clone(&state),
+            "session:two",
+            owner,
+            4,
+            "server_info",
+            json!({}),
+        );
+        assert!(visible["result"]["structuredContent"]["job_ids"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(id)));
+
+        let waited = call_tool_for_owner(
+            Arc::clone(&state),
+            "session:three",
+            owner,
+            5,
+            "job",
+            json!({"job_id":id,"action":"wait","wait_ms":5000}),
+        );
+        assert_eq!(waited["result"]["isError"], false);
+        assert_eq!(
+            waited["result"]["structuredContent"]["stdout"],
+            "cross-session"
+        );
+
+        let no_duplicate =
+            call_tool_for_owner(state, "session:four", owner, 6, "target_current", json!({}));
+        assert!(no_duplicate["result"]["structuredContent"]
+            .get("completed_jobs")
+            .is_none());
+    }
+
+    #[test]
+    fn completed_job_inbox_follows_authorization_grant_across_sessions() {
+        let state = test_state();
+        let owner = "oauth-grant:inbox";
+        let started = call_tool_for_owner(
+            Arc::clone(&state),
+            "session:start",
+            owner,
+            1,
+            "exec",
+            json!({
+                "target": "local",
+                "command": "sleep 0.02; printf delivered-across-sessions",
+                "yield_time_ms": 0
+            }),
+        );
+        let id = started["result"]["structuredContent"]["job_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let start = std::time::Instant::now();
+        while !state
+            .jobs
+            .output_for_caller(
+                crate::tooling::job::JobOutputRequest {
+                    job_id: id.clone(),
+                    stdout_since_seq: None,
+                    stderr_since_seq: None,
+                    max_bytes: None,
+                },
+                owner,
+            )
+            .unwrap()
+            .eof
+        {
+            assert!(start.elapsed() < Duration::from_secs(10));
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let unrelated = call_tool_for_owner(
+            Arc::clone(&state),
+            "session:unrelated",
+            "oauth-grant:other",
+            2,
+            "target_current",
+            json!({}),
+        );
+        assert!(unrelated["result"]["structuredContent"]
+            .get("completed_jobs")
+            .is_none());
+
+        let delivered = call_tool_for_owner(
+            Arc::clone(&state),
+            "session:new",
+            owner,
+            3,
+            "target_current",
+            json!({}),
+        );
+        let completed = delivered["result"]["structuredContent"]["completed_jobs"]
+            .as_array()
+            .unwrap();
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0]["job_id"], id);
+        assert_eq!(completed[0]["stdout"], "delivered-across-sessions");
+
+        let once = call_tool_for_owner(
+            state,
+            "session:another",
+            owner,
+            4,
+            "target_current",
+            json!({}),
+        );
+        assert!(once["result"]["structuredContent"]
+            .get("completed_jobs")
+            .is_none());
+    }
+
+    #[test]
+    fn batch_jobs_follow_authorization_grant_across_sessions() {
+        let state = test_state();
+        let owner = "oauth-grant:batch";
+        let started = call_tool_for_owner(
+            Arc::clone(&state),
+            "session:batch-start",
+            owner,
+            1,
+            "exec",
+            json!({
+                "target":"local",
+                "commands":["sleep 0.02; printf batch-ok"],
+                "yield_time_ms":0
+            }),
+        );
+        let id = started["result"]["structuredContent"]["job_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let hidden = call_tool_for_owner(
+            Arc::clone(&state),
+            "session:batch-foreign",
+            "oauth-grant:foreign",
+            2,
+            "server_info",
+            json!({}),
+        );
+        assert_eq!(hidden["result"]["structuredContent"]["job_ids"], json!([]));
+        let denied = call_tool_for_owner(
+            Arc::clone(&state),
+            "session:batch-foreign",
+            "oauth-grant:foreign",
+            3,
+            "job",
+            json!({"job_id":id, "action":"read"}),
+        );
+        assert_eq!(denied["result"]["isError"], true);
+
+        let completed = call_tool_for_owner(
+            state,
+            "session:batch-reconnect",
+            owner,
+            4,
+            "job",
+            json!({"job_id":id,"action":"wait","wait_ms":5000}),
+        );
+        assert_eq!(completed["result"]["isError"], false);
+        assert_eq!(
+            completed["result"]["structuredContent"]["results"][0]["stdout"],
+            "batch-ok"
+        );
     }
 
     #[test]
@@ -1320,7 +1561,9 @@ mod tests {
         let content = b"RULE-SENTINEL: target operations previously required reading this file.\n";
         std::fs::write(&agents, content).unwrap();
         std::fs::write(&config_path, toml::to_string(&original.config).unwrap()).unwrap();
-        let state = Arc::new(AppState::new(Config::load_from_path(&config_path).unwrap()).unwrap());
+        let mut config = Config::load_from_path(&config_path).unwrap();
+        config.server.oauth_state_file = Some(root.join("oauth-state.json"));
+        let state = Arc::new(AppState::new(config).unwrap());
 
         let initialized = initialize(&state, json!({})).unwrap();
         assert!(initialized["instructions"]

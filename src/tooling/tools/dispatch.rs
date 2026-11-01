@@ -45,7 +45,7 @@ pub fn call_tool_with_context(
         ));
     }
     match name {
-        "server_info" => Ok(server_info(&state)),
+        "server_info" => Ok(server_info(&state, caller_key)),
         "target_list" => Ok(json!({ "targets": state.list_targets() })),
         "target_current" => Ok(target_current(&state)),
         "target_select" => target_select(&state, parse(args)?),
@@ -142,10 +142,11 @@ fn parse<T: for<'de> Deserialize<'de>>(value: Value) -> Result<T> {
     serde_json::from_value(value).map_err(Error::Json)
 }
 
-fn server_info(state: &AppState) -> Value {
+fn server_info(state: &AppState, owner_key: &str) -> Value {
     let active_target = state.current_target().map(|target| target.to_string());
-    let mut job_ids = state.jobs.ids();
-    job_ids.extend(state.batches.ids());
+    let mut job_ids = state.jobs.ids_for_caller(owner_key);
+    job_ids.extend(state.batches.ids_for_caller(owner_key));
+    job_ids.sort();
     json!({
         "name": state.config.server.name.clone(),
         "version": state.config.server.version.clone(),

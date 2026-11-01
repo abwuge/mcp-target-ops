@@ -458,8 +458,14 @@ impl JobRegistry {
         })
     }
 
-    pub fn ids(&self) -> Vec<String> {
-        self.sessions.lock().unwrap().keys().cloned().collect()
+    pub fn ids_for_caller(&self, caller_key: &str) -> Vec<String> {
+        self.sessions
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, entry)| entry.caller_key == caller_key)
+            .map(|(id, _)| id.clone())
+            .collect()
     }
 
     pub fn take_completed_for_caller(&self, caller_key: &str) -> Vec<CompletedJobResult> {

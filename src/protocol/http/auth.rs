@@ -39,6 +39,25 @@ pub(super) fn oauth_client_metadata(
     (Some(client.client_id), client.client_name)
 }
 
+// A job belongs to the authenticated authorization grant, not a transient MCP
+// session. Refreshing an OAuth access token retains the same grant ID.
+pub(super) fn job_owner_key(state: &AppState, request: &Request) -> String {
+    let Some(token) = bearer_token(request) else {
+        return "http:anonymous".to_string();
+    };
+    if state.config.server.http_bearer_token.as_deref() == Some(token) {
+        return format!("static-bearer:{}", token_fingerprint(token));
+    }
+    if state.config.server.oauth_enabled {
+        if let Some(grant_id) = state.oauth.lock().unwrap().access_token_grant_id(token) {
+            return format!("oauth-grant:{grant_id}");
+        }
+    }
+    // Validated earlier; a just-expired credential must not inherit another
+    // grant's jobs, even if its MCP session header is reused.
+    format!("bearer:{}", token_fingerprint(token))
+}
+
 pub(super) fn caller_key(request: &Request) -> String {
     if let Some(session_id) = mcp_session_id(request) {
         return format!("session:{session_id}");
@@ -46,8 +65,7 @@ pub(super) fn caller_key(request: &Request) -> String {
     // Current OAuth clients may omit the optional MCP session ID; group their
     // requests by the credential fingerprint without exposing the token.
     if let Some(token) = bearer_token(request) {
-        let digest = Sha256::digest(token.as_bytes());
-        return format!("bearer:{}", hex_bytes(&digest));
+        return format!("bearer:{}", token_fingerprint(token));
     }
     "http:anonymous".to_string()
 }
@@ -73,6 +91,10 @@ fn bearer_token(request: &Request) -> Option<&str> {
             .then(|| bearer_value(header.value.as_str()))
             .flatten()
     })
+}
+
+fn token_fingerprint(token: &str) -> String {
+    hex_bytes(&Sha256::digest(token.as_bytes()))
 }
 
 fn hex_bytes(bytes: &[u8]) -> String {

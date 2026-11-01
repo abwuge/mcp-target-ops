@@ -401,6 +401,12 @@ The 24 advertised MCP tools include **two process interfaces**:
   retain incremental output sequence cursors. Batch groups report per-item
   progress and output while running.
 
+Job ownership follows the authenticated OAuth authorization grant (or a static
+bearer credential), not the transient MCP session. Reconnecting or refreshing
+an OAuth access token does not lose access to that grant's in-memory jobs.
+Other grants cannot query those jobs, and `server_info.job_ids` lists only
+jobs owned by the caller. A service restart still clears in-memory jobs.
+
 ```json
 {"target":"local","commands":["git status --short","git log -1"],"mode":"parallel","yield_time_ms":5000}
 ```

@@ -396,7 +396,13 @@ impl BatchRegistry {
         Ok(Some(Arc::clone(group)))
     }
 
-    pub fn ids(&self) -> Vec<String> {
-        self.entries.lock().unwrap().keys().cloned().collect()
+    pub fn ids_for_caller(&self, caller: &str) -> Vec<String> {
+        self.entries
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, group)| group.caller == caller)
+            .map(|(id, _)| id.clone())
+            .collect()
     }
 }

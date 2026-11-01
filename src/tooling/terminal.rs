@@ -348,6 +348,7 @@ mod tests {
             }),
         );
         config.activity.enabled = false;
+        config.server.oauth_state_file = None;
         let state = AppState::new(config).unwrap();
         let opened = state
             .terminals

@@ -82,12 +82,14 @@ struct AccessToken {
     expires_at: SystemTime,
     #[serde(default)]
     client_id: Option<String>,
+    grant_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct RefreshToken {
     expires_at: SystemTime,
     client_id: String,
+    grant_id: String,
     scopes: Vec<String>,
     resource: String,
 }
@@ -247,6 +249,7 @@ impl OAuthState {
 
         let response = self.issue_token_pair(
             client_id.to_string(),
+            format!("grant_{}", random_url_token(24)),
             code_record.scopes,
             code_record.resource,
             lifetimes,
@@ -311,8 +314,14 @@ impl OAuthState {
         };
 
         self.refresh_tokens.remove(refresh_token);
-        let response =
-            self.issue_token_pair(record.client_id, scopes, record.resource, lifetimes, now);
+        let response = self.issue_token_pair(
+            record.client_id,
+            record.grant_id,
+            scopes,
+            record.resource,
+            lifetimes,
+            now,
+        );
         self.persist_oauth()?;
         Ok(response)
     }
@@ -321,6 +330,11 @@ impl OAuthState {
         self.prune_expired(SystemTime::now());
         let client_id = self.tokens.get(token)?.client_id.as_deref()?;
         self.clients.get(client_id).cloned()
+    }
+
+    pub fn access_token_grant_id(&mut self, token: &str) -> Option<String> {
+        self.prune_expired(SystemTime::now());
+        self.tokens.get(token).map(|record| record.grant_id.clone())
     }
 
     pub fn access_token_valid(&mut self, token: &str) -> bool {
@@ -378,6 +392,7 @@ impl OAuthState {
     fn issue_token_pair(
         &mut self,
         client_id: String,
+        grant_id: String,
         scopes: Vec<String>,
         resource: String,
         lifetimes: TokenLifetimes,
@@ -391,6 +406,7 @@ impl OAuthState {
             AccessToken {
                 expires_at: now + Duration::from_secs(lifetimes.access_token_secs),
                 client_id: Some(client_id.clone()),
+                grant_id: grant_id.clone(),
             },
         );
         self.refresh_tokens.insert(
@@ -398,6 +414,7 @@ impl OAuthState {
             RefreshToken {
                 expires_at: now + Duration::from_secs(lifetimes.refresh_token_secs),
                 client_id,
+                grant_id,
                 scopes: scopes.clone(),
                 resource,
             },
@@ -475,6 +492,7 @@ mod tests {
             .unwrap();
         let tokens = state.issue_token_pair(
             client.client_id.clone(),
+            "grant_for_test".into(),
             vec!["mcp:tools".into()],
             "https://mcp.example.com".into(),
             TokenLifetimes {
@@ -486,6 +504,10 @@ mod tests {
         let found = state.access_token_client(&tokens.access_token).unwrap();
         assert_eq!(found.client_id, client.client_id);
         assert_eq!(found.client_name.as_deref(), Some("Example MCP Desktop"));
+        assert_eq!(
+            state.access_token_grant_id(&tokens.access_token).as_deref(),
+            Some("grant_for_test")
+        );
     }
 
     #[test]
@@ -522,6 +544,7 @@ mod tests {
 
         assert_eq!(token.scope, "mcp:tools");
         assert!(state.access_token_valid(&token.access_token));
+        let original_grant = state.access_token_grant_id(&token.access_token).unwrap();
 
         let refreshed = state
             .exchange_refresh_token(
@@ -537,6 +560,12 @@ mod tests {
             .expect("refresh succeeds");
         assert_ne!(refreshed.refresh_token, token.refresh_token);
         assert!(state.access_token_valid(&refreshed.access_token));
+        assert_eq!(
+            state
+                .access_token_grant_id(&refreshed.access_token)
+                .unwrap(),
+            original_grant
+        );
 
         let err = state
             .exchange_refresh_token(
@@ -596,6 +625,7 @@ mod tests {
         let mut restored = OAuthState::load(Some(path)).unwrap();
         assert!(restored.has_client(&client.client_id));
         assert!(restored.access_token_valid(&token.access_token));
+        let original_grant = restored.access_token_grant_id(&token.access_token).unwrap();
         let refreshed = restored
             .exchange_refresh_token(
                 &token.refresh_token,
@@ -609,6 +639,48 @@ mod tests {
             )
             .expect("refresh token survives restart");
         assert_ne!(refreshed.refresh_token, token.refresh_token);
+        assert_eq!(
+            restored
+                .access_token_grant_id(&refreshed.access_token)
+                .unwrap(),
+            original_grant
+        );
+    }
+
+    #[test]
+    fn different_authorizations_of_same_client_have_separate_grants() {
+        let verifier = "same verifier";
+        let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+        let mut state = OAuthState::load(None).unwrap();
+        let mut grants = Vec::new();
+        for _ in 0..2 {
+            let code = state.issue_authorization_code(
+                AuthorizationCodeRequest {
+                    client_id: "same-client".into(),
+                    redirect_uri: "https://example.test/callback".into(),
+                    code_challenge: challenge.clone(),
+                    code_challenge_method: "S256".into(),
+                    scopes: vec!["mcp:tools".into()],
+                    resource: "https://mcp.example.test".into(),
+                },
+                600,
+            );
+            let tokens = state
+                .exchange_authorization_code(
+                    &code,
+                    "same-client",
+                    "https://example.test/callback",
+                    verifier,
+                    None,
+                    TokenLifetimes {
+                        access_token_secs: 3600,
+                        refresh_token_secs: 3600,
+                    },
+                )
+                .unwrap();
+            grants.push(state.access_token_grant_id(&tokens.access_token).unwrap());
+        }
+        assert_ne!(grants[0], grants[1]);
     }
 
     #[test]

@@ -380,6 +380,11 @@ scope。
 - `job` 根据 `job_id` 管理单任务和任务组，支持 `action=status|read|wait|cancel`，
   默认读取状态和输出。`wait_ms` 控制等待时间，单命令保留增量输出游标。
 
+后台任务归属到已认证的 OAuth 授权（静态 Bearer Token 则归属相应凭证），
+而非短暂的 MCP Session。重新连接或刷新 OAuth Access Token 后，
+同一授权仍可读取内存中的任务；其他授权无法查询。`server_info.job_ids`
+也仅列出当前授权可访问的任务。服务重启仍会清空内存任务。
+
 ```json
 {"target":"local","commands":["git status --short","git log -1"],"mode":"parallel","yield_time_ms":5000}
 ```

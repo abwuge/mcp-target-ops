@@ -88,6 +88,7 @@ fn handle_request(state: Arc<AppState>, mut request: Request) -> Result<()> {
                 .map(|session| format!("session:{session}"))
                 .unwrap_or(fallback_caller_key);
             let mut caller = Caller::from_key(&caller_key, "http");
+            caller.job_owner_key = auth::job_owner_key(&state, &request);
             caller.user_agent = user_agent;
             caller.oauth_client_id = oauth_client_id;
             caller.oauth_client_name = oauth_client_name;

@@ -18,6 +18,7 @@ use std::{
 #[derive(Debug, Clone, Default)]
 pub struct Caller {
     pub key: String,
+    pub job_owner_key: String,
     pub grouping: String,
     pub transport: String,
     pub session_id: Option<String>,
@@ -46,6 +47,7 @@ impl Caller {
                 )
             };
         Self {
+            job_owner_key: stable_key.clone(),
             key: stable_key,
             grouping: grouping.to_string(),
             transport: transport.to_string(),
