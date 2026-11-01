@@ -1,4 +1,3 @@
-use super::FileEntry;
 use crate::{
     core::{
         config::TargetConfig,
@@ -8,13 +7,7 @@ use crate::{
     },
     transport::ssh,
 };
-use serde_json::json;
-use std::{
-    fs,
-    io::Write,
-    path::Path,
-    time::{Duration, UNIX_EPOCH},
-};
+use std::{fs, io::Write, path::Path, time::Duration};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -135,67 +128,6 @@ fn write_local_atomic(path: &str, bytes: &[u8], mode: Option<u32>) -> Result<()>
 
     tmp.persist(path).map_err(|err| Error::Io(err.error))?;
     Ok(())
-}
-
-pub(super) fn list_entries(
-    state: &AppState,
-    target: &TargetId,
-    config: &TargetConfig,
-    path: &str,
-    timeout: Duration,
-) -> Result<Vec<FileEntry>> {
-    match (target, config) {
-        (TargetId::Local, TargetConfig::Local(_)) => list_local(path),
-        (TargetId::Ssh(name), TargetConfig::Ssh(ssh_config)) => {
-            list_remote(state, name, ssh_config, path, timeout)
-        }
-        _ => Err(Error::Target(format!(
-            "target {target} has mismatched config"
-        ))),
-    }
-}
-
-fn list_local(path: &str) -> Result<Vec<FileEntry>> {
-    let mut entries = Vec::new();
-    for entry in fs::read_dir(path)? {
-        let entry = entry?;
-        let meta = fs::symlink_metadata(entry.path())?;
-        let kind = if meta.is_dir() {
-            "dir"
-        } else if meta.is_file() {
-            "file"
-        } else if meta.file_type().is_symlink() {
-            "symlink"
-        } else {
-            "other"
-        };
-        let modified_unix = meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map(|d| d.as_secs());
-        entries.push(FileEntry {
-            name: entry.file_name().to_string_lossy().to_string(),
-            path: entry.path().display().to_string(),
-            kind: kind.to_string(),
-            size: meta.len(),
-            modified_unix,
-        });
-    }
-    entries.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(entries)
-}
-
-fn list_remote(
-    state: &AppState,
-    target_name: &str,
-    ssh_config: &crate::core::config::SshTargetConfig,
-    path: &str,
-    timeout: Duration,
-) -> Result<Vec<FileEntry>> {
-    let value = ssh::list_dir(&state.ssh_sessions, target_name, ssh_config, path, timeout)?;
-    let entries = value.get("entries").cloned().unwrap_or_else(|| json!([]));
-    serde_json::from_value::<Vec<FileEntry>>(entries).map_err(Error::Json)
 }
 
 #[cfg(test)]

@@ -96,9 +96,6 @@ pub(super) fn output_schema(name: &str) -> Value {
             "required": ["server", "tool", "result"],
             "additionalProperties": false
         }),
-        "job" | "read" | "write" => {
-            json!({"type":"object","properties":{}, "required":[],"additionalProperties":false})
-        }
         "exec" => json!({
             "type": "object",
             "properties": {
@@ -115,400 +112,6 @@ pub(super) fn output_schema(name: &str) -> Value {
                 "timed_out": { "type": "boolean" }
             },
             "required": ["resolved_target"],
-            "additionalProperties": false
-        }),
-        "exec_batch" => json!({
-            "type": "object",
-            "properties": {
-                "resolved_target": resolved_target_schema(),
-                "mode": { "type": "string", "enum": ["sequential", "parallel"] },
-                "requested_count": { "type": "integer", "minimum": 1 },
-                "executed_count": { "type": "integer", "minimum": 0 },
-                "succeeded": { "type": "integer", "minimum": 0 },
-                "failed": { "type": "integer", "minimum": 0 },
-                "timed_out": { "type": "integer", "minimum": 0 },
-                "stopped_early": { "type": "boolean" },
-                "results": {
-                    "type": "array",
-                    "items": exec_batch_item_schema()
-                }
-            },
-            "required": ["resolved_target", "mode", "requested_count", "executed_count", "succeeded", "failed", "timed_out", "stopped_early", "results"],
-            "additionalProperties": false
-        }),
-        "exec_start" => json!({
-            "type": "object",
-            "properties": {
-                "resolved_target": resolved_target_schema(),
-                "job_id": { "type": "string" },
-                "status": { "type": "string", "enum": ["running"] }
-            },
-            "required": ["resolved_target", "job_id", "status"],
-            "additionalProperties": false
-        }),
-        "job_poll" => json!({
-            "type": "object",
-            "properties": {
-                "job_id": { "type": "string" },
-                "target": { "type": "string" },
-                "status": { "type": "string", "enum": ["running", "completed", "failed", "cancelled", "timed_out"] },
-                "exit_code": nullable_integer_schema(),
-                "elapsed_ms": { "type": "integer", "minimum": 0 },
-                "timed_out": { "type": "boolean" },
-                "cancel_requested": { "type": "boolean" }
-            },
-            "required": ["job_id", "target", "status", "elapsed_ms", "timed_out", "cancel_requested"],
-            "additionalProperties": false
-        }),
-        "job_output" => json!({
-            "type": "object",
-            "properties": {
-                "job_id": { "type": "string" },
-                "target": { "type": "string" },
-                "status": { "type": "string", "enum": ["running", "completed", "failed", "cancelled", "timed_out"] },
-                "exit_code": nullable_integer_schema(),
-                "elapsed_ms": { "type": "integer", "minimum": 0 },
-                "timed_out": { "type": "boolean" },
-                "stdout_from_seq": { "type": "integer", "minimum": 0 },
-                "stdout_next_seq": { "type": "integer", "minimum": 0 },
-                "stdout": { "type": "string" },
-                "stdout_truncated": { "type": "boolean" },
-                "stderr_from_seq": { "type": "integer", "minimum": 0 },
-                "stderr_next_seq": { "type": "integer", "minimum": 0 },
-                "stderr": { "type": "string" },
-                "stderr_truncated": { "type": "boolean" },
-                "eof": { "type": "boolean" }
-            },
-            "required": ["job_id", "target", "status", "elapsed_ms", "timed_out", "stdout_from_seq", "stdout_next_seq", "stdout", "stdout_truncated", "stderr_from_seq", "stderr_next_seq", "stderr", "stderr_truncated", "eof"],
-            "additionalProperties": false
-        }),
-        "job_wait" => json!({
-            "type": "object",
-            "properties": {
-                "job_id": { "type": "string" },
-                "target": { "type": "string" },
-                "status": { "type": "string", "enum": ["running", "completed", "failed", "cancelled", "timed_out"] },
-                "exit_code": nullable_integer_schema(),
-                "elapsed_ms": { "type": "integer", "minimum": 0 },
-                "timed_out": { "type": "boolean" },
-                "stdout_from_seq": { "type": "integer", "minimum": 0 },
-                "stdout_next_seq": { "type": "integer", "minimum": 0 },
-                "stdout": { "type": "string" },
-                "stdout_truncated": { "type": "boolean" },
-                "stderr_from_seq": { "type": "integer", "minimum": 0 },
-                "stderr_next_seq": { "type": "integer", "minimum": 0 },
-                "stderr": { "type": "string" },
-                "stderr_truncated": { "type": "boolean" },
-                "eof": { "type": "boolean" },
-                "wait_timed_out": { "type": "boolean" },
-                "next_action": { "type": "string" }
-            },
-            "required": ["job_id", "target", "status", "elapsed_ms", "timed_out", "stdout_from_seq", "stdout_next_seq", "stdout", "stdout_truncated", "stderr_from_seq", "stderr_next_seq", "stderr", "stderr_truncated", "eof", "wait_timed_out"],
-            "additionalProperties": false
-        }),
-        "job_cancel" => json!({
-            "type": "object",
-            "properties": {
-                "job_id": { "type": "string" },
-                "cancel_requested": { "type": "boolean" },
-                "status": { "type": "string", "enum": ["running", "completed", "failed", "cancelled", "timed_out"] }
-            },
-            "required": ["job_id", "cancel_requested", "status"],
-            "additionalProperties": false
-        }),
-        "file_read" => json!({
-            "type": "object",
-            "properties": {
-                "resolved_target": resolved_target_schema(),
-                "path": { "type": "string" },
-                "encoding": { "type": "string", "enum": ["utf-8", "base64"] },
-                "content": { "type": "string" },
-                "sha256": { "type": "string" },
-                "bytes": { "type": "integer", "minimum": 0 },
-                "truncated": { "type": "boolean" },
-                "start_line": { "type": "integer", "minimum": 1 },
-                "end_line": { "type": "integer", "minimum": 0 },
-                "requested_count": { "type": "integer", "minimum": 1 },
-                "succeeded": { "type": "integer", "minimum": 0 },
-                "failed": { "type": "integer", "minimum": 0 },
-                "files": {
-                    "type": "array",
-                    "items": file_read_batch_item_schema()
-                }
-            },
-            "required": ["resolved_target", "truncated"],
-            "additionalProperties": false
-        }),
-        "file_backup" => json!({
-            "type": "object",
-            "properties": {
-                "resolved_target": resolved_target_schema(),
-                "backup": file_backup_entry_schema()
-            },
-            "required": ["resolved_target", "backup"],
-            "additionalProperties": false
-        }),
-        "file_backup_list" => json!({
-            "type": "object",
-            "properties": {
-                "resolved_target": resolved_target_schema(),
-                "backups": {
-                    "type": "array",
-                    "items": file_backup_entry_schema()
-                },
-                "total_matches": { "type": "integer", "minimum": 0 },
-                "truncated": { "type": "boolean" }
-            },
-            "required": ["resolved_target", "backups", "total_matches", "truncated"],
-            "additionalProperties": false
-        }),
-        "file_restore" => json!({
-            "type": "object",
-            "properties": {
-                "resolved_target": resolved_target_schema(),
-                "backup_id": { "type": "string" },
-                "source_path": { "type": "string" },
-                "path": { "type": "string" },
-                "created": { "type": "boolean" },
-                "restored": { "type": "boolean" },
-                "previous_sha256": { "type": "string" },
-                "restored_sha256": { "type": "string" },
-                "bytes": { "type": "integer", "minimum": 0 },
-                "mode": { "type": "string" },
-                "backup_expires_at_unix_secs": { "type": "integer", "minimum": 0 }
-            },
-            "required": ["resolved_target", "backup_id", "source_path", "path", "created", "restored", "restored_sha256", "bytes", "backup_expires_at_unix_secs"],
-            "additionalProperties": false
-        }),
-        "file_backup_delete" => json!({
-            "type": "object",
-            "properties": {
-                "resolved_target": resolved_target_schema(),
-                "backup_id": { "type": "string" },
-                "path": { "type": "string" },
-                "deleted": { "type": "boolean" }
-            },
-            "required": ["resolved_target", "backup_id", "path", "deleted"],
-            "additionalProperties": false
-        }),
-        "file_list" => json!({
-            "type": "object",
-            "properties": {
-                "resolved_target": resolved_target_schema(),
-                "path": { "type": "string" },
-                "entries": {
-                    "type": "array",
-                    "items": file_entry_schema()
-                }
-            },
-            "required": ["resolved_target", "path", "entries"],
-            "additionalProperties": false
-        }),
-        "file_edit" => json!({
-            "type": "object",
-            "properties": {
-                "resolved_target": resolved_target_schema(),
-                "path": { "type": "string" },
-                "changed": { "type": "boolean" },
-                "written": { "type": "boolean" },
-                "old_sha256": { "type": "string" },
-                "new_sha256": { "type": "string" },
-                "diff": { "type": "string" }
-            },
-            "required": ["resolved_target", "path", "changed", "written", "old_sha256", "new_sha256", "diff"],
-            "additionalProperties": false
-        }),
-        "file_write" => json!({
-            "type": "object",
-            "properties": {
-                "resolved_target": resolved_target_schema(),
-                "path": { "type": "string" },
-                "created": { "type": "boolean" },
-                "written": { "type": "boolean" },
-                "old_sha256": nullable_string_schema(),
-                "new_sha256": { "type": "string" },
-                "bytes": { "type": "integer", "minimum": 0 },
-                "encoding": { "type": "string", "enum": ["utf-8", "base64"] },
-                "diff": { "type": "string" }
-            },
-            "required": ["resolved_target", "path", "created", "written", "new_sha256", "bytes", "encoding", "diff"],
-            "additionalProperties": false
-        }),
-        "file_delete" => json!({
-            "type": "object",
-            "properties": {
-                "resolved_target": resolved_target_schema(),
-                "path": { "type": "string" },
-                "deleted": { "type": "boolean" },
-                "written": { "type": "boolean" },
-                "old_sha256": { "type": "string" },
-                "bytes": { "type": "integer", "minimum": 0 },
-                "encoding": { "type": "string", "enum": ["utf-8", "base64"] },
-                "content": { "type": "string" }
-            },
-            "required": ["resolved_target", "path", "deleted", "written", "old_sha256", "bytes", "encoding", "content"],
-            "additionalProperties": false
-        }),
-        "file_import" => json!({
-            "type": "object",
-            "properties": {
-                "source": {
-                    "type": "object",
-                    "properties": {
-                        "kind": { "type": "string", "enum": ["download_url", "local_path"] },
-                        "file_name": { "type": "string" },
-                        "mime_type": { "type": "string" },
-                        "bytes": { "type": "integer", "minimum": 0 },
-                        "sha256": { "type": "string" }
-                    },
-                    "required": ["kind", "bytes", "sha256"],
-                    "additionalProperties": false
-                },
-                "resolved_target": resolved_target_schema(),
-                "path": { "type": "string" },
-                "created": { "type": "boolean" },
-                "written": { "type": "boolean" },
-                "old_sha256": nullable_string_schema(),
-                "new_sha256": { "type": "string" },
-                "bytes": { "type": "integer", "minimum": 0 },
-                "encoding": { "type": "string", "enum": ["utf-8", "base64"] },
-                "diff": { "type": "string" }
-            },
-            "required": ["source", "resolved_target", "path", "created", "written", "new_sha256", "bytes", "encoding", "diff"],
-            "additionalProperties": false
-        }),
-        "file_export" => json!({
-            "type": "object",
-            "properties": {
-                "resolved_target": resolved_target_schema(),
-                "path": { "type": "string" },
-                "delivery": { "type": "string", "enum": ["link", "attachment"] },
-                "file": {
-                    "type": "object",
-                    "properties": {
-                        "file_name": { "type": "string" },
-                        "mime_type": { "type": "string" },
-                        "bytes": { "type": "integer", "minimum": 0 },
-                        "sha256": { "type": "string" }
-                    },
-                    "required": ["file_name", "mime_type", "bytes", "sha256"],
-                    "additionalProperties": false
-                },
-                "download": {
-                    "type": "object",
-                    "properties": {
-                        "url": { "type": "string" },
-                        "file_name": { "type": "string" },
-                        "mime_type": { "type": "string" },
-                        "bytes": { "type": "integer", "minimum": 0 },
-                        "sha256": { "type": "string" },
-                        "expires_at_unix_secs": { "type": "integer", "minimum": 0 },
-                        "single_use": { "type": "boolean" }
-                    },
-                    "required": ["url", "file_name", "mime_type", "bytes", "sha256", "expires_at_unix_secs", "single_use"],
-                    "additionalProperties": false
-                }
-            },
-            "required": ["resolved_target", "path", "delivery"],
-            "additionalProperties": false
-        }),
-        "file_transfer" => json!({
-            "type": "object",
-            "properties": {
-                "source_target": { "type": "string" },
-                "source_path": { "type": "string" },
-                "destination_target": { "type": "string" },
-                "destination_path": { "type": "string" },
-                "method": { "type": "string", "enum": ["rsync", "scp"] },
-                "direction": { "type": "string", "enum": ["push", "pull"] },
-                "direct": { "type": "boolean" },
-                "transferred": { "type": "boolean" }
-            },
-            "required": ["source_target", "source_path", "destination_target", "destination_path", "method", "direction", "direct", "transferred"],
-            "additionalProperties": false
-        }),
-        "file_patch" => json!({
-            "type": "object",
-            "properties": {
-                "resolved_target": resolved_target_schema(),
-                "path": { "type": "string" },
-                "changed": { "type": "boolean" },
-                "written": { "type": "boolean" },
-                "old_sha256": nullable_string_schema(),
-                "new_sha256": nullable_string_schema(),
-                "files": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "path": { "type": "string" },
-                            "changed": { "type": "boolean" },
-                            "written": { "type": "boolean" },
-                            "old_sha256": { "type": "string" },
-                            "new_sha256": { "type": "string" }
-                        },
-                        "required": ["path", "changed", "written", "old_sha256", "new_sha256"],
-                        "additionalProperties": false
-                    }
-                }
-            },
-            "required": ["resolved_target", "path", "changed", "written", "old_sha256", "new_sha256", "files"],
-            "additionalProperties": false
-        }),
-        "file_find" => json!({
-            "type": "object",
-            "properties": {
-                "resolved_target": resolved_target_schema(),
-                "path": { "type": "string" },
-                "sha256": { "type": "string" },
-                "matches": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "line": { "type": "integer", "minimum": 1 },
-                            "text": { "type": "string" },
-                            "before": string_array_schema(),
-                            "after": string_array_schema()
-                        },
-                        "required": ["line", "text", "before", "after"],
-                        "additionalProperties": false
-                    }
-                },
-                "truncated": { "type": "boolean" }
-            },
-            "required": ["resolved_target", "path", "sha256", "matches", "truncated"],
-            "additionalProperties": false
-        }),
-        "file_move" => json!({
-            "type": "object",
-            "properties": {
-                "resolved_target": resolved_target_schema(),
-                "source": { "type": "string" },
-                "destination": { "type": "string" },
-                "moved": { "type": "boolean" }
-            },
-            "required": ["resolved_target", "source", "destination", "moved"],
-            "additionalProperties": false
-        }),
-        "file_chmod" => json!({
-            "type": "object",
-            "properties": {
-                "resolved_target": resolved_target_schema(),
-                "path": { "type": "string" },
-                "mode": { "type": "string" }
-            },
-            "required": ["resolved_target", "path", "mode"],
-            "additionalProperties": false
-        }),
-        "directory_create" => json!({
-            "type": "object",
-            "properties": {
-                "resolved_target": resolved_target_schema(),
-                "path": { "type": "string" },
-                "created": { "type": "boolean" }
-            },
-            "required": ["resolved_target", "path", "created"],
             "additionalProperties": false
         }),
         "terminal_open" => json!({
@@ -545,7 +148,6 @@ pub(super) fn output_schema(name: &str) -> Value {
             "required": ["terminal_id", "target", "from_seq", "next_seq", "output", "truncated", "eof"],
             "additionalProperties": false
         }),
-        "terminal_resize" => terminal_size_schema(),
         "terminal_close" => json!({
             "type": "object",
             "properties": {
@@ -555,12 +157,13 @@ pub(super) fn output_schema(name: &str) -> Value {
             "required": ["terminal_id", "closed"],
             "additionalProperties": false
         }),
+        "job" => job_result_schema(),
         _ => unreachable!("output schema missing for tool {name}"),
     };
 
     match name {
         "exec" => {
-            let batch = output_schema("exec_batch");
+            let batch = batch_result_schema();
             for (key, value) in batch["properties"].as_object().unwrap() {
                 schema["properties"][key] = value.clone();
             }
@@ -577,7 +180,7 @@ pub(super) fn output_schema(name: &str) -> Value {
             schema["properties"]["elapsed_ms"] = json!({"type":"integer"});
         }
         "job" => {
-            schema = output_schema("job_wait");
+            schema = job_result_schema();
             schema["properties"]["results"] =
                 json!({"type":"array","items":exec_batch_item_schema()});
             schema["properties"]["kind"] = json!({"type":"string"});
@@ -595,28 +198,6 @@ pub(super) fn output_schema(name: &str) -> Value {
                 json!({"oneOf":[{"type":"boolean"},{"type":"integer"}]});
             schema["required"] = json!(["job_id", "status"]);
         }
-        "read" => {
-            schema = output_schema("file_read");
-            schema["properties"]["pattern"] = json!({"type":"string"});
-            schema["properties"]["match_count"] = json!({"type":"integer"});
-            schema["properties"]["results"] = json!({"type":"array","items":{"type":"object"}});
-            schema["properties"]["timed_out"] = json!({"type":"boolean"});
-        }
-        "write" => {
-            schema = output_schema("file_write");
-            let patch = output_schema("file_patch");
-            for (key, value) in patch["properties"].as_object().unwrap() {
-                schema["properties"][key] = value.clone();
-            }
-            schema["required"] = json!(["resolved_target", "path", "written"]);
-        }
-        "file_restore" => {
-            let listing = output_schema("file_backup_list");
-            for (key, value) in listing["properties"].as_object().unwrap() {
-                schema["properties"][key] = value.clone();
-            }
-            schema["required"] = json!(["resolved_target"]);
-        }
         _ => {}
     }
 
@@ -625,6 +206,55 @@ pub(super) fn output_schema(name: &str) -> Value {
         "items": completed_job_schema()
     });
     schema
+}
+
+fn batch_result_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "resolved_target": resolved_target_schema(),
+            "mode": { "type": "string", "enum": ["sequential", "parallel"] },
+            "requested_count": { "type": "integer", "minimum": 1 },
+            "executed_count": { "type": "integer", "minimum": 0 },
+            "succeeded": { "type": "integer", "minimum": 0 },
+            "failed": { "type": "integer", "minimum": 0 },
+            "timed_out": { "type": "integer", "minimum": 0 },
+            "stopped_early": { "type": "boolean" },
+            "results": {
+                "type": "array",
+                "items": exec_batch_item_schema()
+            }
+        },
+        "required": ["resolved_target", "mode", "requested_count", "executed_count", "succeeded", "failed", "timed_out", "stopped_early", "results"],
+        "additionalProperties": false
+    })
+}
+
+fn job_result_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "job_id": { "type": "string" },
+            "target": { "type": "string" },
+            "status": { "type": "string", "enum": ["running", "completed", "failed", "cancelled", "timed_out"] },
+            "exit_code": nullable_integer_schema(),
+            "elapsed_ms": { "type": "integer", "minimum": 0 },
+            "timed_out": { "type": "boolean" },
+            "stdout_from_seq": { "type": "integer", "minimum": 0 },
+            "stdout_next_seq": { "type": "integer", "minimum": 0 },
+            "stdout": { "type": "string" },
+            "stdout_truncated": { "type": "boolean" },
+            "stderr_from_seq": { "type": "integer", "minimum": 0 },
+            "stderr_next_seq": { "type": "integer", "minimum": 0 },
+            "stderr": { "type": "string" },
+            "stderr_truncated": { "type": "boolean" },
+            "eof": { "type": "boolean" },
+            "wait_timed_out": { "type": "boolean" },
+            "next_action": { "type": "string" }
+        },
+        "required": ["job_id", "target", "status", "elapsed_ms", "timed_out", "stdout_from_seq", "stdout_next_seq", "stdout", "stdout_truncated", "stderr_from_seq", "stderr_next_seq", "stderr", "stderr_truncated", "eof", "wait_timed_out"],
+        "additionalProperties": false
+    })
 }
 
 fn completed_job_schema() -> Value {
@@ -643,46 +273,6 @@ fn completed_job_schema() -> Value {
             "stderr_truncated": { "type": "boolean" }
         },
         "required": ["job_id", "target", "status", "elapsed_ms", "timed_out", "stdout_truncated", "stderr_truncated"],
-        "additionalProperties": false
-    })
-}
-
-fn file_backup_entry_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "backup_id": { "type": "string" },
-            "target": { "type": "string" },
-            "path": { "type": "string" },
-            "sha256": { "type": "string" },
-            "bytes": { "type": "integer", "minimum": 0 },
-            "mode": { "type": "string" },
-            "created_at_unix_secs": { "type": "integer", "minimum": 0 },
-            "expires_at_unix_secs": { "type": "integer", "minimum": 0 },
-            "note": { "type": "string" }
-        },
-        "required": ["backup_id", "target", "path", "sha256", "bytes", "created_at_unix_secs", "expires_at_unix_secs"],
-        "additionalProperties": false
-    })
-}
-
-fn file_read_batch_item_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "index": { "type": "integer", "minimum": 0 },
-            "path": { "type": "string" },
-            "success": { "type": "boolean" },
-            "encoding": { "type": "string", "enum": ["utf-8", "base64"] },
-            "content": { "type": "string" },
-            "sha256": { "type": "string" },
-            "bytes": { "type": "integer", "minimum": 0 },
-            "truncated": { "type": "boolean" },
-            "start_line": { "type": "integer", "minimum": 1 },
-            "end_line": { "type": "integer", "minimum": 0 },
-            "error": { "type": "string" }
-        },
-        "required": ["index", "path", "success"],
         "additionalProperties": false
     })
 }
@@ -782,34 +372,6 @@ fn connection_schema(status_field: &str) -> Value {
         "type": "object",
         "properties": properties,
         "required": ["resolved_target", status_field],
-        "additionalProperties": false
-    })
-}
-
-fn file_entry_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "name": { "type": "string" },
-            "path": { "type": "string" },
-            "kind": { "type": "string" },
-            "size": { "type": "integer", "minimum": 0 },
-            "modified_unix": nullable_integer_schema()
-        },
-        "required": ["name", "path", "kind", "size", "modified_unix"],
-        "additionalProperties": false
-    })
-}
-
-fn terminal_size_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "terminal_id": { "type": "string" },
-            "rows": { "type": "integer", "minimum": 0 },
-            "cols": { "type": "integer", "minimum": 0 }
-        },
-        "required": ["terminal_id", "rows", "cols"],
         "additionalProperties": false
     })
 }

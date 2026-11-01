@@ -2,7 +2,7 @@
 
 **A policy-gated MCP control plane for local and SSH hosts.**
 
-**English** · [简体中文](README.zh-CN.md) · [Compatibility debt](COMPATIBILITY.md)
+**English** · [简体中文](README.zh-CN.md)
 
 Target Ops is a self-contained Rust server that lets MCP clients run commands,
 manage files, stream background jobs, and open persistent terminals on the
@@ -225,7 +225,6 @@ Process-wide runtime behavior lives under `[runtime]`:
 | `job_wait_default_timeout_ms` | `60000` | Default server-side `job_wait` window |
 | `job_wait_max_timeout_ms` | `120000` | Maximum server-side `job_wait` window |
 | `file_transfer_default_max_bytes` | `26214400` | Default `file_import` / `file_export` transfer limit |
-| `file_export_delivery` | `link` | Default `file_export` delivery: temporary download link or legacy attachment |
 | `file_export_link_ttl_secs` | `600` | Default link lifetime; hard maximum is 86400 seconds |
 | `file_export_link_single_use` | `false` | Consume a link after the first successful GET; disabled by default to tolerate prefetching |
 | `file_download_timeout_ms` | `30000` | Default HTTPS connector-file download timeout |
@@ -405,19 +404,16 @@ restores a selected snapshot otherwise. `terminal_send` accepts optional
 `rows` and `cols` together to resize a live PTY.
 
 **Compact MCP results:** `file_edit` returns `changed`, `written`, and a
-short `revision`: the first 24 hexadecimal digits of SHA-256 (96 bits).
+short `revision`: the first seven hexadecimal digits of SHA-256 (28 bits).
 Both `write` and file content `read` also return this revision, enabling
 guarded follow-up edits through `expected_revision` without another read.
-The full `expected_sha256` input remains supported.
+A revision contains exactly seven lowercase hexadecimal characters.
 
 Other operations omit echoed diffs, full old/new hashes, and deleted contents.
 Request `include_diff=true` or `include_sha256=true` for details;
 `file_delete` supports `include_content=true`. A dry run includes its
 computed diff when available. Audit records still contain full operation
 details for the Dashboard.
-
-The underlying server still accepts a selection of legacy tool names for
-existing MCP clients, but the new tool list exposes only the simplified APIs.
 
 Both command tools accept `secret_env`. A value may come from a text file or a
 dot-selected scalar in TOML or JSON:
@@ -442,27 +438,11 @@ command can still reveal it by printing or transmitting its environment.
 
 ### File safety and patching
 
-- `read` returns a short SHA-256 `revision` by default (full digest with `include_sha256=true`) and supports 1-based UTF-8 line ranges. It accepts either legacy single `path` mode or up to 32 independent `files[]` reads in one call; repeating a path with different ranges reads multiple ranges efficiently. Batch failures are isolated per item and the batch shares one bounded output budget.
-- `file_find` performs bounded literal matching with optional context.
-- `file_write` is atomic. Replacing an existing file requires
-  `expected_sha256` or `overwrite = true`.
-- `file_edit`, single-file `file_patch`, and `file_delete` support SHA-256
-  compare-and-swap guards and dry-run/preview behavior where applicable.
-- Existing Unix modes are preserved unless a new mode is supplied.
-- `file_delete` refuses directories and returns the deletion outcome by default;
-  set `include_content=true` to retrieve the original contents, including for a dry run.
-- Multi-file `file_patch` treats `path` as a base directory, validates all UTF-8
-  inputs before writing, rejects paths that escape the base, and rolls back
-  earlier writes if a later write fails. Multi-file create, delete, and rename
-  sections are intentionally rejected.
-- `file_move` does not overwrite by default; `file_chmod` and
-  `directory_create` use the same write policy as other mutations.
-- `file_transfer` copies one regular file between two explicit, different
-  targets. It prefers `rsync` and falls back to `scp`. For SSH-to-SSH copies,
-  the file data travels directly between the two target machines: Target Ops
-  tries source-side push and destination-side pull, and never stages the file on
-  the plugin host. At least one remote side must therefore be able to
-  authenticate non-interactively to the other for a direct SSH-to-SSH copy.
+- `read` supports a single `path` or up to 32 independent `files[]` reads, including 1-based UTF-8 line ranges. Successful reads include the seven-character `revision` for guarded changes.
+- `write` creates or atomically replaces a file using `content`, or applies a unified `patch` (single or multi-file). Replacing a file requires `expected_revision` or `overwrite=true`.
+- `file_edit` performs exact text replacements; `file_delete` rejects directories. Both accept `expected_revision` to reject stale edits. Dry runs are supported where applicable.
+- Existing Unix permissions are preserved unless explicitly replaced. A multi-file patch validates paths and text before writing and rolls back earlier writes when a later write fails.
+- `file_transfer` copies a regular file between two targets using rsync or scp, directly between hosts when both sides are SSH targets.
 
 ### Managed rollback snapshots
 
@@ -479,15 +459,12 @@ optional short note. `file_backup` defaults to a 24-hour TTL; callers may reques
 a different TTL up to the configured maximum (30 days by default). On Unix the
 backup directories are mode 0700 and payload/metadata files are mode 0600.
 
-`file_backup_list` discovers still-valid snapshots after the caller has lost the
-original tool result or conversation context. It returns the newest 100 matches by
+`file_restore` without a `backup_id` lists still-valid snapshots. It returns the newest 100 matches by
 default, accepts `limit` up to 200, and reports `total_matches` plus `truncated`.
 `file_restore` restores either to
 the original path or an explicit destination and verifies backup integrity first.
-Restoring over an existing file requires either `expected_current_sha256` or an
-explicit `overwrite = true`; the original mode is reapplied where supported.
-`file_backup_delete` removes an individual snapshot early without touching its
-source file.
+Restoring over an existing file requires `expected_revision` or explicit
+`overwrite=true`; the original mode is reapplied where supported.
 
 Expired snapshots are made unavailable by backup operations immediately and are
 physically removed at server startup, by a background cleanup worker (every 60
@@ -529,10 +506,6 @@ rejected, and staged exports are purged whenever the service starts.
 
 Link delivery requires `server.public_base_url`; HTTPS is required except for
 localhost testing. Treat the opaque download URL as short-lived sensitive data.
-`delivery = "attachment"` preserves the original MCP embedded-resource and
-ChatGPT file-output path for compatibility. Only attachment mode emits the
-embedded base64 resource and `file` result field, while link mode returns download
-metadata only.
 
 Both import and export use `runtime.file_transfer_default_max_bytes` (25 MiB by
 default) and retain a compiled 100 MiB hard maximum.
@@ -618,7 +591,7 @@ Session attribution is best effort:
 - stdio events are grouped by server process, not by conversation.
 
 **Command audit (enabled by default):** every new MCP `tools/call` stores
-the actual shell command(s) for `exec`, `exec_start`, and `exec_batch`,
+the actual shell command(s) for `exec`,
 the working directory, input arguments, and the tool's structured result
 (including stdout/stderr, exit status and job IDs where available). Other file,
 terminal, and downstream MCP tools also retain their bounded request/response
@@ -682,7 +655,7 @@ state.
 | `GET /health` | Public health status |
 | `GET /favicon.ico` | Public application icon |
 | `GET /downloads/<token>` | Temporary `file_export` download addressed by its opaque token |
-| `POST /` or `POST /mcp` | MCP JSON-RPC; protected when auth is configured |
+| `POST /mcp` | MCP JSON-RPC; protected when auth is configured |
 | `DELETE /mcp` | Acknowledge MCP session close; protected when auth is configured |
 | `/.well-known/oauth-protected-resource` | OAuth resource metadata when OAuth is enabled |
 | `/.well-known/oauth-authorization-server` | OAuth authorization metadata when enabled |

@@ -84,20 +84,6 @@ pub struct TerminalReadResponse {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct TerminalResizeRequest {
-    pub terminal_id: String,
-    pub rows: u16,
-    pub cols: u16,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct TerminalResizeResponse {
-    pub terminal_id: String,
-    pub rows: u16,
-    pub cols: u16,
-}
-
-#[derive(Debug, Clone, Deserialize)]
 pub struct TerminalCloseRequest {
     pub terminal_id: String,
 }
@@ -307,26 +293,6 @@ impl TerminalRegistry {
             output: String::from_utf8_lossy(&output).to_string(),
             truncated,
             eof,
-        })
-    }
-
-    pub fn resize(&self, req: TerminalResizeRequest) -> Result<TerminalResizeResponse> {
-        let session = self.get(&req.terminal_id)?;
-        session
-            .master
-            .lock()
-            .unwrap()
-            .resize(PtySize {
-                rows: req.rows,
-                cols: req.cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|err| Error::Terminal(err.to_string()))?;
-        Ok(TerminalResizeResponse {
-            terminal_id: req.terminal_id,
-            rows: req.rows,
-            cols: req.cols,
         })
     }
 

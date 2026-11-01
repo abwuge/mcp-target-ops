@@ -7,24 +7,14 @@ use crate::{
         target::{ResolvedTarget, TargetId, TargetSource},
     },
     tooling::{
-        command_api,
-        exec::{self, ExecBatchRequest},
-        file_api,
-        file_backup::{self, FileBackupDeleteRequest, FileBackupListRequest, FileBackupRequest},
+        command_api, file_api,
+        file_backup::{self, FileBackupRequest},
         file_bridge::{self, FileExportRequest, FileImportRequest},
         file_transfer::{self, FileTransferRequest},
-        fs::{
-            self, DirectoryCreateRequest, FileChmodRequest, FileDeleteRequest, FileEditRequest,
-            FileFindRequest, FileListRequest, FileMoveRequest, FilePatchRequest, FileReadRequest,
-            FileWriteRequest,
-        },
-        job::{
-            ExecStartRequest, JobCancelRequest, JobOutputRequest, JobPollRequest, JobWaitRequest,
-        },
+        fs::{self, FileDeleteRequest, FileEditRequest},
         mcp_client,
         terminal::{
-            TerminalCloseRequest, TerminalOpenRequest, TerminalReadRequest, TerminalResizeRequest,
-            TerminalSendRequest,
+            TerminalCloseRequest, TerminalOpenRequest, TerminalReadRequest, TerminalSendRequest,
         },
     },
     transport::ssh,
@@ -40,6 +30,20 @@ pub fn call_tool_with_context(
     caller_key: &str,
 ) -> Result<Value> {
     let _ = state.backups.maybe_cleanup();
+    if matches!(
+        name,
+        "file_edit" | "write" | "file_delete" | "file_import" | "file_restore"
+    ) && (args.get("expected_sha256").is_some() || args.get("expected_current_sha256").is_some())
+    {
+        return Err(Error::Tool(
+            "unsupported version guard; use expected_revision".into(),
+        ));
+    }
+    if name == "file_export" && args.get("delivery").is_some() {
+        return Err(Error::Tool(
+            "file_export only returns HTTPS download links; omit delivery".into(),
+        ));
+    }
     match name {
         "server_info" => Ok(server_info(&state)),
         "target_list" => Ok(json!({ "targets": state.list_targets() })),
@@ -65,68 +69,17 @@ pub fn call_tool_with_context(
         }
         "exec" => command_api::execute(Arc::clone(&state), args, caller_key),
         "job" => command_api::job(Arc::clone(&state), args, caller_key),
-        // COMPAT(COMPAT-011): Accept cached pre-migration tool names without advertising
-        // them in tools/list; remove after old MCP clients have reconnected.
-        "exec_batch" => Ok(serde_json::to_value(exec::run_batch(
-            &state,
-            parse::<ExecBatchRequest>(args)?,
-        )?)?),
-        "exec_start" => Ok(serde_json::to_value(state.jobs.start_for_caller(
-            &state,
-            parse::<ExecStartRequest>(args)?,
-            caller_key,
-        )?)?),
-        "job_poll" => Ok(serde_json::to_value(
-            state
-                .jobs
-                .poll_for_caller(parse::<JobPollRequest>(args)?, caller_key)?,
-        )?),
-        "job_output" => Ok(serde_json::to_value(
-            state
-                .jobs
-                .output_for_caller(parse::<JobOutputRequest>(args)?, caller_key)?,
-        )?),
-        "job_wait" => Ok(serde_json::to_value(
-            state
-                .jobs
-                .wait_for_caller(parse::<JobWaitRequest>(args)?, caller_key)?,
-        )?),
-        "job_cancel" => Ok(serde_json::to_value(
-            state
-                .jobs
-                .cancel_for_caller(parse::<JobCancelRequest>(args)?, caller_key)?,
-        )?),
         "read" => file_api::read(&state, args),
-        "file_read" => Ok(serde_json::to_value(fs::read(
-            &state,
-            parse::<FileReadRequest>(args)?,
-        )?)?),
         "file_backup" => Ok(serde_json::to_value(file_backup::create(
             &state,
             parse::<FileBackupRequest>(args)?,
         )?)?),
-        "file_backup_list" => Ok(serde_json::to_value(file_backup::list(
-            &state,
-            parse::<FileBackupListRequest>(args)?,
-        )?)?),
         "file_restore" => file_api::restore(&state, args),
-        "file_backup_delete" => Ok(serde_json::to_value(file_backup::delete(
-            &state,
-            parse::<FileBackupDeleteRequest>(args)?,
-        )?)?),
-        "file_list" => Ok(serde_json::to_value(fs::list(
-            &state,
-            parse::<FileListRequest>(args)?,
-        )?)?),
         "file_edit" => Ok(serde_json::to_value(fs::edit(
             &state,
             parse::<FileEditRequest>(args)?,
         )?)?),
         "write" => file_api::write(&state, args),
-        "file_write" => Ok(serde_json::to_value(fs::write(
-            &state,
-            parse::<FileWriteRequest>(args)?,
-        )?)?),
         "file_delete" => Ok(serde_json::to_value(fs::delete(
             &state,
             parse::<FileDeleteRequest>(args)?,
@@ -143,26 +96,6 @@ pub fn call_tool_with_context(
             &state,
             parse::<FileTransferRequest>(args)?,
         )?)?),
-        "file_patch" => Ok(serde_json::to_value(fs::patch(
-            &state,
-            parse::<FilePatchRequest>(args)?,
-        )?)?),
-        "file_find" => Ok(serde_json::to_value(fs::find(
-            &state,
-            parse::<FileFindRequest>(args)?,
-        )?)?),
-        "file_move" => Ok(serde_json::to_value(fs::move_path(
-            &state,
-            parse::<FileMoveRequest>(args)?,
-        )?)?),
-        "file_chmod" => Ok(serde_json::to_value(fs::chmod(
-            &state,
-            parse::<FileChmodRequest>(args)?,
-        )?)?),
-        "directory_create" => Ok(serde_json::to_value(fs::create_directory(
-            &state,
-            parse::<DirectoryCreateRequest>(args)?,
-        )?)?),
         "terminal_open" => Ok(serde_json::to_value(
             state
                 .terminals
@@ -175,11 +108,6 @@ pub fn call_tool_with_context(
         )?)?)?),
         "terminal_read" => Ok(serde_json::to_value(state.terminals.read(parse::<
             TerminalReadRequest,
-        >(
-            args
-        )?)?)?),
-        "terminal_resize" => Ok(serde_json::to_value(state.terminals.resize(parse::<
-            TerminalResizeRequest,
         >(
             args
         )?)?)?),

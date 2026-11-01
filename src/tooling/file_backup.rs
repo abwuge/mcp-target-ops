@@ -74,8 +74,6 @@ pub struct FileRestoreRequest {
     #[serde(default)]
     pub destination: Option<String>,
     #[serde(default)]
-    pub expected_current_sha256: Option<String>,
-    #[serde(default)]
     pub expected_revision: Option<String>,
     #[serde(default)]
     pub overwrite: bool,
@@ -98,21 +96,6 @@ pub struct FileRestoreResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
     pub backup_expires_at_unix_secs: u64,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct FileBackupDeleteRequest {
-    #[serde(default)]
-    pub target: Option<String>,
-    pub backup_id: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct FileBackupDeleteResponse {
-    pub resolved_target: ResolvedTarget,
-    pub backup_id: String,
-    pub path: String,
-    pub deleted: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -339,15 +322,6 @@ impl FileBackupStore {
         Ok(entries)
     }
 
-    fn delete(&self, backup_id: &str) -> Result<BackupMetadata> {
-        validate_backup_id(backup_id)?;
-        self.cleanup_now()?;
-        let _guard = self.lock()?;
-        let metadata = self.read_metadata_unlocked(backup_id)?;
-        self.remove_unlocked(backup_id)?;
-        Ok(metadata)
-    }
-
     fn read_all_unlocked(&self) -> Result<Vec<BackupMetadata>> {
         let mut entries = Vec::new();
         for entry in stdfs::read_dir(&self.root)? {
@@ -566,17 +540,9 @@ pub fn restore(state: &AppState, req: FileRestoreRequest) -> Result<FileRestoreR
             return Err(Error::Tool(format!("destination changed before restore: expected revision {expected} no longer matches")));
         }
     }
-    if let Some(expected) = &req.expected_current_sha256 {
-        if previous_sha256.as_deref() != Some(expected.as_str()) {
-            return Err(Error::Tool(format!(
-                "current sha256 mismatch for {path}: expected {expected}, got {}",
-                previous_sha256.as_deref().unwrap_or("<missing>")
-            )));
-        }
-    } else if exists && !req.overwrite && req.expected_revision.is_none() {
+    if exists && !req.overwrite && req.expected_revision.is_none() {
         return Err(Error::Tool(
-            "destination already exists; provide expected_revision, expected_current_sha256 or overwrite=true"
-                .to_string(),
+            "destination already exists; provide expected_revision or overwrite=true".into(),
         ));
     }
 
@@ -602,27 +568,6 @@ pub fn restore(state: &AppState, req: FileRestoreRequest) -> Result<FileRestoreR
         bytes: metadata.bytes,
         mode: metadata.mode.map(format_mode),
         backup_expires_at_unix_secs: metadata.expires_at_unix_secs,
-    })
-}
-
-pub fn delete(state: &AppState, req: FileBackupDeleteRequest) -> Result<FileBackupDeleteResponse> {
-    let metadata = state.backups.metadata(&req.backup_id)?;
-    let backup_target = TargetId::from_str(&metadata.target)?;
-    let (target, source) = state.resolve_target(req.target.as_deref())?;
-    if target != backup_target {
-        return Err(Error::Tool(format!(
-            "backup {} belongs to {}, not {}",
-            metadata.backup_id, metadata.target, target
-        )));
-    }
-    let config = state.get_target_config(&target)?;
-    policy::check_file(&target, config, &metadata.path, FileAccess::Write, source)?;
-    let deleted = state.backups.delete(&metadata.backup_id)?;
-    Ok(FileBackupDeleteResponse {
-        resolved_target: state.resolved_target_value(target, source),
-        backup_id: deleted.backup_id,
-        path: deleted.path,
-        deleted: true,
     })
 }
 
@@ -739,15 +684,15 @@ mod tests {
         )
         .unwrap();
         stdfs::write(&path, b"after\n").unwrap();
-        let current_sha = sha256_hex(&stdfs::read(&path).unwrap());
+        let current_revision =
+            crate::core::util::revision_from_sha256(&sha256_hex(&stdfs::read(&path).unwrap()));
         let restored = restore(
             &state,
             FileRestoreRequest {
                 target: Some("local".to_string()),
                 backup_id: backup.backup.backup_id.clone(),
                 destination: None,
-                expected_current_sha256: Some(current_sha),
-                expected_revision: None,
+                expected_revision: Some(current_revision),
                 overwrite: false,
                 timeout_ms: None,
             },
@@ -788,7 +733,6 @@ mod tests {
                 target: Some("local".to_string()),
                 backup_id: backup.backup.backup_id,
                 destination: None,
-                expected_current_sha256: None,
                 expected_revision: None,
                 overwrite: false,
                 timeout_ms: None,

@@ -2,7 +2,7 @@
 
 **面向本机与 SSH 主机、由策略严格约束的 MCP 控制平面。**
 
-[English](README.md) · **简体中文** · [兼容性债务](COMPATIBILITY.md)
+[English](README.md) · **简体中文**
 
 Target Ops 是一个自包含的 Rust 服务，使 MCP 客户端能够在本机或已配置的
 SSH 主机上执行命令、管理文件、持续读取后台任务输出，以及打开持久终端。
@@ -217,7 +217,6 @@ rewrite_on_start = false
 | `job_wait_default_timeout_ms` | `60000` | `job_wait` 服务端默认等待窗口 |
 | `job_wait_max_timeout_ms` | `120000` | `job_wait` 服务端最大等待窗口 |
 | `file_transfer_default_max_bytes` | `26214400` | `file_import` / `file_export` 默认传输上限 |
-| `file_export_delivery` | `link` | `file_export` 默认交付方式：临时下载链接或兼容 attachment |
 | `file_export_link_ttl_secs` | `600` | 下载链接默认有效期；硬上限为 86400 秒 |
 | `file_export_link_single_use` | `false` | 首次成功 GET 后是否失效；默认关闭以兼容预取 |
 | `file_download_timeout_ms` | `30000` | HTTPS 连接器文件下载默认超时 |
@@ -341,7 +340,7 @@ URL 或秘密值。高级部署仍可使用内联 URL 或文件秘密引用，�
 
 ## 工具列表
 
-Target Ops 当前向 MCP 客户端公开 24 个工具（部分旧工具名仅保留短期兼容分发，不再在工具列表中出现）。
+Target Ops 向 MCP 客户端公开 24 个工具。
 
 | 类别 | 工具 |
 | --- | --- |
@@ -382,18 +381,16 @@ scope。
 `terminal_send` 可连同输入可选地提供 `rows` 和 `cols` 改变 PTY 尺寸。
 
 **精简的 MCP 返回：** `file_edit` 默认返回 `changed`、`written`
-以及 `revision`（SHA-256 前 24 个十六进制字符，即 96 位）。
+以及 `revision`（SHA-256 前 7 个十六进制字符，即 28 位）。
 `write` 和 `read` 也提供相同格式的版本号，下一次编辑时传入
 `expected_revision` 即可进行内容版本校验，无须重新读取完整文件。
-旧的 `expected_sha256` 继续兼容。
+`expected_revision` 只接受 7 位小写十六进制字符。
 
 不再默认回显 Diff、完整旧新哈希和被删除文件正文。
 需要时传 `include_diff=true`、`include_sha256=true`，删除文件可传
 `include_content=true`。预览模式 `dry_run=true` 在可用时仍返回 Diff。
 `read` 默认返回短版本号，需要完整 SHA-256 时再显式请求。
 审计数据库仍保存完整的原始请求、Diff 和操作结果，Dashboard 的可视化保持不变。
-
-旧版工具名暂时只保留兼容性分发，**不再出现在新的 `tools/list` 中**。
 
 两个命令工具都支持 `secret_env`。值可以来自纯文本文件，也可以来自 TOML/JSON
 中以点号路径选中的标量：
@@ -417,23 +414,11 @@ MCP 请求参数中；但被启动的命令仍可通过输出环境或主动发�
 
 ### 文件安全与补丁
 
-- `read` 默认返回短 `revision`（使用 `include_sha256=true` 可获取完整哈希），并支持以 1 为起点的 UTF-8 行范围。它既兼容原有单 `path` 模式，也支持一次最多 32 个独立 `files[]` 读取；同一路径可用不同范围重复出现，从而一次读取多个区间。批量模式中的单项失败彼此隔离，整批共享一个有界输出预算。
-- `file_find` 执行有界字面量搜索，可返回上下文。
-- `file_write` 原子写入；覆盖已有文件时必须提供 `expected_sha256` 或
-  `overwrite = true`。
-- `file_edit`、单文件 `file_patch` 与 `file_delete` 支持 SHA-256 比较并交换；
-  适用操作还支持 dry-run/预览。
-- 未显式指定新权限时，已有 Unix 文件模式会被保留。
-- `file_delete` 拒绝删除目录；默认仅返回删除结果，使用 `include_content=true` 可取回删除前的内容（或在 `dry_run` 时预览）。
-- 多文件 `file_patch` 将 `path` 视为基目录；写入前验证所有 UTF-8 文件；拒绝逃逸
-  基目录的路径；后续写入失败时回滚之前已写入的文件。多文件创建、删除和重命名
-  section 会被明确拒绝。
-- `file_move` 默认不覆盖；`file_chmod` 和 `directory_create` 使用与其他写操作
-  相同的策略。
-- `file_transfer` 用于在两个显式且不同的 target 之间复制一个普通文件。优先使用
-  `rsync`，不可用时回退到 `scp`。SSH→SSH 时文件数据只在两台 target 之间直传：
-  Target Ops 会尝试源端 push 与目标端 pull，但绝不会在插件 host 上落地中转文件。
-  因此至少要有一台远端能够无交互地认证到另一台远端。
+- `read` 支持单文件 `path` 或最多 32 个 `files[]` 批量读取，支持从 1 开始的行范围；成功读取附带 7 位 `revision`。
+- `write` 通过 `content` 原子创建或覆盖文件，或通过 `patch` 应用单文件及多文件差异；覆盖已有文件需 `expected_revision` 或 `overwrite=true`。
+- `file_edit` 精确替换文本，`file_delete` 拒绝删除目录；两者均支持 `expected_revision` 检查并拒绝过期编辑。适用操作支持预览。
+- 默认保留已有 Unix 文件权限。多文件 Patch 会验证路径和内容，后续写入失败时回滚此前修改。
+- `file_transfer` 使用 rsync 或 scp 在不同目标间复制文件；SSH 两端直接传输，不经过插件主机中转。
 
 ### 托管回滚快照
 
@@ -451,7 +436,7 @@ MCP 请求参数中；但被启动的命令仍可通过输出环境或主动发�
 即使调用者已经丢失原始工具结果或对话上下文，也可以通过不提供 `backup_id` 的 `file_restore` 重新找到
 仍有效的快照。默认返回最新 100 条，可通过 `limit` 调整到最多 200 条，并返回
 `total_matches` 与 `truncated`。`file_restore` 会先验证备份完整性，再恢复到原路径或显式指定的新路径；
-如果目标文件已经存在，必须提供 `expected_current_sha256` 做 CAS 校验，或明确设置
+如果目标文件已经存在，必须提供 `expected_revision` 做版本校验，或明确设置
 `overwrite = true`。支持的平台会同时恢复原权限位。快照无需专门的删除工具，由自动清理机制管理，不会触碰原始源文件。
 
 过期快照在备份相关操作中会立即视为不可用，并在服务启动时、后台清理线程中（默认每
@@ -484,10 +469,7 @@ MCP 请求参数中；但被启动的命令仍可通过输出环境或主动发�
 暂存导出。
 
 link 模式要求配置 `server.public_base_url`，除 localhost 测试外必须使用 HTTPS。
-应把该不透明下载 URL 视为短期敏感信息。显式 `delivery = "attachment"` 则保留原有
-MCP embedded resource 与 ChatGPT 文件输出兼容路径；只有 attachment 模式会产生
-embedded base64 resource 与 `file` 结果字段，link 模式只返回下载元数据。
-
+应把该不透明下载 URL 视为短期敏感信息。
 导入和导出默认上限均由 `runtime.file_transfer_default_max_bytes` 控制（默认 25 MiB），
 同时保留编译期 100 MiB 硬上限。
 
@@ -565,7 +547,7 @@ Bearer/OAuth 工具访问令牌；监控认证也不能授权执行 MCP 工具�
 - stdio：只能按启动服务的进程实例归组，不存在跨请求会话 ID 时无法恢复聊天会话。
 
 **新版默认保存命令和调用详情。** 新产生的 MCP `tools/call` 会保存实际命令
-（`exec`、`exec_start`、`exec_batch`）、工作目录、目标主机、调用参数、
+（`exec`）、工作目录、目标主机、调用参数、
 执行结果（包括可用的 stdout/stderr、退出码、后台任务 ID）。文件操作、终端和
 下游 MCP 调用也会保留可读的操作摘要、请求及响应。日志表可按**命令或参数内容**
 搜索，点击后通过仅限 Dashboard 登录会话访问的
@@ -619,7 +601,7 @@ oauth_state_file = "/home/me/.config/mcp-target-ops/oauth-state.json"
 | `GET /health` | 公开健康状态 |
 | `GET /favicon.ico` | 公开应用图标 |
 | `GET /downloads/<token>` | 由不透明 token 定位的临时 `file_export` 下载 |
-| `POST /` 或 `POST /mcp` | MCP JSON-RPC；配置认证后受保护 |
+| `POST /mcp` | MCP JSON-RPC；配置认证后受保护 |
 | `DELETE /mcp` | 确认关闭 MCP session；配置认证后受保护 |
 | `/.well-known/oauth-protected-resource` | 启用 OAuth 时的资源元数据 |
 | `/.well-known/oauth-authorization-server` | 启用 OAuth 时的授权服务器元数据 |

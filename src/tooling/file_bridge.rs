@@ -1,6 +1,6 @@
 use crate::{
     core::{
-        config::{FileExportDelivery, FILE_EXPORT_LINK_MAX_TTL_SECS, FILE_TRANSFER_HARD_MAX_BYTES},
+        config::{FILE_EXPORT_LINK_MAX_TTL_SECS, FILE_TRANSFER_HARD_MAX_BYTES},
         error::{Error, Result},
         policy::{self, FileAccess},
         state::AppState,
@@ -21,8 +21,6 @@ pub struct FileImportRequest {
     pub target: Option<String>,
     pub path: String,
     pub file: Value,
-    #[serde(default)]
-    pub expected_sha256: Option<String>,
     #[serde(default)]
     pub expected_revision: Option<String>,
     #[serde(default)]
@@ -61,8 +59,6 @@ pub struct FileExportRequest {
     #[serde(default)]
     pub mime_type: Option<String>,
     #[serde(default)]
-    pub delivery: Option<FileExportDelivery>,
-    #[serde(default)]
     pub link_ttl_secs: Option<u64>,
     #[serde(default)]
     pub single_use: Option<bool>,
@@ -76,20 +72,7 @@ pub struct FileExportRequest {
 pub struct FileExportResponse {
     pub resolved_target: crate::core::target::ResolvedTarget,
     pub path: String,
-    pub delivery: FileExportDelivery,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub file: Option<ExportedFile>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub download: Option<DownloadLink>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ExportedFile {
-    pub file_name: String,
-    pub mime_type: String,
-    pub bytes: usize,
-    pub sha256: String,
-    pub data_base64: String,
+    pub download: DownloadLink,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -138,7 +121,6 @@ pub fn import(state: &AppState, req: FileImportRequest) -> Result<FileImportResp
             path: req.path,
             content: BASE64.encode(&bytes),
             encoding: FileContentEncoding::Base64,
-            expected_sha256: req.expected_sha256,
             expected_revision: req.expected_revision,
             overwrite: req.overwrite,
             mode: req.mode,
@@ -166,9 +148,6 @@ pub fn export(state: &AppState, req: FileExportRequest) -> Result<FileExportResp
         req.max_bytes,
         state.config.runtime.file_transfer_default_max_bytes,
     )?;
-    let delivery = req
-        .delivery
-        .unwrap_or(state.config.runtime.file_export_delivery);
     let (target, source) = state.resolve_target(req.target.as_deref())?;
     let config = state.get_target_config(&target)?;
     policy::check_file(&target, config, &req.path, FileAccess::Read, source)?;
@@ -201,71 +180,55 @@ pub fn export(state: &AppState, req: FileExportRequest) -> Result<FileExportResp
     validate_mime_type(&mime_type)?;
     let sha256 = sha256_hex(&bytes);
 
-    let (file, download) = match delivery {
-        // COMPAT(COMPAT-009): Keep the original embedded attachment payload as an
-        // explicit opt-in while link delivery is the default.
-        FileExportDelivery::Attachment => (
-            Some(ExportedFile {
-                file_name: file_name.clone(),
-                mime_type: mime_type.clone(),
-                bytes: bytes.len(),
-                sha256: sha256.clone(),
-                data_base64: BASE64.encode(&bytes),
-            }),
-            None,
-        ),
-        FileExportDelivery::Link => {
-            let ttl_secs = req
-                .link_ttl_secs
-                .unwrap_or(state.config.runtime.file_export_link_ttl_secs);
-            if ttl_secs == 0 || ttl_secs > FILE_EXPORT_LINK_MAX_TTL_SECS {
-                return Err(Error::Tool(format!(
-                    "link_ttl_secs must be between 1 and {FILE_EXPORT_LINK_MAX_TTL_SECS}"
-                )));
-            }
-            let single_use = req
-                .single_use
-                .unwrap_or(state.config.runtime.file_export_link_single_use);
-            let base_url = download_base_url(state)?;
-            let issued = state.downloads.issue(
-                &bytes,
-                file_name.clone(),
-                mime_type.clone(),
-                sha256.clone(),
-                Duration::from_secs(ttl_secs),
-                single_use,
-            )?;
-            (
-                None,
-                Some(DownloadLink {
-                    url: format!("{base_url}/downloads/{}", issued.token),
-                    file_name,
-                    mime_type,
-                    bytes: bytes.len(),
-                    sha256,
-                    expires_at_unix_secs: issued.expires_at_unix_secs,
-                    single_use,
-                }),
-            )
-        }
+    let ttl_secs = req
+        .link_ttl_secs
+        .unwrap_or(state.config.runtime.file_export_link_ttl_secs);
+    if ttl_secs == 0 || ttl_secs > FILE_EXPORT_LINK_MAX_TTL_SECS {
+        return Err(Error::Tool(format!(
+            "link_ttl_secs must be between 1 and {FILE_EXPORT_LINK_MAX_TTL_SECS}"
+        )));
+    }
+    let single_use = req
+        .single_use
+        .unwrap_or(state.config.runtime.file_export_link_single_use);
+    let base_url = download_base_url(state)?;
+    let issued = state.downloads.issue(
+        &bytes,
+        file_name.clone(),
+        mime_type.clone(),
+        sha256.clone(),
+        Duration::from_secs(ttl_secs),
+        single_use,
+    )?;
+    let download = DownloadLink {
+        url: format!("{base_url}/downloads/{}", issued.token),
+        file_name,
+        mime_type,
+        bytes: bytes.len(),
+        sha256,
+        expires_at_unix_secs: issued.expires_at_unix_secs,
+        single_use,
     };
 
     Ok(FileExportResponse {
         resolved_target: state.resolved_target_value(target, source),
         path: req.path,
-        delivery,
-        file,
         download,
     })
 }
 
 fn download_base_url(state: &AppState) -> Result<String> {
-    let base_url = state.config.server.public_base_url.as_deref().ok_or_else(|| {
-        Error::Tool(
-            "link delivery requires server.public_base_url; configure the public HTTPS origin or request delivery=attachment"
-                .to_string(),
-        )
-    })?;
+    let base_url = state
+        .config
+        .server
+        .public_base_url
+        .as_deref()
+        .ok_or_else(|| {
+            Error::Tool(
+                "file_export requires server.public_base_url; configure the public HTTPS origin"
+                    .to_string(),
+            )
+        })?;
     let parsed = Url::parse(base_url)
         .map_err(|err| Error::Tool(format!("invalid server.public_base_url: {err}")))?;
     let local_http = parsed.scheme() == "http"

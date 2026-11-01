@@ -39,13 +39,6 @@ pub struct ConfigManagementConfig {
     pub rewrite_on_start: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FileExportDelivery {
-    Link,
-    Attachment,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeConfig {
     #[serde(default = "default_max_retained_jobs")]
@@ -68,9 +61,6 @@ pub struct RuntimeConfig {
 
     #[serde(default = "default_file_transfer_max_bytes")]
     pub file_transfer_default_max_bytes: usize,
-
-    #[serde(default = "default_file_export_delivery")]
-    pub file_export_delivery: FileExportDelivery,
 
     #[serde(default = "default_file_export_link_ttl_secs")]
     pub file_export_link_ttl_secs: u64,
@@ -334,7 +324,6 @@ impl Default for RuntimeConfig {
             job_wait_default_timeout_ms: default_job_wait_timeout_ms(),
             job_wait_max_timeout_ms: default_job_wait_max_timeout_ms(),
             file_transfer_default_max_bytes: default_file_transfer_max_bytes(),
-            file_export_delivery: default_file_export_delivery(),
             file_export_link_ttl_secs: default_file_export_link_ttl_secs(),
             file_export_link_single_use: false,
             file_download_timeout_ms: default_file_download_timeout_ms(),
@@ -607,10 +596,6 @@ fn default_job_wait_max_timeout_ms() -> u64 {
 
 fn default_file_transfer_max_bytes() -> usize {
     25 * 1024 * 1024
-}
-
-fn default_file_export_delivery() -> FileExportDelivery {
-    FileExportDelivery::Link
 }
 
 fn default_file_export_link_ttl_secs() -> u64 {

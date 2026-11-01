@@ -45,11 +45,7 @@ job_wait_max_timeout_ms = 120000
 # Default file_import/file_export transfer limit. The compiled absolute transfer
 # ceiling is 100 MiB and cannot be raised through configuration.
 file_transfer_default_max_bytes = 26214400
-# Default file_export delivery. "link" stages an opaque short-lived HTTPS download
-# and avoids ChatGPT attachment materialization; "attachment" preserves the
-# embedded-resource compatibility path.
-file_export_delivery = "link"
-# Lifetime of link-mode exports in seconds. The compiled maximum is 86400 (24h).
+# Lifetime of temporary file_export HTTPS download links (maximum 24 hours).
 file_export_link_ttl_secs = 600
 # If true, the first successful GET consumes a link. False is safer for browsers
 # and clients that may prefetch or inspect links before the user clicks them.
@@ -117,7 +113,7 @@ kind = "local"
 enabled = false
 
 [targets.local.policy]
-# Permit non-interactive commands such as exec, exec_batch, and exec_start.
+# Permit non-interactive commands through exec.
 allow_exec = false
 # Permit persistent interactive PTY sessions.
 allow_terminal = false
@@ -332,7 +328,6 @@ mod tests {
         assert_eq!(config.runtime, super::super::RuntimeConfig::default());
         assert!(written.contains("[runtime]"));
         assert!(written.contains("exec_auto_background_after_ms = 5000"));
-        assert!(written.contains("file_export_delivery = \"link\""));
         assert!(written.contains("file_export_link_ttl_secs = 600"));
         assert!(written.contains("file_backup_default_ttl_secs = 86400"));
         assert!(written.contains("file_backup_store_max_bytes = 1073741824"));

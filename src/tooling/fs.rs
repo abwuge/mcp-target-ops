@@ -5,8 +5,6 @@ mod types;
 pub(crate) use self::backend::{file_exists, file_mode, read_bytes, write_bytes};
 pub use self::types::*;
 
-use self::backend::list_entries;
-
 use super::edit::{apply_text_edits, unified_diff, EditOutcome};
 use crate::{
     core::{
@@ -23,9 +21,6 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use std::{collections::HashSet, fs, time::Duration};
 
 const MAX_BATCH_FILE_READS: usize = 32;
-
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 
 #[derive(Debug)]
 struct PreparedFilePatch {
@@ -66,7 +61,7 @@ pub fn read(state: &AppState, req: FileReadRequest) -> Result<FileReadResponse> 
     let timeout = Duration::from_millis(req.timeout_ms.unwrap_or(target_policy.default_timeout_ms));
     let resolved_target = state.resolved_target_value(target.clone(), source);
 
-    // COMPAT(COMPAT-006): Preserve the original single-path file_read shape
+    // Single-path reads and multi-file reads are both first-class API modes.
     // while newer callers migrate to files[] batch requests.
     if let Some(path) = req.path {
         let spec = FileReadSpec {
@@ -182,24 +177,6 @@ fn read_file_item(
     ))
 }
 
-pub fn list(state: &AppState, req: FileListRequest) -> Result<FileListResponse> {
-    let (target, source) = state.resolve_target(req.target.as_deref())?;
-    let config = state.get_target_config(&target)?;
-    policy::check_file(&target, config, &req.path, FileAccess::Read, source)?;
-
-    let timeout = Duration::from_millis(
-        req.timeout_ms
-            .unwrap_or_else(|| policy::target_policy(config).default_timeout_ms),
-    );
-    let entries = list_entries(state, &target, config, &req.path, timeout)?;
-
-    Ok(FileListResponse {
-        resolved_target: state.resolved_target_value(target, source),
-        path: req.path,
-        entries,
-    })
-}
-
 fn require_revision(
     actual_sha256: &str,
     expected_revision: Option<&str>,
@@ -240,7 +217,7 @@ pub fn edit(state: &AppState, req: FileEditRequest) -> Result<FileEditResponse> 
         new_sha256,
         diff,
         text,
-    } = apply_text_edits(&original, req.expected_sha256.as_deref(), &req.edits)?;
+    } = apply_text_edits(&original, &req.edits)?;
 
     if changed && !req.dry_run {
         write_bytes(
@@ -301,24 +278,9 @@ pub fn write(state: &AppState, req: FileWriteRequest) -> Result<FileWriteRespons
         }
     }
 
-    if let Some(expected) = req.expected_sha256.as_deref() {
-        match old_sha256.as_deref() {
-            Some(actual) if actual == expected => {}
-            Some(actual) => {
-                return Err(Error::Tool(format!(
-                    "file changed before write: expected sha256 {expected}, got {actual}"
-                )))
-            }
-            None => {
-                return Err(Error::Tool(format!(
-                    "file does not exist but expected sha256 {expected} was supplied"
-                )))
-            }
-        }
-    } else if exists && !req.overwrite && req.expected_revision.is_none() {
+    if exists && !req.overwrite && req.expected_revision.is_none() {
         return Err(Error::Tool(
-            "file already exists; supply expected_revision, expected_sha256 or overwrite=true"
-                .to_string(),
+            "file already exists; supply expected_revision or overwrite=true".to_string(),
         ));
     }
 
@@ -363,14 +325,6 @@ pub fn delete(state: &AppState, req: FileDeleteRequest) -> Result<FileDeleteResp
     let bytes = read_bytes(state, &target, config, &req.path, timeout)?;
     let old_sha256 = sha256_hex(&bytes);
     require_revision(&old_sha256, req.expected_revision.as_deref(), "delete")?;
-    if let Some(expected) = req.expected_sha256.as_deref() {
-        if expected != old_sha256 {
-            return Err(Error::Tool(format!(
-                "file changed before delete: expected sha256 {expected}, got {old_sha256}"
-            )));
-        }
-    }
-
     let (encoding, content) = match String::from_utf8(bytes.clone()) {
         Ok(text) => ("utf-8".to_string(), text),
         Err(_) => ("base64".to_string(), BASE64.encode(&bytes)),
@@ -423,10 +377,7 @@ pub fn patch(state: &AppState, req: FilePatchRequest) -> Result<FilePatchRespons
             config,
             &req.path,
             patch_text,
-            (
-                req.expected_sha256.as_deref(),
-                req.expected_revision.as_deref(),
-            ),
+            req.expected_revision.as_deref(),
             timeout,
         )?;
         if prepared.changed && !req.dry_run {
@@ -455,10 +406,9 @@ pub fn patch(state: &AppState, req: FilePatchRequest) -> Result<FilePatchRespons
         });
     }
 
-    if req.expected_sha256.is_some() || req.expected_revision.is_some() {
+    if req.expected_revision.is_some() {
         return Err(Error::Tool(
-            "expected_sha256 and expected_revision are only valid for single-file patches"
-                .to_string(),
+            "expected_revision is only valid for single-file patches".to_string(),
         ));
     }
 
@@ -478,7 +428,7 @@ pub fn patch(state: &AppState, req: FilePatchRequest) -> Result<FilePatchRespons
             config,
             &patch_path,
             &section.patch,
-            (None, None),
+            None,
             timeout,
         )?);
     }
@@ -549,7 +499,7 @@ fn prepare_file_patch(
     config: &TargetConfig,
     path: &str,
     patch_text: &str,
-    expected_guards: (Option<&str>, Option<&str>),
+    expected_revision: Option<&str>,
     timeout: Duration,
 ) -> Result<PreparedFilePatch> {
     let original_bytes = read_bytes(state, target, config, path, timeout)?;
@@ -559,15 +509,7 @@ fn prepare_file_patch(
         ))
     })?;
     let old_sha256 = sha256_hex(original.as_bytes());
-    require_revision(&old_sha256, expected_guards.1, "patch")?;
-    if let Some(expected) = expected_guards.0 {
-        if expected != old_sha256 {
-            return Err(Error::Tool(format!(
-                "file changed before patch: expected sha256 {expected}, got {old_sha256}"
-            )));
-        }
-    }
-
+    require_revision(&old_sha256, expected_revision, "patch")?;
     let patch = diffy::Patch::from_str(patch_text)
         .map_err(|err| Error::Tool(format!("invalid unified patch for {path}: {err}")))?;
     let text = diffy::apply(&original, &patch)
@@ -596,72 +538,6 @@ fn patch_file_response(
         old_sha256: prepared.old_sha256.clone(),
         new_sha256: prepared.new_sha256.clone(),
     }
-}
-
-pub fn find(state: &AppState, req: FileFindRequest) -> Result<FileFindResponse> {
-    if req.pattern.is_empty() {
-        return Err(Error::Tool(
-            "file_find pattern must not be empty".to_string(),
-        ));
-    }
-    let (target, source) = state.resolve_target(req.target.as_deref())?;
-    let config = state.get_target_config(&target)?;
-    policy::check_file(&target, config, &req.path, FileAccess::Read, source)?;
-    let timeout = Duration::from_millis(
-        req.timeout_ms
-            .unwrap_or_else(|| policy::target_policy(config).default_timeout_ms),
-    );
-    let bytes = read_bytes(state, &target, config, &req.path, timeout)?;
-    let sha256 = sha256_hex(&bytes);
-    let text = String::from_utf8(bytes)
-        .map_err(|_| Error::Tool("file_find supports UTF-8 text files only".to_string()))?;
-    let lines: Vec<&str> = text.lines().collect();
-    let needle = if req.case_sensitive {
-        req.pattern.clone()
-    } else {
-        req.pattern.to_lowercase()
-    };
-    let max_matches = req.max_matches.clamp(1, 200);
-    let context_lines = req.context_lines.min(20);
-    let mut matches = Vec::new();
-    let mut truncated = false;
-
-    for (index, line) in lines.iter().enumerate() {
-        let haystack = if req.case_sensitive {
-            (*line).to_string()
-        } else {
-            line.to_lowercase()
-        };
-        if !haystack.contains(&needle) {
-            continue;
-        }
-        if matches.len() >= max_matches {
-            truncated = true;
-            break;
-        }
-        let before_start = index.saturating_sub(context_lines);
-        let after_end = (index + 1 + context_lines).min(lines.len());
-        matches.push(FileFindMatch {
-            line: index + 1,
-            text: (*line).to_string(),
-            before: lines[before_start..index]
-                .iter()
-                .map(|line| (*line).to_string())
-                .collect(),
-            after: lines[index + 1..after_end]
-                .iter()
-                .map(|line| (*line).to_string())
-                .collect(),
-        });
-    }
-
-    Ok(FileFindResponse {
-        resolved_target: state.resolved_target_value(target, source),
-        path: req.path,
-        sha256,
-        matches,
-        truncated,
-    })
 }
 
 pub fn move_path(state: &AppState, req: FileMoveRequest) -> Result<FileMoveResponse> {
@@ -720,96 +596,6 @@ pub fn move_path(state: &AppState, req: FileMoveRequest) -> Result<FileMoveRespo
         source: req.source,
         destination: req.destination,
         moved: true,
-    })
-}
-
-pub fn chmod(state: &AppState, req: FileChmodRequest) -> Result<FileChmodResponse> {
-    let (target, source) = state.resolve_target(req.target.as_deref())?;
-    let config = state.get_target_config(&target)?;
-    policy::check_file(&target, config, &req.path, FileAccess::Write, source)?;
-    let mode = parse_mode(&req.mode)?;
-    let timeout = Duration::from_millis(
-        req.timeout_ms
-            .unwrap_or_else(|| policy::target_policy(config).default_timeout_ms),
-    );
-
-    match (target.clone(), config) {
-        (TargetId::Local, TargetConfig::Local(_)) => {
-            #[cfg(unix)]
-            fs::set_permissions(&req.path, fs::Permissions::from_mode(mode))?;
-            #[cfg(not(unix))]
-            return Err(Error::Tool(
-                "file_chmod is supported only on Unix local targets".to_string(),
-            ));
-        }
-        (TargetId::Ssh(name), TargetConfig::Ssh(ssh_config)) => ssh::chmod_path(
-            &state.ssh_sessions,
-            &name,
-            ssh_config,
-            &req.path,
-            mode,
-            timeout,
-        )?,
-        _ => {
-            return Err(Error::Target(format!(
-                "target {target} has mismatched config"
-            )))
-        }
-    }
-
-    Ok(FileChmodResponse {
-        resolved_target: state.resolved_target_value(target, source),
-        path: req.path,
-        mode: format!("{mode:04o}"),
-    })
-}
-
-pub fn create_directory(
-    state: &AppState,
-    req: DirectoryCreateRequest,
-) -> Result<DirectoryCreateResponse> {
-    let (target, source) = state.resolve_target(req.target.as_deref())?;
-    let config = state.get_target_config(&target)?;
-    policy::check_file(&target, config, &req.path, FileAccess::Write, source)?;
-    let mode = req.mode.as_deref().map(parse_mode).transpose()?;
-    let timeout = Duration::from_millis(
-        req.timeout_ms
-            .unwrap_or_else(|| policy::target_policy(config).default_timeout_ms),
-    );
-    let exists = file_exists(state, &target, config, &req.path, timeout)?;
-
-    match (target.clone(), config) {
-        (TargetId::Local, TargetConfig::Local(_)) => {
-            if req.recursive {
-                fs::create_dir_all(&req.path)?;
-            } else if !exists {
-                fs::create_dir(&req.path)?;
-            }
-            #[cfg(unix)]
-            if let Some(mode) = mode {
-                fs::set_permissions(&req.path, fs::Permissions::from_mode(mode))?;
-            }
-        }
-        (TargetId::Ssh(name), TargetConfig::Ssh(ssh_config)) => ssh::create_directory(
-            &state.ssh_sessions,
-            &name,
-            ssh_config,
-            &req.path,
-            req.recursive,
-            mode,
-            timeout,
-        )?,
-        _ => {
-            return Err(Error::Target(format!(
-                "target {target} has mismatched config"
-            )))
-        }
-    }
-
-    Ok(DirectoryCreateResponse {
-        resolved_target: state.resolved_target_value(target, source),
-        path: req.path,
-        created: !exists,
     })
 }
 

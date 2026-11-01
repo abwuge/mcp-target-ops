@@ -72,9 +72,7 @@ fn handle_request(state: Arc<AppState>, mut request: Request) -> Result<()> {
     }
 
     match (method, path.as_str()) {
-        // COMPAT(COMPAT-008): Keep accepting POST / for older clients that were
-        // configured with the public origin before /mcp became canonical.
-        (Method::Post, "/" | MCP_PATH) => {
+        (Method::Post, MCP_PATH) => {
             let incoming_session = auth::mcp_session_id(&request);
             let fallback_caller_key = auth::caller_key(&request);
             let user_agent = header_value(&request, "user-agent").map(str::to_string);

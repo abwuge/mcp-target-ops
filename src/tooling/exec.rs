@@ -1,17 +1,9 @@
 use crate::{
-    core::{
-        error::{Error, Result},
-        policy,
-        secret::SecretRef,
-        state::AppState,
-        target::ResolvedTarget,
-    },
+    core::{error::Result, secret::SecretRef, state::AppState, target::ResolvedTarget},
     tooling::job::ExecStartRequest,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, thread, time::Instant};
-
-const MAX_BATCH_COMMANDS: usize = 32;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ExecRequest {
@@ -129,19 +121,6 @@ pub struct ExecBatchItemResponse {
     pub success: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct ExecBatchResponse {
-    pub resolved_target: ResolvedTarget,
-    pub mode: ExecBatchMode,
-    pub requested_count: usize,
-    pub executed_count: usize,
-    pub succeeded: usize,
-    pub failed: usize,
-    pub timed_out: usize,
-    pub stopped_early: bool,
-    pub results: Vec<ExecBatchItemResponse>,
-}
-
 #[derive(Debug, Clone)]
 pub struct RawExecOutput {
     pub exit_code: Option<i32>,
@@ -177,135 +156,6 @@ pub(crate) fn run_to_completion(state: &AppState, req: ExecRequest) -> Result<Ex
     })
 }
 
-pub fn run_batch(state: &AppState, req: ExecBatchRequest) -> Result<ExecBatchResponse> {
-    if req.commands.is_empty() {
-        return Err(Error::Tool(
-            "exec_batch requires at least one command".to_string(),
-        ));
-    }
-    if req.commands.len() > MAX_BATCH_COMMANDS {
-        return Err(Error::Tool(format!(
-            "exec_batch accepts at most {MAX_BATCH_COMMANDS} commands"
-        )));
-    }
-    if matches!(req.mode, ExecBatchMode::Parallel) && req.stop_on_error {
-        return Err(Error::Tool(
-            "stop_on_error is only supported for sequential exec_batch mode".to_string(),
-        ));
-    }
-
-    let (target, source) = state.resolve_target(req.target.as_deref())?;
-    let config = state.get_target_config(&target)?;
-    policy::check_exec(&target, config)?;
-    let resolved_target = state.resolved_target_value(target.clone(), source);
-    let target_name = target.to_string();
-    let requested_count = req.commands.len();
-
-    let results = match req.mode {
-        ExecBatchMode::Sequential => {
-            let mut results = Vec::with_capacity(requested_count);
-            for (index, command) in req.commands.into_iter().enumerate() {
-                let item = run_batch_item(state, &target_name, &req.secret_env, index, command);
-                let should_stop = req.stop_on_error && !item.success;
-                results.push(item);
-                if should_stop {
-                    break;
-                }
-            }
-            results
-        }
-        ExecBatchMode::Parallel => {
-            thread::scope(|scope| -> Result<Vec<ExecBatchItemResponse>> {
-                let mut handles = Vec::with_capacity(requested_count);
-                for (index, command) in req.commands.into_iter().enumerate() {
-                    let target_name = target_name.clone();
-                    let secret_env = req.secret_env.clone();
-                    handles.push(scope.spawn(move || {
-                        run_batch_item(state, &target_name, &secret_env, index, command)
-                    }));
-                }
-
-                let mut results = Vec::with_capacity(requested_count);
-                for handle in handles {
-                    results.push(handle.join().map_err(|_| {
-                        Error::Tool("exec_batch worker thread panicked".to_string())
-                    })?);
-                }
-                Ok(results)
-            })?
-        }
-    };
-
-    let executed_count = results.len();
-    let succeeded = results.iter().filter(|result| result.success).count();
-    let timed_out = results.iter().filter(|result| result.timed_out).count();
-
-    Ok(ExecBatchResponse {
-        resolved_target,
-        mode: req.mode,
-        requested_count,
-        executed_count,
-        succeeded,
-        failed: executed_count.saturating_sub(succeeded),
-        timed_out,
-        stopped_early: executed_count < requested_count,
-        results,
-    })
-}
-
-fn run_batch_item(
-    state: &AppState,
-    target: &str,
-    secret_env: &BTreeMap<String, SecretRef>,
-    index: usize,
-    command: ExecBatchCommand,
-) -> ExecBatchItemResponse {
-    let command = command.into_details();
-    let started = Instant::now();
-    let request = ExecRequest {
-        target: Some(target.to_string()),
-        command: command.command,
-        cwd: command.cwd,
-        timeout_ms: command.timeout_ms,
-        max_output_bytes: command.max_output_bytes,
-        secret_env: secret_env.clone(),
-    };
-
-    match run_to_completion(state, request) {
-        Ok(response) => {
-            let success = response.exit_code == Some(0) && !response.timed_out;
-            ExecBatchItemResponse {
-                index,
-                exit_code: response.exit_code,
-                stdout: response.stdout,
-                stderr: response.stderr,
-                stdout_truncated: response.stdout_truncated,
-                stderr_truncated: response.stderr_truncated,
-                timed_out: response.timed_out,
-                error: None,
-                elapsed_ms: elapsed_ms(started),
-                success,
-            }
-        }
-        Err(error) => ExecBatchItemResponse {
-            index,
-            exit_code: None,
-            stdout: String::new(),
-            stderr: String::new(),
-            stdout_truncated: false,
-            stderr_truncated: false,
-            timed_out: false,
-            error: Some(error.to_string()),
-            elapsed_ms: elapsed_ms(started),
-            success: false,
-        },
-    }
-}
-
-fn elapsed_ms(started: Instant) -> u64 {
-    started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
-}
-
 fn is_false(value: &bool) -> bool {
     !*value
 }
@@ -315,53 +165,6 @@ mod tests {
     use super::*;
     use crate::core::target::{TargetId, TargetSource};
     use serde_json::json;
-
-    #[test]
-    fn batch_accepts_mixed_string_and_object_commands_in_parallel() {
-        use crate::core::config::{Config, TargetConfig};
-        use tempfile::tempdir;
-
-        let temp = tempdir().unwrap();
-        let mut config = Config::default();
-        config.server.runtime_dir = temp.path().join("runtime");
-        config.server.oauth_state_file = None;
-        config.activity.enabled = false;
-        config.server.default_target = Some("local".into());
-        if let Some(TargetConfig::Local(local)) = config.targets.get_mut("local") {
-            local.enabled = true;
-            local.policy.allow_exec = true;
-        }
-        let state = AppState::new(config).unwrap();
-        let request: ExecBatchRequest = serde_json::from_value(json!({
-            "target": "local", "mode": "parallel",
-            "commands": [
-                "printf simple",
-                {"command": "pwd", "cwd": temp.path().to_string_lossy()},
-                "printf third"
-            ]
-        }))
-        .unwrap();
-        let result = run_batch(&state, request).unwrap();
-        assert_eq!(result.executed_count, 3);
-        assert_eq!(result.succeeded, 3);
-        assert_eq!(result.results[0].stdout, "simple");
-        assert_eq!(
-            result.results[1].stdout.trim(),
-            temp.path().to_str().unwrap()
-        );
-        assert_eq!(result.results[2].stdout, "third");
-        assert_eq!(result.results[0].index, 0);
-        assert_eq!(result.results[2].index, 2);
-
-        // Detailed object input is still accepted unchanged.
-        let previous: ExecBatchRequest = serde_json::from_value(json!({
-            "target":"local",
-            "commands":[{"command":"printf legacy","cwd":temp.path().to_str().unwrap()}]
-        }))
-        .unwrap();
-        let legacy = run_batch(&state, previous).unwrap();
-        assert_eq!(legacy.results[0].stdout, "legacy");
-    }
 
     #[test]
     fn omits_empty_and_inactive_exec_fields() {

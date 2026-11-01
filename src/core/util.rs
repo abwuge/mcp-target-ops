@@ -6,19 +6,19 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Human-readable 96-bit SHA-256 prefix for short content version tokens.
+/// Human-readable seven-digit (28-bit) SHA-256 prefix for file revisions.
 /// The full SHA-256 is still computed for internal integrity checks.
 pub fn revision_from_sha256(full_hash: &str) -> String {
     debug_assert!(full_hash.len() == 64 && full_hash.bytes().all(|b| b.is_ascii_hexdigit()));
-    full_hash[..24].to_string()
+    full_hash[..7].to_string()
 }
 
 pub fn revision_matches(full_hash: &str, expected: &str) -> bool {
-    expected.len() == 24
+    expected.len() == 7
         && expected
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        && revision_from_sha256(full_hash) == expected
+        && full_hash.starts_with(expected)
 }
 
 pub fn shell_quote(value: &str) -> String {
@@ -58,13 +58,16 @@ mod tests {
         let same = sha256_hex(b"before\n");
         let different = sha256_hex(b"after\n");
         let revision = revision_from_sha256(&original);
-        assert_eq!(revision.len(), 24);
+        assert_eq!(revision.len(), 7);
         assert!(original.starts_with(&revision));
         assert!(revision_matches(&original, &revision));
         assert_eq!(revision, revision_from_sha256(&same));
         assert!(!revision_matches(&different, &revision));
         assert!(!revision_matches(&original, "too-short"));
         assert!(!revision_matches(&original, &"z".repeat(24)));
+        assert!(!revision_matches(&original, &original[..24]));
+        assert!(!revision_matches(&original, &original[..6]));
+        assert!(!revision_matches(&original, &original[..8]));
     }
 
     #[test]

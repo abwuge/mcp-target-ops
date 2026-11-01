@@ -188,8 +188,7 @@ pub(crate) fn project(name: &str, source: &Value, opts: &ResultOptions) -> Value
         }
         "file_export" => {
             let mut result = Map::new();
-            copy(&mut result, source, &["delivery"]);
-            if let Some(download) = source.get("download").filter(|v| !v.is_null()) {
+            if let Some(download) = source.get("download") {
                 let mut item = Map::new();
                 copy(
                     &mut item,
@@ -205,11 +204,6 @@ pub(crate) fn project(name: &str, source: &Value, opts: &ResultOptions) -> Value
                 flag(&mut item, download, "single_use");
                 checksums(&mut item, download, opts);
                 result.insert("download".into(), Value::Object(item));
-            }
-            if let Some(file) = source.get("file").filter(|v| !v.is_null()) {
-                // file_export's attachment rewrite needs the file object and its
-                // metadata; never remove the actual MCP embedded resource.
-                result.insert("file".into(), file.clone());
             }
             result
         }
@@ -268,7 +262,7 @@ fn string_field() -> Value {
     json!({"type":"string"})
 }
 fn revision_field() -> Value {
-    json!({"type":"string","minLength":24,"maxLength":24,"pattern":"^[a-f0-9]{24}$"})
+    json!({"type":"string","minLength":7,"maxLength":7,"pattern":"^[a-f0-9]{7}$"})
 }
 fn hash_fields() -> Value {
     json!({"old_sha256": {"type":"string"}, "new_sha256":{"type":"string"},
@@ -386,18 +380,7 @@ pub(super) fn output_schema(name: &str) -> Option<Value> {
                     "expires_at_unix_secs",
                 ],
             );
-            let file = object_schema(
-                json!({
-                    "file_name":text,"mime_type":text,"bytes":integer,"sha256":text
-                }),
-                &["file_name", "mime_type", "bytes", "sha256"],
-            );
-            object_schema(
-                json!({
-                    "delivery":text,"download":download,"file":file
-                }),
-                &["delivery"],
-            )
+            object_schema(json!({"download":download}), &["download"])
         }
         "read" => {
             let item = object_schema(
@@ -487,7 +470,7 @@ mod tests {
             "encoding":"utf-8","resolved_target":{"target":"local","source":"default"}});
         assert_eq!(
             project("read", &read, &ResultOptions::default()),
-            json!({"content":"code","revision":&full_sha256[..24],"target":"local"})
+            json!({"content":"code","revision":&full_sha256[..7],"target":"local"})
         );
         assert_eq!(
             project(

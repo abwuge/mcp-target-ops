@@ -23,19 +23,8 @@ pub struct EditOutcome {
     pub text: String,
 }
 
-pub fn apply_text_edits(
-    original: &str,
-    expected_sha256: Option<&str>,
-    edits: &[TextEdit],
-) -> Result<EditOutcome> {
+pub fn apply_text_edits(original: &str, edits: &[TextEdit]) -> Result<EditOutcome> {
     let old_sha256 = sha256_hex(original.as_bytes());
-    if let Some(expected) = expected_sha256 {
-        if expected != old_sha256 {
-            return Err(Error::Tool(format!(
-                "file changed before edit: expected sha256 {expected}, got {old_sha256}"
-            )));
-        }
-    }
 
     let mut current = original.to_string();
     for (idx, edit) in edits.iter().enumerate() {

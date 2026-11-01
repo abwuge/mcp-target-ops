@@ -333,10 +333,7 @@ fn tools_call(state: Arc<AppState>, params: Value, caller_key: &str) -> Result<T
     let params: ToolCallParams = serde_json::from_value(params)?;
     let arguments = params.arguments.unwrap_or_else(|| json!({}));
     let options = tools::ResultOptions::from_arguments(&arguments);
-    let attach_completed = !matches!(
-        params.name.as_str(),
-        "job" | "job_poll" | "job_output" | "job_wait"
-    );
+    let attach_completed = !matches!(params.name.as_str(), "job");
     match tools::call_tool_with_context(Arc::clone(&state), &params.name, arguments, caller_key) {
         Ok(mut value) => {
             let completed_jobs = if attach_completed {
@@ -352,53 +349,7 @@ fn tools_call(state: Arc<AppState>, params: Value, caller_key: &str) -> Result<T
                     );
                 }
             }
-            // COMPAT(COMPAT-009): Explicit attachment delivery keeps the original
-            // embedded-resource result for clients that still need host materialization.
-            let content = if params.name == "file_export"
-                && value.get("delivery").and_then(Value::as_str) == Some("attachment")
-            {
-                let file = value
-                    .get_mut("file")
-                    .and_then(Value::as_object_mut)
-                    .ok_or_else(|| {
-                        Error::Tool(
-                            "attachment file_export result is missing file metadata".to_string(),
-                        )
-                    })?;
-                let blob = file
-                    .remove("data_base64")
-                    .and_then(|value| value.as_str().map(str::to_string))
-                    .ok_or_else(|| {
-                        Error::Tool(
-                            "attachment file_export result is missing encoded file data"
-                                .to_string(),
-                        )
-                    })?;
-                let mime_type = file
-                    .get("mime_type")
-                    .and_then(Value::as_str)
-                    .unwrap_or("application/octet-stream");
-                let file_name = file
-                    .get("file_name")
-                    .and_then(Value::as_str)
-                    .unwrap_or("export.bin");
-                let sha256 = file
-                    .get("sha256")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown");
-                vec![json!({
-                    "type": "resource",
-                    "resource": {
-                        "uri": format!("target-ops://export/{sha256}/{file_name}"),
-                        "mimeType": mime_type,
-                        "blob": blob,
-                    }
-                })]
-            } else {
-                Vec::new()
-            };
-
-            let mut content = content;
+            let mut content = Vec::new();
             if !completed_jobs.is_empty() {
                 content.push(json!({
                     "type": "text",
@@ -464,7 +415,6 @@ fn tools_call(state: Arc<AppState>, params: Value, caller_key: &str) -> Result<T
 mod tests {
     use super::*;
     use crate::core::config::{Config, TargetConfig};
-    use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
     use std::time::Duration;
     use tempfile::tempdir;
 
@@ -602,96 +552,6 @@ mod tests {
     }
 
     #[test]
-    fn batch_and_async_responses_do_not_repeat_commands_or_working_directories() {
-        let state = test_state();
-        let root = state
-            .config
-            .server
-            .runtime_dir
-            .parent()
-            .unwrap()
-            .display()
-            .to_string();
-        let batch = call_tool_for(
-            Arc::clone(&state),
-            "session:clean-output",
-            1,
-            "exec_batch",
-            json!({"target":"local","commands":[
-                {"command":"printf one","cwd":root},
-                {"command":"printf two","cwd":root}
-            ]}),
-        );
-        let output = &batch["result"]["structuredContent"];
-        assert_eq!(batch["result"]["isError"], false);
-        assert_eq!(output["succeeded"], 2);
-        assert_eq!(output["results"][0]["stdout"], "one");
-        assert_eq!(output["results"][1]["stdout"], "two");
-        for item in output["results"].as_array().unwrap() {
-            assert!(item.get("command").is_none());
-            assert!(item.get("cwd").is_none());
-            assert!(item.get("index").is_some());
-        }
-
-        let started = call_tool_for(
-            Arc::clone(&state),
-            "session:clean-output",
-            2,
-            "exec_start",
-            json!({
-                "target":"local", "command":"sleep 0.02; printf async",
-                "cwd":root, "timeout_ms":1000
-            }),
-        );
-        let job_id = started["result"]["structuredContent"]["job_id"]
-            .as_str()
-            .unwrap();
-        assert!(started["result"]["structuredContent"]
-            .get("command")
-            .is_none());
-        assert!(started["result"]["structuredContent"].get("cwd").is_none());
-        let waited = call_tool_for(
-            Arc::clone(&state),
-            "session:clean-output",
-            3,
-            "job_wait",
-            json!({"job_id":job_id,"wait_timeout_ms":1000}),
-        );
-        assert_eq!(waited["result"]["structuredContent"]["stdout"], "async");
-        assert!(waited["result"]["structuredContent"]
-            .get("command")
-            .is_none());
-
-        let history = state
-            .activity
-            .as_ref()
-            .unwrap()
-            .query(crate::core::activity::Query {
-                search: Some("printf one".into()),
-                ..Default::default()
-            })
-            .unwrap();
-        assert!(history["summary"]["count"].as_i64().unwrap() >= 1);
-        let id = history["calls"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|call| call["name"] == "exec_batch")
-            .unwrap()["id"]
-            .as_i64()
-            .unwrap();
-        let audit = state
-            .activity
-            .as_ref()
-            .unwrap()
-            .call_details(id)
-            .unwrap()
-            .unwrap();
-        assert!(audit["command"].as_str().unwrap().contains("printf one"));
-        assert_eq!(audit["arguments"]["commands"][0]["cwd"], root);
-    }
-
-    #[test]
     fn file_write_and_patch_do_not_repeat_submitted_payloads() {
         let state = test_state();
         let root = state.config.server.runtime_dir.parent().unwrap();
@@ -701,7 +561,7 @@ mod tests {
             Arc::clone(&state),
             "session:file-clean",
             1,
-            "file_write",
+            "write",
             json!({"target":"local","path":path,"content":"before\n"}),
         );
         let output = &written["result"]["structuredContent"];
@@ -715,7 +575,7 @@ mod tests {
             Arc::clone(&state),
             "session:file-clean",
             2,
-            "file_patch",
+            "write",
             json!({"target":"local","path":path,"patch":patch}),
         );
         assert_eq!(patched["result"]["isError"], false, "{patched}");
@@ -728,7 +588,7 @@ mod tests {
             Arc::clone(&state),
             "session:file-clean",
             3,
-            "file_read",
+            "read",
             json!({"target":"local","path":path}),
         );
         assert_eq!(read["result"]["structuredContent"]["content"], "after\n");
@@ -761,7 +621,7 @@ mod tests {
         );
         let read_output = &read["result"]["structuredContent"];
         let current_revision = read_output["revision"].as_str().unwrap();
-        assert_eq!(current_revision.len(), 24);
+        assert_eq!(current_revision.len(), 7);
         assert!(read_output.get("sha256").is_none());
         assert_eq!(read_output["content"], "before\n");
         assert!(read_output.get("path").is_none());
@@ -778,7 +638,7 @@ mod tests {
         let returned = &edit["result"]["structuredContent"];
         assert_eq!(returned["changed"], true);
         assert_eq!(returned["written"], true);
-        assert_eq!(returned["revision"].as_str().unwrap().len(), 24);
+        assert_eq!(returned["revision"].as_str().unwrap().len(), 7);
         assert!(returned.get("diff").is_none());
         assert!(returned.get("new_sha256").is_none());
         let next_revision = returned["revision"].as_str().unwrap().to_string();
@@ -830,7 +690,7 @@ mod tests {
         assert_eq!(expanded["new_sha256"].as_str().unwrap().len(), 64);
         assert_eq!(
             expanded["revision"].as_str().unwrap(),
-            &expanded["new_sha256"].as_str().unwrap()[..24]
+            &expanded["new_sha256"].as_str().unwrap()[..7]
         );
 
         let preview = call_tool_for(
@@ -866,7 +726,7 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .len(),
-            24
+            7
         );
         let other = root.join("compact-created.txt");
         let created = call_tool_for(
@@ -883,7 +743,7 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .len(),
-            24
+            7
         );
 
         let deleted = call_tool_for(
@@ -967,7 +827,7 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .len(),
-            24
+            7
         );
         assert!(restored["result"]["structuredContent"]
             .get("restored_sha256")
@@ -988,16 +848,18 @@ mod tests {
             .get("sha256")
             .is_none());
 
-        let legacy = call_tool_for(
+        let removed = call_tool_for(
             Arc::clone(&state),
             "session:compact",
             13,
             "file_read",
             json!({"target":"local","path":path}),
         );
-        assert!(legacy["result"]["structuredContent"]
-            .get("resolved_target")
-            .is_some());
+        assert_eq!(removed["result"]["isError"], true);
+        assert!(removed["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("unknown tool"));
     }
 
     #[test]
@@ -1023,7 +885,7 @@ mod tests {
             .as_str()
             .unwrap()
             .to_owned();
-        assert_eq!(rev1.len(), 24);
+        assert_eq!(rev1.len(), 7);
         assert!(first_read["result"]["structuredContent"]
             .get("sha256")
             .is_none());
@@ -1106,7 +968,7 @@ mod tests {
         assert_eq!(
             read_full["result"]["structuredContent"]["sha256"]
                 .as_str()
-                .unwrap()[..24],
+                .unwrap()[..7],
             rev3
         );
 
@@ -1405,8 +1267,8 @@ mod tests {
                 Arc::clone(&state),
                 caller,
                 1,
-                "file_list",
-                json!({ "target": "local", "path": root }),
+                "read",
+                json!({ "target": "local", "path": config_path }),
             );
             assert_eq!(result["result"]["isError"], false);
         }
@@ -1439,7 +1301,6 @@ mod tests {
             json!({ "target": "local", "path": source }),
         );
         let result = &response["result"];
-        assert_eq!(result["structuredContent"]["delivery"], "link");
         assert!(result["structuredContent"].get("file").is_none());
         assert!(result["structuredContent"]["download"]["url"]
             .as_str()
@@ -1449,49 +1310,18 @@ mod tests {
     }
 
     #[test]
-    fn attachment_file_export_keeps_embedded_resource_compatibility() {
-        let state = test_state();
-        let source = state
-            .config
-            .server
-            .runtime_dir
-            .parent()
-            .unwrap()
-            .join("export.txt");
-        std::fs::write(&source, b"attachment export").unwrap();
-
-        let response = call_tool_for(
-            Arc::clone(&state),
-            "session:export-attachment",
-            1,
-            "file_export",
-            json!({ "target": "local", "path": source, "delivery": "attachment" }),
-        );
-        let result = &response["result"];
-        assert_eq!(result["structuredContent"]["delivery"], "attachment");
-        assert!(result["structuredContent"]["download"].is_null());
-        assert!(result["structuredContent"]["file"]
-            .get("data_base64")
-            .is_none());
-        assert_eq!(result["content"][0]["type"], "resource");
-        assert_eq!(
-            result["content"][0]["resource"]["blob"],
-            BASE64.encode(b"attachment export")
-        );
-    }
-
-    #[test]
     fn completed_jobs_attach_to_next_non_result_tool_call_once() {
         let state = test_state();
         let started = call_tool_for(
             Arc::clone(&state),
             "session:a",
             1,
-            "exec_start",
+            "exec",
             json!({
                 "target": "local",
                 "command": "sleep 0.02; printf queued",
-                "timeout_ms": 5000
+                "timeout_ms": 5000,
+                "yield_time_ms": 0
             }),
         );
         let job_id = started["result"]["structuredContent"]["job_id"]
@@ -1568,11 +1398,12 @@ mod tests {
             Arc::clone(&state),
             "session:a",
             1,
-            "exec_start",
+            "exec",
             json!({
                 "target": "local",
                 "command": "sleep 0.02; printf waited",
-                "timeout_ms": 5000
+                "timeout_ms": 5000,
+                "yield_time_ms": 0
             }),
         );
         let job_id = started["result"]["structuredContent"]["job_id"]
@@ -1583,8 +1414,8 @@ mod tests {
             Arc::clone(&state),
             "session:a",
             2,
-            "job_wait",
-            json!({ "job_id": job_id, "wait_timeout_ms": 5000 }),
+            "job",
+            json!({ "job_id": job_id, "action": "wait", "wait_ms": 5000 }),
         );
         assert_eq!(waited["result"]["structuredContent"]["stdout"], "waited");
 

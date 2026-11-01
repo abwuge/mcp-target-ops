@@ -44,6 +44,7 @@ pub struct ExecStartRequest {
     pub secret_env: BTreeMap<String, SecretRef>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Serialize)]
 pub struct ExecStartResponse {
     pub resolved_target: ResolvedTarget,
@@ -253,6 +254,7 @@ impl JobRegistry {
         self.start_for_caller(state, req, "direct")
     }
 
+    #[cfg(test)]
     pub fn start_for_caller(
         &self,
         state: &AppState,
